@@ -24,13 +24,13 @@ export function RunsTable({ runs, showProject = true }: { runs: TestRun[]; showP
         {runs.map((r) => (
           <Tr key={r.id}>
             <Td>
-              <Link href={`/test-runs/${r.id}`} className="font-medium text-blue-800 hover:underline">
-                <span className="font-mono text-xs text-slate-600">{r.key}</span> {r.name}
+              <Link href={`/test-runs/${r.id}`} className="font-medium text-accent hover:underline">
+                <span className="font-mono text-xs text-fg-muted">{r.key}</span> {r.name}
               </Link>
             </Td>
             {showProject && (
               <Td>
-                <Link href={`/projects/${r.projectId}`} className="text-slate-800 hover:underline">
+                <Link href={`/projects/${r.projectId}`} className="text-fg hover:underline">
                   {r.projectName}
                 </Link>
               </Td>
@@ -45,7 +45,7 @@ export function RunsTable({ runs, showProject = true }: { runs: TestRun[]; showP
             </Td>
             <Td className="text-right tabular-nums">{fmtPct(r.summary?.passRate)}</Td>
             <Td className="text-right tabular-nums">{fmtDuration(r.summary?.durationMs)}</Td>
-            <Td className="whitespace-nowrap text-slate-600">
+            <Td className="whitespace-nowrap text-fg-muted">
               <span className="inline-flex items-center gap-1.5">
                 {r.initiatedByAI && (
                   <Badge tone="violet" title="Initiated by the AI assistant">

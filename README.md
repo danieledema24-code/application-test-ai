@@ -45,6 +45,20 @@ labelled rule-based fallbacks (heuristic test generation, failure classification
 generation, and a limited command mode for the assistant). Model: `claude-opus-5-5`
 (override with `AI_MODEL`). Requests use server-side refusal fallbacks.
 
+## Playwright automation
+
+Every automated test case is stored as a standard **Playwright Test** spec
+(`import { test, expect } from "../fixtures"`). The in-app runner writes them into a temporary
+Playwright project and runs `playwright test`, so the same files run anywhere:
+
+- **Download a project:** *Test cases → Download Playwright project* (or
+  `GET /api/projects/:id/playwright-export`) gives a zip with `package.json`, `playwright.config.ts`,
+  `fixtures.ts`, `tests/*.spec.ts` and `.env.example`. Run it with `npm install && npx playwright test`.
+- **Remote browser grid:** set *Remote Playwright endpoint* (`wss://…`) on an environment and
+  runs execute on that browser server instead of local Chromium. Exported projects use `PW_WS_ENDPOINT`.
+- **Evidence:** a masked final screenshot, console and network logs per test; video and trace on failure.
+- **Exports:** test cases as CSV (*Test cases → Export CSV*); run and project reports as PDF/CSV.
+
 ## End-to-end check
 
 With the API and demo target running:
@@ -55,7 +69,7 @@ cd api && node test/e2e-journey.mjs
 
 This walks the full MVP journey (spec §8) and the acceptance criteria AC-001–AC-015: register →
 project → authorise environment → discovery → generate & approve cases → automated run with
-evidence → manual run → defect → OpenAPI import & API run → PDF/CSV reports → dashboard →
+evidence → Playwright project & CSV export → manual run → defect → OpenAPI import & API run → PDF/CSV reports → dashboard →
 assistant → workspace isolation → password reset.
 
 ## Architecture notes and deviations from the recommended stack

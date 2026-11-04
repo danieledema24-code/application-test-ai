@@ -30,11 +30,11 @@ import { ApiExchangeView } from "@/components/domain/ApiExchangeView";
 import { AiDraftBadge } from "@/components/domain/AiBits";
 
 const METHOD_COLOUR: Record<string, string> = {
-  GET: "text-emerald-700",
-  POST: "text-blue-700",
-  PUT: "text-amber-800",
-  PATCH: "text-violet-700",
-  DELETE: "text-red-700",
+  GET: "text-emerald-400",
+  POST: "text-sky-400",
+  PUT: "text-amber-300",
+  PATCH: "text-violet-300",
+  DELETE: "text-red-400",
 };
 
 type Pair = { k: string; v: string };
@@ -62,7 +62,7 @@ function KeyValueEditor({ label, pairs, onChange }: { label: string; pairs: Pair
             <button
               type="button"
               onClick={() => onChange(pairs.length > 1 ? pairs.filter((_, j) => j !== i) : [{ k: "", v: "" }])}
-              className="rounded p-2 text-slate-500 hover:bg-slate-100 hover:text-red-700"
+              className="rounded p-2 text-fg-muted hover:bg-overlay hover:text-red-400"
               aria-label={`Remove ${label.toLowerCase()} row ${i + 1}`}
             >
               <X className="h-4 w-4" aria-hidden />
@@ -212,9 +212,9 @@ function Editor({ endpoint, project, onSaved, onDeleted }: { endpoint: ApiEndpoi
               <label htmlFor="api-path" className="sr-only">
                 Path
               </label>
-              <div className="flex rounded-md shadow-sm ring-1 ring-inset ring-slate-300 focus-within:ring-2 focus-within:ring-blue-600">
-                <span className="hidden max-w-[16rem] truncate rounded-l-md bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-600 sm:block">{env?.baseUrl || ""}</span>
-                <input id="api-path" className="block w-full rounded-r-md border-0 bg-transparent px-3 py-2 font-mono text-sm text-slate-900 focus:outline-none" placeholder="/v1/resource" value={d.path} onChange={(e) => set("path", e.target.value)} />
+              <div className="flex rounded-md shadow-sm ring-1 ring-inset ring-line-strong focus-within:ring-2 focus-within:ring-accent">
+                <span className="hidden max-w-[16rem] truncate rounded-l-md bg-elevated px-3 py-2 font-mono text-xs leading-5 text-fg-muted sm:block">{env?.baseUrl || ""}</span>
+                <input id="api-path" className="block w-full rounded-r-md border-0 bg-transparent px-3 py-2 font-mono text-sm text-fg-strong focus:outline-none" placeholder="/v1/resource" value={d.path} onChange={(e) => set("path", e.target.value)} />
               </div>
             </div>
             <Button icon={<Send className="h-4 w-4" aria-hidden />} loading={sending} disabled={!envId} onClick={() => send(false)}>
@@ -225,7 +225,7 @@ function Editor({ endpoint, project, onSaved, onDeleted }: { endpoint: ApiEndpoi
             </Button>
             <Button variant="ghost" aria-label="Delete endpoint" icon={<Trash2 className="h-4 w-4" aria-hidden />} onClick={() => setConfirmDelete(true)} />
           </div>
-          {env && !env.authorised && <p className="text-sm text-amber-900">This environment is not confirmed as authorised for testing.</p>}
+          {env && !env.authorised && <p className="text-sm text-amber-200">This environment is not confirmed as authorised for testing.</p>}
 
           <Tabs
             idPrefix="api-editor"
@@ -271,7 +271,7 @@ function Editor({ endpoint, project, onSaved, onDeleted }: { endpoint: ApiEndpoi
       <Card>
         <CardHeader title="Response" />
         <CardBody>
-          {sending ? <LoadingBlock label="Sending request…" /> : exchange ? <ApiExchangeView exchange={exchange} /> : <p className="text-sm text-slate-600">Send the request to see the response.</p>}
+          {sending ? <LoadingBlock label="Sending request…" /> : exchange ? <ApiExchangeView exchange={exchange} /> : <p className="text-sm text-fg-muted">Send the request to see the response.</p>}
         </CardBody>
       </Card>
 
@@ -414,19 +414,19 @@ export function ApiTab({ project }: { project: ProjectDetail }) {
         <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
           <Card className="self-start">
             <CardHeader title={`Endpoints (${data.length})`} />
-            <ul className="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto" aria-label="Endpoints">
+            <ul className="max-h-[70vh] divide-y divide-line overflow-y-auto" aria-label="Endpoints">
               {data.map((e) => (
                 <li key={e.id}>
                   <button
                     type="button"
                     onClick={() => setSelectedId(e.id)}
                     aria-current={selected?.id === e.id ? "true" : undefined}
-                    className={`flex w-full items-start gap-2 px-4 py-2.5 text-left text-sm hover:bg-slate-50 ${selected?.id === e.id ? "bg-blue-50/70" : ""}`}
+                    className={`flex w-full items-start gap-2 px-4 py-2.5 text-left text-sm hover:bg-elevated ${selected?.id === e.id ? "bg-accent-soft/70" : ""}`}
                   >
                     <span className={`w-14 shrink-0 font-mono text-xs font-semibold ${METHOD_COLOUR[e.method]}`}>{e.method}</span>
                     <span className="min-w-0">
-                      <span className="block truncate font-mono text-xs text-slate-900">{e.path}</span>
-                      {e.name && <span className="block truncate text-xs text-slate-600">{e.name}</span>}
+                      <span className="block truncate font-mono text-xs text-fg-strong">{e.path}</span>
+                      {e.name && <span className="block truncate text-xs text-fg-muted">{e.name}</span>}
                     </span>
                   </button>
                 </li>
@@ -440,17 +440,17 @@ export function ApiTab({ project }: { project: ProjectDetail }) {
       <ImportModal projectId={project.id} open={importOpen} onClose={() => setImportOpen(false)} onImported={() => mutate()} />
       <Modal open={!!generated} onClose={() => setGenerated(null)} title="Generated API tests" footer={<Button onClick={() => setGenerated(null)}>Done</Button>}>
         <AiDraftBadge />
-        <ul className="mt-3 divide-y divide-slate-100 rounded-md border border-slate-200">
+        <ul className="mt-3 divide-y divide-line rounded-md border border-line">
           {(generated || []).map((c) => (
             <li key={c.id} className="px-3 py-2 text-sm">
-              <span className="font-mono text-xs text-slate-600">{c.key}</span>{" "}
-              <Link href={`/test-cases/${c.id}`} className="font-medium text-blue-800 hover:underline">
+              <span className="font-mono text-xs text-fg-muted">{c.key}</span>{" "}
+              <Link href={`/test-cases/${c.id}`} className="font-medium text-accent hover:underline">
                 {c.title}
               </Link>
             </li>
           ))}
         </ul>
-        {generated?.length === 0 && <p className="text-sm text-slate-600">Nothing was generated.</p>}
+        {generated?.length === 0 && <p className="text-sm text-fg-muted">Nothing was generated.</p>}
       </Modal>
     </div>
   );

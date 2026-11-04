@@ -33,8 +33,8 @@ export default function RegisterPage() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Create your workspace</h1>
-      <p className="mt-1 text-sm text-slate-600">You’ll be the workspace administrator.</p>
+      <h1 className="text-2xl font-semibold tracking-tight text-fg-strong">Create your workspace</h1>
+      <p className="mt-1 text-sm text-fg-muted">You’ll be the workspace administrator.</p>
       <form onSubmit={onSubmit} className="mt-8 space-y-4">
         <TextField label="Full name" autoComplete="name" required value={form.fullName} onChange={set("fullName")} />
         <TextField label="Work email" type="email" autoComplete="email" required value={form.email} onChange={set("email")} />
@@ -54,9 +54,9 @@ export default function RegisterPage() {
           Create workspace
         </Button>
       </form>
-      <p className="mt-6 text-center text-sm text-slate-600">
+      <p className="mt-6 text-center text-sm text-fg-muted">
         Already have an account?{" "}
-        <Link href="/login" className="font-medium text-blue-700 hover:underline">
+        <Link href="/login" className="font-medium text-accent hover:underline">
           Sign in
         </Link>
       </p>

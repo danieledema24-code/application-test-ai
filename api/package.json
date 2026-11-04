@@ -20,6 +20,7 @@
     "bcryptjs": "^3.0.3",
     "fastify": "^5.12.8",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.2",
     "pdfkit": "^0.20.2",
     "playwright": "^1.64.1",
     "yaml": "^2.9.1",

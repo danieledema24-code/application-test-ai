@@ -38,9 +38,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       <Link
         href="/dashboard"
         onClick={onNavigate}
-        className="flex items-center gap-2.5 px-5 py-5 text-white focus-visible:outline-white"
+        className="flex items-center gap-2.5 px-5 py-5 text-fg-strong"
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-on-accent">
           <FlaskConical className="h-4.5 w-4.5" aria-hidden />
         </span>
         <span className="text-sm font-semibold leading-tight">
@@ -63,11 +63,13 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                   href={item.href}
                   onClick={onNavigate}
                   aria-current={active ? "page" : undefined}
-                  className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-white ${
-                    active ? "bg-white/10 text-white" : "text-slate-300 hover:bg-white/5 hover:text-white"
+                  className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    active
+                      ? "bg-accent-soft text-fg-strong before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+                      : "text-fg-muted hover:bg-white/5 hover:text-fg-strong"
                   }`}
                 >
-                  <Icon className={`h-4.5 w-4.5 ${active ? "text-blue-300" : ""}`} aria-hidden />
+                  <Icon className={`h-4.5 w-4.5 ${active ? "text-accent" : ""}`} aria-hidden />
                   {item.label}
                 </Link>
               </li>
@@ -75,9 +77,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           })}
         </ul>
       </nav>
-      <div className="m-3 rounded-lg bg-white/5 p-3 text-xs text-slate-300">
-        <div className="flex items-center gap-2 font-medium text-white">
-          <BarChart3 className="h-4 w-4 text-blue-300" aria-hidden /> Recorded results first
+      <div className="m-3 rounded-lg border border-line bg-surface p-3 text-xs text-fg-muted">
+        <div className="flex items-center gap-2 font-medium text-fg-strong">
+          <BarChart3 className="h-4 w-4 text-fg-muted" aria-hidden /> Recorded results first
         </div>
         <p className="mt-1 leading-relaxed">AI suggestions are hypotheses. Test results recorded by runs are the source of truth.</p>
       </div>
@@ -118,25 +120,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-canvas">
       <a
         href="#main"
-        className="sr-only z-[90] rounded bg-white px-3 py-2 text-sm font-medium text-blue-800 focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+        className="sr-only z-[90] rounded bg-accent px-3 py-2 text-sm font-semibold text-on-accent focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
       >
         Skip to content
       </a>
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 bg-navy-900 lg:block">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-line bg-canvas lg:block">
         <SidebarContent />
       </aside>
       {/* Mobile drawer */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
-          <div className="absolute inset-0 bg-slate-900/50" onClick={() => setDrawerOpen(false)} aria-hidden />
-          <aside className="absolute inset-y-0 left-0 w-64 bg-navy-900 shadow-xl">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setDrawerOpen(false)} aria-hidden />
+          <aside className="absolute inset-y-0 left-0 w-64 border-r border-line bg-canvas shadow-xl">
             <button
               ref={drawerCloseRef}
               type="button"
               onClick={() => setDrawerOpen(false)}
               aria-label="Close navigation"
-              className="absolute right-3 top-5 rounded p-1 text-slate-300 hover:text-white focus-visible:outline-white"
+              className="absolute right-3 top-5 rounded p-1 text-fg-muted hover:text-fg-strong"
             >
               <X className="h-5 w-5" aria-hidden />
             </button>

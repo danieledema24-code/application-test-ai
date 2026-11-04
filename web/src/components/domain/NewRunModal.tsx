@@ -135,23 +135,23 @@ export function NewRunModal({
           />
         </div>
         {env && !env.authorised && (
-          <p className="flex gap-2 rounded-md bg-amber-50 p-2.5 text-sm text-amber-900">
+          <p className="flex gap-2 rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> This environment hasn’t been confirmed as authorised for testing. Confirm it in the
             project’s Environments tab first.
           </p>
         )}
         {env?.name === "PRODUCTION" && !env.allowDestructive && (
-          <p className="flex gap-2 rounded-md bg-amber-50 p-2.5 text-sm text-amber-900">
+          <p className="flex gap-2 rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> Production is read-only: destructive steps will be blocked.
           </p>
         )}
         <TextField label="Run name (optional)" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Release 2.4 regression" />
         <fieldset>
-          <legend className="mb-1 text-sm font-medium text-slate-800">Test cases</legend>
+          <legend className="mb-1 text-sm font-medium text-fg">Test cases</legend>
           {!projectId ? (
-            <p className="text-sm text-slate-600">Select a project to see its test cases.</p>
+            <p className="text-sm text-fg-muted">Select a project to see its test cases.</p>
           ) : casesLoading ? (
-            <p className="text-sm text-slate-600">Loading test cases…</p>
+            <p className="text-sm text-fg-muted">Loading test cases…</p>
           ) : (
             <>
               <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -172,20 +172,20 @@ export function NewRunModal({
                 />
               </div>
               {eligible.length === 0 ? (
-                <p className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                <p className="rounded-md bg-elevated p-3 text-sm text-fg-muted">
                   No approved or ready test cases. Approve cases in the Test Cases tab first.
                 </p>
               ) : (
-                <ul className="max-h-64 divide-y divide-slate-100 overflow-y-auto rounded-md border border-slate-200">
+                <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded-md border border-line">
                   {eligible.map((c) => (
                     <li key={c.id} className="flex items-center gap-3 px-3 py-2">
-                      <Checkbox label={<span className="font-normal"><span className="font-mono text-xs text-slate-600">{c.key}</span> {c.title} <span className="text-xs text-slate-500">· {c.category}</span></span>} checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="flex-1" />
+                      <Checkbox label={<span className="font-normal"><span className="font-mono text-xs text-fg-muted">{c.key}</span> {c.title} <span className="text-xs text-fg-muted">· {c.category}</span></span>} checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="flex-1" />
                       <StatusPill status={c.status} />
                     </li>
                   ))}
                 </ul>
               )}
-              <p className="mt-1 text-xs text-slate-600">{eligible.filter((c) => selected.has(c.id)).length} selected</p>
+              <p className="mt-1 text-xs text-fg-muted">{eligible.filter((c) => selected.has(c.id)).length} selected</p>
             </>
           )}
         </fieldset>

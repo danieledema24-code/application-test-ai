@@ -3,6 +3,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "../db.js";
 import { parse } from "./json.js";
+import { decrypt } from "./crypto.js";
 
 // Converts DB rows into the shapes documented in docs/API.md.
 
@@ -22,6 +23,7 @@ export const environmentDto = (e: Environment) => ({
   id: e.id, projectId: e.projectId, name: e.name, baseUrl: e.baseUrl,
   configuration: parse<Record<string, unknown>>(e.configuration, {}),
   hasCredentials: Boolean(e.encryptedCredentials), authorised: e.authorised, allowDestructive: e.allowDestructive,
+  hasRemoteBrowser: Boolean(e.encryptedCredentials && parse<{ playwrightWsEndpoint?: string }>(decrypt(e.encryptedCredentials), {}).playwrightWsEndpoint),
 });
 
 export const projectDto = (p: Project & { environments?: Environment[] }) => ({

@@ -48,15 +48,15 @@ function Profile() {
     <Card className="max-w-2xl">
       <CardHeader title="Your profile" />
       <CardBody>
-        <dl className="divide-y divide-slate-100 text-sm">
+        <dl className="divide-y divide-line text-sm">
           {rows.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-4 py-2.5">
-              <dt className="text-slate-600">{k}</dt>
-              <dd className="text-right font-medium text-slate-900">{v || "—"}</dd>
+              <dt className="text-fg-muted">{k}</dt>
+              <dd className="text-right font-medium text-fg-strong">{v || "—"}</dd>
             </div>
           ))}
         </dl>
-        <p className="mt-4 text-xs text-slate-600">To change your password, sign out and use “Forgot password”.</p>
+        <p className="mt-4 text-xs text-fg-muted">To change your password, sign out and use “Forgot password”.</p>
       </CardBody>
     </Card>
   );
@@ -169,10 +169,10 @@ function Members() {
             <TBody>
               {members.map((m) => (
                 <Tr key={m.id}>
-                  <Td className="font-medium text-slate-900">
-                    {m.fullName} {m.id === user?.id && <span className="text-xs font-normal text-slate-600">(you)</span>}
+                  <Td className="font-medium text-fg-strong">
+                    {m.fullName} {m.id === user?.id && <span className="text-xs font-normal text-fg-muted">(you)</span>}
                   </Td>
-                  <Td className="text-slate-700">{m.email}</Td>
+                  <Td className="text-fg">{m.email}</Td>
                   <Td>
                     {isAdmin && m.id !== user?.id ? (
                       <SelectField
@@ -190,7 +190,7 @@ function Members() {
                       <Badge tone={m.role === "ADMIN" ? "blue" : "grey"}>{m.role === "ADMIN" ? "Admin" : "Member"}</Badge>
                     )}
                   </Td>
-                  <Td className="text-slate-600">{fmtDate(m.createdAt)}</Td>
+                  <Td className="text-fg-muted">{fmtDate(m.createdAt)}</Td>
                   {isAdmin && (
                     <Td className="text-right">
                       {m.id !== user?.id && (
@@ -244,17 +244,17 @@ function AuditLog() {
               <TBody>
                 {rows.map((r) => (
                   <Tr key={r.id}>
-                    <Td className="whitespace-nowrap text-slate-600">{fmtDateTime(r.createdAt)}</Td>
+                    <Td className="whitespace-nowrap text-fg-muted">{fmtDateTime(r.createdAt)}</Td>
                     <Td>{personName(r.actor)}</Td>
                     <Td className="font-mono text-xs">{r.action}</Td>
-                    <Td className="max-w-[16rem] truncate text-slate-700">{r.target || "—"}</Td>
-                    <Td className="max-w-[24rem] truncate font-mono text-xs text-slate-600" >{fmtMeta(r.metadata)}</Td>
+                    <Td className="max-w-[16rem] truncate text-fg">{r.target || "—"}</Td>
+                    <Td className="max-w-[24rem] truncate font-mono text-xs text-fg-muted" >{fmtMeta(r.metadata)}</Td>
                   </Tr>
                 ))}
               </TBody>
             </Table>
             {rows.length >= limit && (
-              <div className="border-t border-slate-100 p-3 text-center">
+              <div className="border-t border-line p-3 text-center">
                 <Button size="sm" variant="ghost" onClick={() => setLimit((l) => l + 100)}>
                   Load more
                 </Button>

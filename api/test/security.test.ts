@@ -10,6 +10,7 @@ const { redactDeep, redactHeaders, redactText } = await import("../src/lib/redac
 const { decrypt, encrypt } = await import("../src/lib/crypto.js");
 const { validateSchema } = await import("../src/services/api-runner.js");
 const { heuristicScript } = await import("../src/services/scriptgen.js");
+const { isPlaywrightTestSpec, normaliseSpec } = await import("../src/services/playwright-project.js");
 const { provided } = await import("../src/lib/json.js");
 
 test("SSRF guard blocks metadata, private and non-http targets", async () => {
@@ -48,8 +49,16 @@ test("rule-based script generator emits contract-compliant code without secrets"
   const code = heuristicScript({ key: "TC-1", title: "Login", expectedResult: 'Shows "My account"' }, [
     { action: "Open /login" }, { action: 'Enter a valid password in the "Password" field' }, { action: 'Click "Sign in"' }, { action: 'Verify the page title contains "Account"' },
   ]);
-  assert.match(code, /export default async function \(\{ page, expect, env, step \}\)/);
-  assert.match(code, /env\.credentials\.password/);
+  assert.match(code, /import \{ test, expect \} from "\.\.\/fixtures"/);
+  assert.match(code, /test\("TC-1: Login", async \(\{ page \}\)/);
+  assert.match(code, /process\.env\.TEST_PASSWORD/);
+  assert.ok(isPlaywrightTestSpec(code));
   assert.match(code, /toHaveTitle\(new RegExp\("Account"\)\)/);
   assert.match(code, /getByText\("My account"\)/);
+});
+
+test("specs importing @playwright/test are pointed at the policy fixtures", () => {
+  const code = normaliseSpec('import { test, expect } from "@playwright/test";\ntest("x", async ({ page }) => {});');
+  assert.match(code, /from "\.\.\/fixtures"/);
+  assert.ok(!code.includes("@playwright/test"));
 });

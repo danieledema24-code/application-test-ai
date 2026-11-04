@@ -77,7 +77,7 @@ function ProjectView({ id }: { id: string }) {
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {project.description && <span>{project.description}</span>}
             {project.applicationUrl && (
-              <a href={project.applicationUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-700 hover:underline">
+              <a href={project.applicationUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent hover:underline">
                 {project.applicationUrl} <ExternalLink className="h-3 w-3" aria-hidden />
                 <span className="sr-only">(opens in a new tab)</span>
               </a>

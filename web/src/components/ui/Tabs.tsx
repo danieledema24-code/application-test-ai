@@ -31,7 +31,7 @@ export function Tabs({
     }
   }
   return (
-    <div className="scrollbar-thin -mx-1 overflow-x-auto border-b border-slate-200">
+    <div className="scrollbar-thin -mx-1 overflow-x-auto border-b border-line">
       <div role="tablist" aria-label={label} className="flex min-w-max gap-1 px-1">
         {tabs.map((t, i) => {
           const selected = t.id === value;
@@ -51,13 +51,13 @@ export function Tabs({
               onKeyDown={(e) => onKeyDown(e, i)}
               className={`relative -mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                 selected
-                  ? "border-blue-700 text-blue-800"
-                  : "border-transparent text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-fg-muted hover:border-line-strong hover:text-fg-strong"
               }`}
             >
               {t.label}
               {t.count !== undefined && (
-                <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">{t.count}</span>
+                <span className="ml-1.5 rounded-full bg-overlay px-1.5 py-0.5 text-xs text-fg-muted">{t.count}</span>
               )}
             </button>
           );
@@ -96,7 +96,7 @@ export function Segmented<T extends string | number>({
   label: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-md bg-slate-100 p-0.5">
+    <div role="radiogroup" aria-label={label} className="inline-flex rounded-md bg-elevated p-0.5 ring-1 ring-inset ring-line">
       {options.map((o) => (
         <button
           key={String(o.value)}
@@ -105,7 +105,7 @@ export function Segmented<T extends string | number>({
           aria-checked={o.value === value}
           onClick={() => onChange(o.value)}
           className={`rounded px-2.5 py-1 text-xs font-medium ${
-            o.value === value ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+            o.value === value ? "bg-accent font-semibold text-on-accent shadow-sm" : "text-fg-muted hover:text-fg-strong"
           }`}
         >
           {o.label}

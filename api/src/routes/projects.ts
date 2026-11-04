@@ -3,8 +3,8 @@ import { z } from "zod/v4";
 import { prisma } from "../db.js";
 import { authenticate, getProjectForUser } from "../auth.js";
 import { badRequest, HttpError, notFound } from "../lib/errors.js";
-import { encrypt } from "../lib/crypto.js";
-import { provided, str } from "../lib/json.js";
+import { decrypt, encrypt } from "../lib/crypto.js";
+import { parse, provided, str } from "../lib/json.js";
 import { nextKey } from "../lib/keys.js";
 import { assertSafeTarget } from "../lib/ssrf.js";
 import { deletePrefix } from "../lib/storage.js";
@@ -15,7 +15,26 @@ import { enqueue } from "../services/queue.js";
 
 const ENV_NAMES = ["DEVELOPMENT", "STAGING", "PRODUCTION"] as const;
 const url = z.string().trim().pipe(z.url({ protocol: /^https?$/, error: "Enter a full http(s) URL" }));
-const credentials = z.object({ username: z.string().optional(), password: z.string().optional(), apiKey: z.string().optional(), bearerToken: z.string().optional(), apiKeyHeader: z.string().optional() }).partial();
+const credentials = z.object({
+  username: z.string().optional(), password: z.string().optional(), apiKey: z.string().optional(), bearerToken: z.string().optional(), apiKeyHeader: z.string().optional(),
+  playwrightWsEndpoint: z.string().trim().regex(/^wss?:\/\//, "Remote Playwright endpoint must start with ws:// or wss://").or(z.literal("")).optional(),
+}).partial();
+
+/** Credentials are write-only, so updates merge into what is stored; an empty string clears that one value. */
+function mergeCredentials(stored: string | null, update: Record<string, string | undefined>) {
+  const merged: Record<string, string> = { ...(stored ? parse<Record<string, string>>(decrypt(stored), {}) : {}) };
+  for (const [k, v] of Object.entries(update)) {
+    if (v === undefined) continue;
+    if (v === "") delete merged[k];
+    else merged[k] = v;
+  }
+  return Object.keys(merged).length ? encrypt(JSON.stringify(merged)) : null;
+}
+
+/** The remote browser endpoint is network-reachable infrastructure, so it gets the same SSRF guard as targets. */
+async function checkCredentials(c: z.infer<typeof credentials> | undefined) {
+  if (c?.playwrightWsEndpoint) await assertSafeTarget(c.playwrightWsEndpoint.replace(/^ws/, "http"));
+}
 
 export async function projectRoutes(app: FastifyInstance) {
   app.addHook("preHandler", authenticate);
@@ -94,6 +113,7 @@ export async function projectRoutes(app: FastifyInstance) {
     await getProjectForUser(req.user, id);
     const body = envBody.parse(req.body);
     await assertSafeTarget(body.baseUrl);
+    await checkCredentials(body.credentials);
     const env = await prisma.environment.create({
       data: {
         projectId: id, name: body.name, baseUrl: body.baseUrl, configuration: str(body.configuration ?? {}),
@@ -116,6 +136,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const existing = await envForUser(req.user.organisationId, id);
     const body = provided(envBody.partial().parse(req.body), req.body);
     if (body.baseUrl) await assertSafeTarget(body.baseUrl);
+    await checkCredentials(body.credentials);
     // Changing the target URL withdraws the authorisation confirmation for the old one.
     const urlChanged = body.baseUrl && body.baseUrl !== existing.baseUrl;
     const env = await prisma.environment.update({
@@ -123,7 +144,7 @@ export async function projectRoutes(app: FastifyInstance) {
       data: {
         ...(body.name ? { name: body.name } : {}), ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
         ...(body.configuration ? { configuration: str(body.configuration) } : {}),
-        ...(body.credentials ? { encryptedCredentials: Object.values(body.credentials).some(Boolean) ? encrypt(JSON.stringify(body.credentials)) : null } : {}),
+        ...(body.credentials ? { encryptedCredentials: mergeCredentials(existing.encryptedCredentials, body.credentials) } : {}),
         ...(body.allowDestructive !== undefined ? { allowDestructive: body.allowDestructive } : {}),
         ...authorisation(urlChanged && body.authorised === undefined ? false : body.authorised, req.user.id),
       },

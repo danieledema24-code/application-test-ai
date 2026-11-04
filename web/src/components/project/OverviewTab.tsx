@@ -29,8 +29,8 @@ export function OverviewTab({ project, onNavigate }: { project: ProjectDetail; o
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {stats.map((x) => (
           <Card key={x.label} className="p-5">
-            <p className="text-sm font-medium text-slate-600">{x.label}</p>
-            <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{x.value}</p>
+            <p className="text-sm font-medium text-fg-muted">{x.label}</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums text-fg-strong">{x.value}</p>
             {x.pill && <StatusPill status={x.pill} className="mt-1" />}
           </Card>
         ))}
@@ -55,7 +55,7 @@ export function OverviewTab({ project, onNavigate }: { project: ProjectDetail; o
         <Card>
           <CardHeader title="Latest discovery" actions={<StatusPill status={project.discovery.status} />} />
           <CardBody>
-            <p className="text-sm text-slate-700">{project.discovery.summary || "Discovery in progress."}</p>
+            <p className="text-sm text-fg">{project.discovery.summary || "Discovery in progress."}</p>
             <Button size="sm" variant="secondary" className="mt-3" onClick={() => onNavigate("discovery")}>
               Open app map
             </Button>

@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, KeyRound, Pencil, Plus, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
+import { AlertTriangle, Globe, KeyRound, Pencil, Plus, ShieldCheck, ShieldAlert, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { EnvName, Environment, ProjectDetail } from "@/lib/types";
 import { ENV_NAMES } from "@/lib/types";
-import { Button, Card, Checkbox, ConfirmDialog, EmptyState, InlineError, Modal, SelectField, StatusPill, TextArea, TextField, useToast } from "@/components/ui";
+import { Badge, Button, Card, Checkbox, ConfirmDialog, EmptyState, InlineError, Modal, SelectField, StatusPill, TextArea, TextField, useToast } from "@/components/ui";
 
 type Form = {
   name: EnvName;
@@ -15,19 +15,38 @@ type Form = {
   password: string;
   apiKey: string;
   bearerToken: string;
+  playwrightWsEndpoint: string;
+  recordVideo: boolean;
+  workers: string;
   authorised: boolean;
   allowDestructive: boolean;
 };
 
+/** Configuration keys edited through dedicated controls rather than the JSON box. */
+const MANAGED_CONFIG_KEYS = ["recordVideo", "workers"] as const;
+const DEFAULT_WORKERS = 2;
+const MAX_WORKERS = 8;
+
+function otherConfig(configuration: Record<string, unknown> | undefined) {
+  const rest = { ...(configuration || {}) };
+  for (const k of MANAGED_CONFIG_KEYS) delete rest[k];
+  return rest;
+}
+
 function initialForm(env?: Environment | null): Form {
+  const cfg = env?.configuration || {};
+  const rest = otherConfig(cfg);
   return {
     name: env?.name || "STAGING",
     baseUrl: env?.baseUrl || "",
-    configuration: env?.configuration && Object.keys(env.configuration).length ? JSON.stringify(env.configuration, null, 2) : "",
+    configuration: Object.keys(rest).length ? JSON.stringify(rest, null, 2) : "",
     username: "",
     password: "",
     apiKey: "",
     bearerToken: "",
+    playwrightWsEndpoint: "",
+    recordVideo: typeof cfg.recordVideo === "boolean" ? cfg.recordVideo : true,
+    workers: String(typeof cfg.workers === "number" ? cfg.workers : DEFAULT_WORKERS),
     // Re-confirmation is required on every save.
     authorised: false,
     allowDestructive: env?.allowDestructive ?? true,
@@ -45,21 +64,39 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!f.authorised) return setError("You must confirm you are authorised to test this application.");
-    let configuration: Record<string, unknown> | undefined;
+    let extra: Record<string, unknown> = {};
     if (f.configuration.trim()) {
       try {
-        configuration = JSON.parse(f.configuration);
+        const parsed: unknown = JSON.parse(f.configuration);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setError("Configuration must be a JSON object.");
+        extra = parsed as Record<string, unknown>;
       } catch {
         return setError("Configuration must be valid JSON.");
       }
     }
+    const workers = Number(f.workers);
+    if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKERS) {
+      return setError(`Parallel workers must be a whole number from 1 to ${MAX_WORKERS}.`);
+    }
+    const ws = f.playwrightWsEndpoint.trim();
+    if (ws && !/^wss?:\/\//i.test(ws)) return setError("The remote Playwright endpoint must start with wss:// or ws://.");
+    // Merge the dedicated controls into the rest of the configuration so other keys are kept.
+    const configuration: Record<string, unknown> = { ...extra, recordVideo: f.recordVideo, workers };
     const creds = Object.fromEntries(
-      Object.entries({ username: f.username, password: f.password, apiKey: f.apiKey, bearerToken: f.bearerToken }).filter(([, v]) => v.trim() !== ""),
+      Object.entries({
+        username: f.username,
+        password: f.password,
+        apiKey: f.apiKey,
+        bearerToken: f.bearerToken,
+        playwrightWsEndpoint: f.playwrightWsEndpoint,
+      })
+        .map(([k, v]) => [k, k === "playwrightWsEndpoint" ? v.trim() : v] as const)
+        .filter(([, v]) => v.trim() !== ""),
     );
     const body = {
       name: f.name,
       baseUrl: f.baseUrl,
-      ...(configuration !== undefined ? { configuration } : env ? { configuration: {} } : {}),
+      configuration,
       ...(Object.keys(creds).length ? { credentials: creds } : {}),
       authorised: true,
       allowDestructive: f.allowDestructive,
@@ -111,7 +148,7 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
         </div>
 
         {isProd && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">
             <p className="flex items-center gap-2 font-semibold">
               <AlertTriangle className="h-4 w-4" aria-hidden /> Production environment — read-only by default
             </p>
@@ -137,12 +174,12 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
           />
         )}
 
-        <fieldset className="rounded-lg border border-slate-200 p-3">
-          <legend className="px-1 text-sm font-medium text-slate-800">
-            <KeyRound className="mr-1 inline h-4 w-4 text-slate-500" aria-hidden />
+        <fieldset className="rounded-lg border border-line p-3">
+          <legend className="px-1 text-sm font-medium text-fg">
+            <KeyRound className="mr-1 inline h-4 w-4 text-fg-muted" aria-hidden />
             Credentials (write-only)
           </legend>
-          <p className="mb-3 text-xs text-slate-600">
+          <p className="mb-3 text-xs text-fg-muted">
             Credentials are encrypted and never shown again.
             {env?.hasCredentials ? " Credentials are currently stored — leave fields blank to keep them." : ""}
           </p>
@@ -151,19 +188,56 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
             <TextField label="Password" type="password" autoComplete="new-password" value={f.password} onChange={(e) => set("password", e.target.value)} />
             <TextField label="API key" type="password" autoComplete="off" value={f.apiKey} onChange={(e) => set("apiKey", e.target.value)} />
             <TextField label="Bearer token" type="password" autoComplete="off" value={f.bearerToken} onChange={(e) => set("bearerToken", e.target.value)} />
+            <TextField
+              wrapClassName="sm:col-span-2"
+              label="Remote Playwright endpoint (wsEndpoint)"
+              autoComplete="off"
+              spellCheck={false}
+              inputMode="url"
+              placeholder={env?.hasRemoteBrowser ? "Stored — leave blank to keep" : "wss://…"}
+              hint="Optional. Run automated tests on a remote Playwright browser server or cloud grid (wss://…) instead of a local browser."
+              className="font-mono"
+              value={f.playwrightWsEndpoint}
+              onChange={(e) => set("playwrightWsEndpoint", e.target.value)}
+            />
+          </div>
+        </fieldset>
+
+        <fieldset className="rounded-lg border border-line p-3">
+          <legend className="px-1 text-sm font-medium text-fg">Automated runs</legend>
+          <div className="grid items-start gap-4 sm:grid-cols-[1fr_10rem]">
+            <Checkbox
+              label="Record video"
+              description="Save a video of each automated test as evidence."
+              checked={f.recordVideo}
+              onChange={(e) => set("recordVideo", e.target.checked)}
+            />
+            <TextField
+              label="Parallel workers"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={MAX_WORKERS}
+              step={1}
+              required
+              hint={`1–${MAX_WORKERS}`}
+              value={f.workers}
+              onChange={(e) => set("workers", e.target.value)}
+            />
           </div>
         </fieldset>
 
         <TextArea
-          label="Configuration (optional JSON)"
+          label="Additional configuration (optional JSON)"
+          hint="Other settings, e.g. timeoutMs or loginPath. Record video and workers above take precedence."
           mono
           rows={4}
-          placeholder='{ "loginPath": "/login" }'
+          placeholder='{ "loginPath": "/login", "timeoutMs": 30000 }'
           value={f.configuration}
           onChange={(e) => set("configuration", e.target.value)}
         />
 
-        <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3">
+        <div className="rounded-lg border border-line-strong bg-elevated p-3">
           <Checkbox
             required
             label="I confirm I am authorised to test this application"
@@ -215,31 +289,38 @@ export function EnvironmentsTab({ project, onChanged }: { project: ProjectDetail
           {project.environments.map((e) => (
             <Card key={e.id} className="flex flex-col p-5">
               <div className="flex items-start justify-between gap-2">
-                <StatusPill status={e.name} />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <StatusPill status={e.name} />
+                  {e.hasRemoteBrowser && (
+                    <Badge tone="blue" title="Automated runs connect to a remote Playwright browser (wsEndpoint)">
+                      <Globe className="h-3 w-3" aria-hidden /> Remote browser
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex gap-1">
                   <Button size="sm" variant="ghost" onClick={() => setEditing(e)} aria-label={`Edit ${e.name} environment`} icon={<Pencil className="h-4 w-4" aria-hidden />} />
                   <Button size="sm" variant="ghost" onClick={() => setDeleting(e)} aria-label={`Delete ${e.name} environment`} icon={<Trash2 className="h-4 w-4" aria-hidden />} />
                 </div>
               </div>
-              <p className="mt-3 break-all font-mono text-sm text-slate-900">{e.baseUrl}</p>
+              <p className="mt-3 break-all font-mono text-sm text-fg-strong">{e.baseUrl}</p>
               <ul className="mt-4 space-y-1.5 text-sm">
                 <li className="flex items-center gap-2">
                   {e.authorised ? (
                     <>
-                      <ShieldCheck className="h-4 w-4 text-emerald-600" aria-hidden /> <span className="text-slate-800">Authorisation confirmed</span>
+                      <ShieldCheck className="h-4 w-4 text-emerald-400" aria-hidden /> <span className="text-fg">Authorisation confirmed</span>
                     </>
                   ) : (
                     <>
-                      <ShieldAlert className="h-4 w-4 text-amber-600" aria-hidden /> <span className="text-amber-900">Authorisation not confirmed — edit to confirm</span>
+                      <ShieldAlert className="h-4 w-4 text-amber-400" aria-hidden /> <span className="text-amber-200">Authorisation not confirmed — edit to confirm</span>
                     </>
                   )}
                 </li>
-                <li className="flex items-center gap-2 text-slate-700">
-                  <KeyRound className="h-4 w-4 text-slate-500" aria-hidden /> {e.hasCredentials ? "Credentials stored" : "No credentials"}
+                <li className="flex items-center gap-2 text-fg">
+                  <KeyRound className="h-4 w-4 text-fg-muted" aria-hidden /> {e.hasCredentials ? "Credentials stored" : "No credentials"}
                 </li>
                 {(e.name === "PRODUCTION" || !e.allowDestructive) && (
-                  <li className="flex items-center gap-2 text-slate-700">
-                    <AlertTriangle className={`h-4 w-4 ${e.allowDestructive ? "text-red-600" : "text-amber-600"}`} aria-hidden />
+                  <li className="flex items-center gap-2 text-fg">
+                    <AlertTriangle className={`h-4 w-4 ${e.allowDestructive ? "text-red-400" : "text-amber-400"}`} aria-hidden />
                     {e.allowDestructive ? "Destructive actions allowed" : "Read-only (destructive actions blocked)"}
                   </li>
                 )}

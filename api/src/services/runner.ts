@@ -3,12 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { TestResult } from "@prisma/client";
+import type { Script, TestResult } from "@prisma/client";
 import { prisma } from "../db.js";
 import { config } from "../config.js";
 import { parse, str } from "../lib/json.js";
 import { assertSafeTarget } from "../lib/ssrf.js";
 import { putObject } from "../lib/storage.js";
+import { redactText } from "../lib/redact.js";
+import { CONFIG_TS, FIXTURES_TS, isPlaywrightTestSpec, normaliseSpec } from "./playwright-project.js";
 import { emitWebhook, notify, recordActivity } from "./activity.js";
 import { analyseFailure } from "./analysis.js";
 import { endpointToSpec, envCredentials, executeApi, secretValues, type ApiSpec } from "./api-runner.js";
@@ -16,8 +18,10 @@ import { isCancelled } from "./queue.js";
 import { generateScript } from "./scriptgen.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const CHILD = path.resolve(here, "../worker/runner-child.ts");
-const TSX = path.resolve(here, "../../node_modules/.bin/tsx");
+const API_ROOT = path.resolve(here, "../..");
+const PW_CLI = path.join(API_ROOT, "node_modules/@playwright/test/cli.js");
+// Run workspaces live under api/.runs so specs resolve @playwright/test from api/node_modules.
+const RUNS_DIR = path.join(API_ROOT, ".runs");
 
 async function loadRun(runId: string) {
   return prisma.testRun.findUniqueOrThrow({
@@ -36,27 +40,9 @@ async function previousStatuses(testCaseId: string | null, runId: string) {
   return prev.map((p) => p.status);
 }
 
-/** Runs one Playwright script in an isolated child process and returns its result + local evidence dir. */
-async function runInChild(job: Record<string, unknown>, timeoutMs: number): Promise<{ ok: boolean; stderr: string }> {
-  return new Promise((resolve) => {
-    // Scrubbed environment: the child never sees JWT/encryption/AI keys or the database URL.
-    const env = { PATH: process.env.PATH ?? "", HOME: os.homedir(), NODE_ENV: "production", ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}) };
-    const child = spawn(TSX, [CHILD], { env, stdio: ["pipe", "ignore", "pipe"] });
-    let stderr = "";
-    child.stderr.on("data", (d) => (stderr += d.toString()).slice(-4000));
-    const killer = setTimeout(() => child.kill("SIGKILL"), timeoutMs + 30_000);
-    child.on("close", (code) => {
-      clearTimeout(killer);
-      resolve({ ok: code === 0, stderr });
-    });
-    child.stdin.end(JSON.stringify(job));
-  });
-}
-
-async function storeFile(run: LoadedRun, resultId: string, localPath: string, fileType: string, name: string, mimeType: string) {
-  const data = await fs.readFile(localPath).catch(() => null);
-  if (!data || (fileType.endsWith("LOG") && data.length === 0)) return;
-  const key = await putObject(`${run.project.organisationId}/${run.projectId}/runs/${run.id}/${resultId}/${path.basename(localPath)}`, data);
+async function storeData(run: LoadedRun, resultId: string, fileName: string, data: Buffer, fileType: string, name: string, mimeType: string) {
+  if (fileType.endsWith("LOG") && data.length === 0) return;
+  const key = await putObject(`${run.project.organisationId}/${run.projectId}/runs/${run.id}/${resultId}/${fileName}`, data);
   await prisma.evidence.create({ data: { testRunId: run.id, testResultId: resultId, fileType, name, mimeType, size: data.length, storageReference: key } });
 }
 
@@ -70,70 +56,137 @@ async function finishResult(run: LoadedRun, result: TestResult, data: Partial<Te
   }
 }
 
+type PwStep = { title: string; duration: number; error?: { message?: string } };
+type PwAttachment = { name: string; contentType: string; path?: string; body?: string };
+type PwResult = { status: string; duration: number; error?: { message?: string; stack?: string }; errors?: { message?: string }[]; steps?: PwStep[]; attachments?: PwAttachment[] };
+type PwSpec = { title: string; file: string; tests: { results: PwResult[] }[] };
+type PwSuite = { specs?: PwSpec[]; suites?: PwSuite[] };
+
+function collectSpecs(suites: PwSuite[] = [], out: PwSpec[] = []) {
+  for (const s of suites) {
+    out.push(...(s.specs ?? []));
+    collectSpecs(s.suites, out);
+  }
+  return out;
+}
+
+const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, "");
+
+/** Runs the whole automated run as one Playwright Test invocation (parallel workers, optional remote browser). */
+async function runPlaywright(workDir: string, env: Record<string, string>, runId: string, timeoutMs: number) {
+  return new Promise<{ code: number | null; output: string }>((resolve) => {
+    // Scrubbed environment: no platform secrets (JWT/encryption/AI keys, database URL) reach test code.
+    const childEnv = { PATH: process.env.PATH ?? "", HOME: os.homedir(), CI: "1", FORCE_COLOR: "0", ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}), ...env };
+    const child = spawn(process.execPath, [PW_CLI, "test", "--config", path.join(workDir, "playwright.config.ts")], { cwd: workDir, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    const collect = (d: Buffer) => (output = (output + d.toString()).slice(-20_000));
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    const watchdog = setInterval(() => isCancelled(runId) && child.kill("SIGTERM"), 1000);
+    const killer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.on("close", (code) => {
+      clearInterval(watchdog);
+      clearTimeout(killer);
+      resolve({ code, output });
+    });
+  });
+}
+
 export async function executeAutomatedRun(runId: string) {
-  let run = await loadRun(runId);
+  const run = await loadRun(runId);
   if (run.status !== "QUEUED") return;
   await start(run);
   const env = run.environment!;
   const creds = envCredentials(env);
   const secrets = secretValues(creds);
-  const cfg = parse<{ recordVideo?: boolean; timeoutMs?: number; extraHosts?: string[] }>(env.configuration, {});
+  const cfg = parse<{ recordVideo?: boolean; timeoutMs?: number; workers?: number; extraHosts?: string[] }>(env.configuration, {});
   let base: URL;
   try {
     base = await assertSafeTarget(env.baseUrl);
+    if (creds.playwrightWsEndpoint) await assertSafeTarget(creds.playwrightWsEndpoint.replace(/^ws/, "http"));
   } catch (err) {
-    return abortRun(run, `Environment URL rejected: ${(err as Error).message}`);
+    return abortRun(run, `Environment rejected: ${(err as Error).message}`);
   }
   const initiator = run.initiatedById ? await prisma.user.findUnique({ where: { id: run.initiatedById } }) : null;
 
-  for (const result of run.results) {
-    if (isCancelled(run.id)) break;
-    const tc = result.testCase;
-    if (!tc) {
-      await finishResult(run, result, { status: "ERROR", errorMessage: "Test case was deleted before execution" });
-      continue;
-    }
-    let script = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
-    if (!script || script.testCaseVersion !== tc.version) script = await generateScript(tc, initiator?.fullName ?? "system");
-    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "ata-run-"));
-    try {
-      const scriptPath = path.join(workDir, "test.ts");
-      await fs.writeFile(scriptPath, script.code);
-      const timeoutMs = cfg.timeoutMs ?? 60_000;
-      const { ok, stderr } = await runInChild({
-        scriptPath, outDir: workDir, baseUrl: base.toString(), allowedHosts: [base.hostname, ...(cfg.extraHosts ?? [])],
-        allowPrivate: config.allowPrivateTargets, recordVideo: cfg.recordVideo ?? true, timeoutMs, credentials: creds, secrets,
-      }, timeoutMs);
-      const out = parse<{
-        status: "PASSED" | "FAILED" | "ERROR"; error: string; kind: string | null; failedStep: string | null;
-        steps: { index: number; label: string; status: string; durationMs: number; error?: string }[];
-        durationMs: number; videoPath: string | null; hasScreenshot: boolean;
-      } | null>(await fs.readFile(path.join(workDir, "result.json"), "utf8").catch(() => null), null);
-
-      if (!out) {
-        await finishResult(run, result, { status: "ERROR", errorMessage: `Execution worker crashed: ${stderr.split("\n").slice(-5).join(" ").slice(0, 500) || "no output"}`, scriptVersion: script.version },
-          { testCase: { key: tc.key, title: tc.title, steps: parse(tc.steps, []), expectedResult: tc.expectedResult }, executionType: "AUTOMATED", status: "ERROR", errorMessage: stderr.slice(-1500), kind: "environment" }, secrets);
+  const workDir = path.join(RUNS_DIR, run.id);
+  await fs.mkdir(path.join(workDir, "tests"), { recursive: true });
+  try {
+    await fs.writeFile(path.join(workDir, "fixtures.ts"), FIXTURES_TS);
+    await fs.writeFile(path.join(workDir, "playwright.config.ts"), CONFIG_TS);
+    const byFile = new Map<string, { result: (typeof run.results)[number]; script: Script }>();
+    for (const result of run.results) {
+      const tc = result.testCase;
+      if (!tc) {
+        await finishResult(run, result, { status: "ERROR", errorMessage: "Test case was deleted before execution" });
         continue;
       }
-      if (out.hasScreenshot) await storeFile(run, result.id, path.join(workDir, "final.png"), "SCREENSHOT", "Final state.png", "image/png");
-      if (out.videoPath && out.status !== "PASSED") await storeFile(run, result.id, out.videoPath, "VIDEO", "Recording.webm", "video/webm");
-      await storeFile(run, result.id, path.join(workDir, "console.log"), "CONSOLE_LOG", "Browser console.log", "text/plain");
-      await storeFile(run, result.id, path.join(workDir, "network.log"), "NETWORK_LOG", "Network errors.log", "text/plain");
-      const consoleExcerpt = (await fs.readFile(path.join(workDir, "console.log"), "utf8").catch(() => "")).slice(-3000);
-      const networkExcerpt = (await fs.readFile(path.join(workDir, "network.log"), "utf8").catch(() => "")).slice(-3000);
-      ok || console.warn(`[runner] child exited non-zero for ${tc.key}`);
+      let script = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
+      // Regenerate when the case changed since the script was written, or the script predates Playwright Test specs.
+      if (!script || script.testCaseVersion !== tc.version || !isPlaywrightTestSpec(script.code)) script = await generateScript(tc, initiator?.fullName ?? "system");
+      const file = `${tc.key}.spec.ts`;
+      await fs.writeFile(path.join(workDir, "tests", file), normaliseSpec(script.code));
+      byFile.set(file, { result, script });
+    }
+    if (!byFile.size) return await complete(run.id);
+
+    const reportFile = path.join(workDir, "report.json");
+    const perTest = cfg.timeoutMs ?? 60_000;
+    const workers = Math.min(Math.max(cfg.workers ?? config.workerConcurrency, 1), 8);
+    const { output } = await runPlaywright(workDir, {
+      BASE_URL: base.toString(), TEST_USERNAME: creds.username ?? "", TEST_PASSWORD: creds.password ?? "",
+      ATA_ALLOWED_HOSTS: [base.hostname, ...(cfg.extraHosts ?? [])].join(","), ATA_ALLOW_PRIVATE: String(config.allowPrivateTargets),
+      ATA_REPORT_FILE: reportFile, PW_WORKERS: String(workers), RECORD_VIDEO: String(cfg.recordVideo ?? true), TEST_TIMEOUT_MS: String(perTest),
+      ...(creds.playwrightWsEndpoint ? { PW_WS_ENDPOINT: creds.playwrightWsEndpoint } : {}),
+    }, run.id, perTest * Math.ceil(byFile.size / workers) + 120_000);
+
+    const report = parse<{ suites?: PwSuite[]; errors?: { message?: string }[] } | null>(await fs.readFile(reportFile, "utf8").catch(() => null), null);
+    const specs = collectSpecs(report?.suites);
+    const globalError = redactText(stripAnsi([...(report?.errors ?? []).map((e) => e.message ?? ""), report ? "" : output.slice(-1500)].join("\n").trim()), secrets);
+
+    for (const [file, { result, script }] of byFile) {
+      const tc = result.testCase!;
+      const spec = specs.find((s) => path.basename(s.file) === file);
+      const pw = spec?.tests[0]?.results.at(-1);
+      const caseInput = { key: tc.key, title: tc.title, steps: parse(tc.steps, []), expectedResult: tc.expectedResult };
+      if (!pw) {
+        const message = isCancelled(run.id) ? "Run cancelled before this test executed" : globalError || "Test did not run (no result reported by Playwright)";
+        await finishResult(run, result, { status: "ERROR", errorMessage: message.slice(0, 4000), scriptVersion: script.version },
+          isCancelled(run.id) ? undefined : { testCase: caseInput, executionType: "AUTOMATED", status: "ERROR", errorMessage: message, kind: "script", script: script.code.slice(0, 6000) }, secrets);
+        continue;
+      }
+      const error = redactText(stripAnsi(pw.error?.message ?? pw.errors?.map((e) => e.message).join("\n") ?? ""), secrets);
+      const kind = pw.status === "timedOut" || /Timeout \d+ms exceeded/i.test(error) ? "timeout"
+        : /net::ERR|NS_ERROR|ECONNREFUSED|ENOTFOUND|blockedbyclient/i.test(error) ? "navigation"
+        : /expect\(|toBe|toHave|toContain/.test(error) ? "assertion" : pw.status === "passed" ? null : "script";
+      const status = pw.status === "passed" ? "PASSED" : pw.status === "skipped" ? "BLOCKED" : kind === "assertion" || kind === "timeout" ? "FAILED" : "ERROR";
+      const steps = (pw.steps ?? []).filter((st) => !/^(Before|After) Hooks$|^Worker Cleanup$/.test(st.title));
+      const failedStep = steps.find((st) => st.error)?.title ?? null;
+
+      let consoleText = "", networkText = "";
+      for (const att of pw.attachments ?? []) {
+        const data = att.path ? await fs.readFile(att.path).catch(() => null) : att.body ? Buffer.from(att.body, "base64") : null;
+        if (!data) continue;
+        if (att.name === "console" || att.name === "network") {
+          const text = redactText(data.toString("utf8"), secrets);
+          if (att.name === "console") consoleText = text; else networkText = text;
+          await storeData(run, result.id, `${att.name}.log`, Buffer.from(text), att.name === "console" ? "CONSOLE_LOG" : "NETWORK_LOG", att.name === "console" ? "Browser console.log" : "Network errors.log", "text/plain");
+        } else if (att.name === "final-state") await storeData(run, result.id, "final.png", data, "SCREENSHOT", "Final state.png", "image/png");
+        else if (att.name === "video") await storeData(run, result.id, "video.webm", data, "VIDEO", "Recording.webm", "video/webm");
+        else if (att.name === "trace") await storeData(run, result.id, "trace.zip", data, "TRACE", "Playwright trace.zip", "application/zip");
+      }
       await finishResult(run, result, {
-        status: out.status, errorMessage: out.error, durationMs: out.durationMs, scriptVersion: script.version,
-        actualResult: out.status === "PASSED" ? "All automated steps passed." : `Failed at step: ${out.failedStep ?? "(setup)"}`,
-        stepResults: str(out.steps.map((s) => ({ index: s.index, label: s.label, status: s.status, note: s.error, durationMs: s.durationMs }))),
-      }, {
-        testCase: { key: tc.key, title: tc.title, steps: parse(tc.steps, []), expectedResult: tc.expectedResult }, executionType: "AUTOMATED",
-        status: out.status, errorMessage: out.error, failedStep: out.failedStep, kind: out.kind, consoleExcerpt, networkExcerpt,
+        status, errorMessage: error.slice(0, 8000), durationMs: Math.round(pw.duration), scriptVersion: script.version,
+        actualResult: status === "PASSED" ? "All automated steps passed." : `Failed at step: ${failedStep ?? "(test setup)"}`,
+        stepResults: str(steps.map((st, i) => ({ index: i, label: st.title, status: st.error ? "FAILED" : "PASSED", note: st.error?.message ? redactText(stripAnsi(st.error.message), secrets).slice(0, 500) : undefined, durationMs: Math.round(st.duration) }))),
+      }, status === "PASSED" ? undefined : {
+        testCase: caseInput, executionType: "AUTOMATED", status, errorMessage: error, failedStep, kind,
+        consoleExcerpt: consoleText.slice(-3000), networkExcerpt: networkText.slice(-3000),
         previousResults: await previousStatuses(tc.id, run.id), script: script.code.slice(0, 6000),
       }, secrets);
-    } finally {
-      await fs.rm(workDir, { recursive: true, force: true });
     }
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true });
   }
   await complete(run.id);
 }

@@ -31,13 +31,13 @@ function LoginForm() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Sign in</h1>
-      <p className="mt-1 text-sm text-slate-600">Welcome back. Sign in to your workspace.</p>
+      <h1 className="text-2xl font-semibold tracking-tight text-fg-strong">Sign in</h1>
+      <p className="mt-1 text-sm text-fg-muted">Welcome back. Sign in to your workspace.</p>
       <form onSubmit={onSubmit} className="mt-8 space-y-4">
         <TextField label="Work email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
         <TextField label="Password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         <div className="flex justify-end">
-          <Link href="/forgot-password" className="text-sm font-medium text-blue-700 hover:underline">
+          <Link href="/forgot-password" className="text-sm font-medium text-accent hover:underline">
             Forgot password?
           </Link>
         </div>
@@ -46,9 +46,9 @@ function LoginForm() {
           Sign in
         </Button>
       </form>
-      <p className="mt-6 text-center text-sm text-slate-600">
+      <p className="mt-6 text-center text-sm text-fg-muted">
         New to Application Test AI?{" "}
-        <Link href="/register" className="font-medium text-blue-700 hover:underline">
+        <Link href="/register" className="font-medium text-accent hover:underline">
           Create a workspace
         </Link>
       </p>

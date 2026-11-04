@@ -26,12 +26,12 @@ export default function ProjectsPage() {
         }
       />
       <Card>
-        <div className="border-b border-slate-100 p-4">
+        <div className="border-b border-line p-4">
           <div className="relative max-w-sm">
             <label htmlFor="project-search" className="sr-only">
               Search projects
             </label>
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" aria-hidden />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-muted" aria-hidden />
             <input id="project-search" type="search" className={`${inputClass} pl-9`} placeholder="Search projects" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
         </div>
@@ -66,10 +66,10 @@ export default function ProjectsPage() {
                 {projects.map((p) => (
                   <Tr key={p.id}>
                     <Td>
-                      <Link href={`/projects/${p.id}`} className="font-medium text-blue-800 hover:underline">
+                      <Link href={`/projects/${p.id}`} className="font-medium text-accent hover:underline">
                         {p.name}
                       </Link>
-                      <p className="max-w-xs truncate text-xs text-slate-600">{p.applicationUrl}</p>
+                      <p className="max-w-xs truncate text-xs text-fg-muted">{p.applicationUrl}</p>
                     </Td>
                     <Td>
                       <Badge>{p.applicationType}</Badge>
@@ -82,8 +82,8 @@ export default function ProjectsPage() {
                       </div>
                     </Td>
                     <Td className="text-right tabular-nums">{p.stats?.testCases ?? "—"}</Td>
-                    <Td className="text-slate-600">{timeAgo(p.stats?.lastRunAt)}</Td>
-                    <Td>{p.stats?.lastRunStatus ? <StatusPill status={p.stats.lastRunStatus} /> : <span className="text-slate-500">—</span>}</Td>
+                    <Td className="text-fg-muted">{timeAgo(p.stats?.lastRunAt)}</Td>
+                    <Td>{p.stats?.lastRunStatus ? <StatusPill status={p.stats.lastRunStatus} /> : <span className="text-fg-muted">—</span>}</Td>
                     <Td className="text-right tabular-nums">{fmtPct(p.stats?.passRate)}</Td>
                     <Td className="text-right tabular-nums">{p.stats?.openDefects ?? "—"}</Td>
                   </Tr>

@@ -79,12 +79,12 @@ export function SettingsTab({ project, onChanged }: { project: ProjectDetail; on
         </CardBody>
       </Card>
 
-      <Card className="border-red-200">
-        <CardHeader title={<span className="text-red-800">Danger zone</span>} />
+      <Card className="border-red-500/30">
+        <CardHeader title={<span className="text-red-300">Danger zone</span>} />
         <CardBody className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-slate-900">Delete this project</p>
-            <p className="text-sm text-slate-600">Permanently deletes all test cases, runs, results, evidence files, defects and reports.</p>
+            <p className="text-sm font-medium text-fg-strong">Delete this project</p>
+            <p className="text-sm text-fg-muted">Permanently deletes all test cases, runs, results, evidence files, defects and reports.</p>
           </div>
           <Button variant="danger" onClick={() => setDeleteOpen(true)}>
             Delete project
@@ -112,7 +112,7 @@ export function SettingsTab({ project, onChanged }: { project: ProjectDetail; on
         }
       >
         <div className="space-y-4">
-          <p className="flex gap-2 rounded-md bg-red-50 p-3 text-sm text-red-900">
+          <p className="flex gap-2 rounded-md bg-red-500/10 p-3 text-sm text-red-200">
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> This cannot be undone. All data and evidence for this project will be removed.
           </p>
           <TextField

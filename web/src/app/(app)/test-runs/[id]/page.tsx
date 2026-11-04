@@ -31,24 +31,24 @@ function ResultRow({ result, run, onChanged, defaultOpen }: { result: TestResult
   const [open, setOpen] = useState(defaultOpen);
   const panelId = `result-${result.id}`;
   return (
-    <li className="border-b border-slate-100 last:border-0">
+    <li className="border-b border-line last:border-0">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={panelId}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-elevated"
       >
-        {open ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" aria-hidden /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />}
-        <span className="w-20 shrink-0 font-mono text-xs text-slate-600">{result.testCaseKey}</span>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">{result.testCaseTitle}</span>
-        {result.evidence?.length > 0 && <span className="hidden text-xs text-slate-600 sm:inline">{result.evidence.length} evidence</span>}
+        {open ? <ChevronDown className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden /> : <ChevronRight className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />}
+        <span className="w-20 shrink-0 font-mono text-xs text-fg-muted">{result.testCaseKey}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg-strong">{result.testCaseTitle}</span>
+        {result.evidence?.length > 0 && <span className="hidden text-xs text-fg-muted sm:inline">{result.evidence.length} evidence</span>}
         {result.defectId && <Badge tone="red">Defect</Badge>}
-        <span className="hidden w-16 text-right text-xs tabular-nums text-slate-600 sm:inline">{fmtDuration(result.durationMs)}</span>
+        <span className="hidden w-16 text-right text-xs tabular-nums text-fg-muted sm:inline">{fmtDuration(result.durationMs)}</span>
         <StatusPill status={result.status} className="w-28 justify-center" />
       </button>
       {open && (
-        <div id={panelId} className="border-t border-slate-100 bg-slate-50/50 px-4 py-4 sm:px-11">
+        <div id={panelId} className="border-t border-line bg-elevated/50 px-4 py-4 sm:px-11">
           <ResultDetail result={result} run={run} onChanged={onChanged} />
         </div>
       )}
@@ -110,7 +110,7 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
         }
         title={
           <span className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-base text-slate-600">{run.key}</span> {run.name}
+            <span className="font-mono text-base text-fg-muted">{run.key}</span> {run.name}
           </span>
         }
         description={
@@ -155,46 +155,46 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
           <div>
             <SummaryBar s={run.summary} />
             {active && (
-              <p className="mt-3 text-xs text-slate-600" role="status">
+              <p className="mt-3 text-xs text-fg-muted" role="status">
                 Run is {run.status.toLowerCase()} — updating every 2 seconds.
               </p>
             )}
           </div>
           <dl className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-4 lg:grid-cols-2">
             <div>
-              <dt className="text-xs text-slate-600">Pass rate</dt>
-              <dd className="font-semibold text-slate-900">{fmtPct(run.summary.passRate)}</dd>
+              <dt className="text-xs text-fg-muted">Pass rate</dt>
+              <dd className="font-semibold text-fg-strong">{fmtPct(run.summary.passRate)}</dd>
             </div>
             <div>
-              <dt className="text-xs text-slate-600">Duration</dt>
-              <dd className="font-semibold text-slate-900">{fmtDuration(run.summary.durationMs)}</dd>
+              <dt className="text-xs text-fg-muted">Duration</dt>
+              <dd className="font-semibold text-fg-strong">{fmtDuration(run.summary.durationMs)}</dd>
             </div>
             <div>
-              <dt className="text-xs text-slate-600">Started</dt>
-              <dd className="text-slate-900">{fmtDateTime(run.startedAt)}</dd>
+              <dt className="text-xs text-fg-muted">Started</dt>
+              <dd className="text-fg-strong">{fmtDateTime(run.startedAt)}</dd>
             </div>
             <div>
-              <dt className="text-xs text-slate-600">Completed</dt>
-              <dd className="text-slate-900">{fmtDateTime(run.completedAt)}</dd>
+              <dt className="text-xs text-fg-muted">Completed</dt>
+              <dd className="text-fg-strong">{fmtDateTime(run.completedAt)}</dd>
             </div>
           </dl>
         </CardBody>
         {run.environment && (
-          <p className="border-t border-slate-100 px-5 py-2.5 text-xs text-slate-600">
-            Target: <span className="font-mono text-slate-800">{run.environment.baseUrl}</span>
+          <p className="border-t border-line px-5 py-2.5 text-xs text-fg-muted">
+            Target: <span className="font-mono text-fg">{run.environment.baseUrl}</span>
             {run.environment.name === "PRODUCTION" && !run.environment.allowDestructive && " · read-only (destructive actions blocked)"}
           </p>
         )}
       </Card>
 
       {manualInProgress && (
-        <p className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-900 ring-1 ring-inset ring-blue-200">
+        <p className="mt-4 rounded-lg bg-sky-500/10 px-4 py-3 text-sm text-sky-200 ring-1 ring-inset ring-sky-500/30">
           Manual run in progress. Expand each test case, record step outcomes and evidence, save the result, then <strong>Complete run</strong>.
         </p>
       )}
 
       <div className="mt-6 mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-900">Results ({results.length})</h2>
+        <h2 className="text-sm font-semibold text-fg-strong">Results ({results.length})</h2>
         <div className="flex flex-wrap gap-1" role="group" aria-label="Filter results by status">
           {["ALL", "FAILED", "ERROR", "BLOCKED", "PASSED", "NOT_EXECUTED"].map((s) =>
             s === "ALL" || counts[s] ? (
@@ -203,7 +203,7 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
                 type="button"
                 aria-pressed={filter === s}
                 onClick={() => setFilter(s)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${filter === s ? "bg-navy-900 text-white ring-navy-900" : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50"}`}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${filter === s ? "bg-accent font-semibold text-on-accent ring-accent" : "bg-elevated text-fg-muted ring-line hover:bg-overlay hover:text-fg-strong"}`}
               >
                 {s === "ALL" ? "All" : humanize(s)} {s === "ALL" ? results.length : counts[s]}
               </button>

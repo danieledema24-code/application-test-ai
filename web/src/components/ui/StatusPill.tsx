@@ -1,6 +1,6 @@
 import { humanize } from "@/lib/format";
 
-type Tone = "green" | "red" | "amber" | "blue" | "grey" | "orange" | "violet";
+export type Tone = "green" | "red" | "amber" | "blue" | "grey" | "rose" | "violet";
 
 // Single source of truth for status colours across the app.
 const TONES: Record<string, Tone> = {
@@ -29,7 +29,7 @@ const TONES: Record<string, Tone> = {
   CLOSED: "grey",
   // severity / priority
   CRITICAL: "red",
-  HIGH: "orange",
+  HIGH: "rose",
   MEDIUM: "amber",
   LOW: "grey",
   // assistant / misc
@@ -44,24 +44,26 @@ const TONES: Record<string, Tone> = {
   DEVELOPMENT: "blue",
 };
 
+// Status tones are tinted for the dark theme. Orange is deliberately absent: it is the
+// call-to-action colour, so "high" severity uses rose and "running/info" uses sky.
 const TONE_CLASSES: Record<Tone, string> = {
-  green: "bg-emerald-50 text-emerald-800 ring-emerald-600/25",
-  red: "bg-red-50 text-red-800 ring-red-600/25",
-  amber: "bg-amber-50 text-amber-900 ring-amber-600/30",
-  orange: "bg-orange-50 text-orange-800 ring-orange-600/25",
-  blue: "bg-blue-50 text-blue-800 ring-blue-600/25",
-  grey: "bg-slate-100 text-slate-700 ring-slate-500/20",
-  violet: "bg-violet-50 text-violet-800 ring-violet-600/25",
+  green: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30",
+  red: "bg-red-500/10 text-red-300 ring-red-500/30",
+  amber: "bg-amber-500/10 text-amber-300 ring-amber-500/30",
+  rose: "bg-pink-500/10 text-pink-300 ring-pink-500/30",
+  blue: "bg-sky-500/10 text-sky-300 ring-sky-500/30",
+  grey: "bg-white/5 text-fg-muted ring-white/10",
+  violet: "bg-violet-500/10 text-violet-300 ring-violet-500/30",
 };
 
 const DOT: Record<Tone, string> = {
-  green: "bg-emerald-500",
-  red: "bg-red-500",
-  amber: "bg-amber-500",
-  orange: "bg-orange-500",
-  blue: "bg-blue-500",
-  grey: "bg-slate-400",
-  violet: "bg-violet-500",
+  green: "bg-emerald-400",
+  red: "bg-red-400",
+  amber: "bg-amber-400",
+  rose: "bg-pink-400",
+  blue: "bg-sky-400",
+  grey: "bg-fg-subtle",
+  violet: "bg-violet-400",
 };
 
 export function statusTone(status: string | null | undefined): Tone {
@@ -75,7 +77,7 @@ export const STATUS_HEX = {
   passed: "#10b981",
   failed: "#ef4444",
   blocked: "#f59e0b",
-  other: "#94a3b8",
+  other: "#737373",
 };
 
 export function StatusPill({

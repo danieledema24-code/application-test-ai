@@ -152,7 +152,7 @@ export function DefectFormModal({
       }
     >
       {draftLoading ? (
-        <p className="text-sm text-slate-600" role="status">
+        <p className="text-sm text-fg-muted" role="status">
           Preparing draft from the failure…
         </p>
       ) : (
@@ -170,9 +170,9 @@ export function DefectFormModal({
             />
           )}
           {!testResultId && (
-            <details open className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <summary className="cursor-pointer text-sm font-medium text-slate-800">
-                <Sparkles className="mr-1 inline h-4 w-4 text-violet-600" aria-hidden />
+            <details open className="rounded-lg border border-line bg-elevated p-3">
+              <summary className="cursor-pointer text-sm font-medium text-fg">
+                <Sparkles className="mr-1 inline h-4 w-4 text-violet-300" aria-hidden />
                 Draft defect from my notes
               </summary>
               <div className="mt-3 space-y-2">

@@ -169,11 +169,11 @@ function CreateWebhookModal({ open, onClose, onCreated }: { open: boolean; onClo
     >
       {created ? (
         <div className="space-y-3">
-          <p className="rounded-md bg-amber-50 p-3 text-sm text-amber-950">
+          <p className="rounded-md bg-amber-500/10 p-3 text-sm text-amber-100">
             Copy this signing secret now. <strong>It will not be shown again.</strong>
           </p>
           <div className="flex items-center gap-2">
-            <code className="min-w-0 flex-1 break-all rounded-md bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100">{created.secret || "(no secret returned)"}</code>
+            <code className="min-w-0 flex-1 break-all rounded-md bg-canvas px-3 py-2 font-mono text-xs text-fg">{created.secret || "(no secret returned)"}</code>
             {created.secret && (
               <Button
                 variant="secondary"
@@ -197,7 +197,7 @@ function CreateWebhookModal({ open, onClose, onCreated }: { open: boolean; onClo
         <form id="webhook-form" onSubmit={submit} className="space-y-4">
           <TextField label="Payload URL" type="url" required placeholder="https://example.com/hooks/qa" value={url} onChange={(e) => setUrl(e.target.value)} />
           <fieldset>
-            <legend className="mb-1.5 text-sm font-medium text-slate-800">Events</legend>
+            <legend className="mb-1.5 text-sm font-medium text-fg">Events</legend>
             <div className="space-y-2">
               {WEBHOOK_EVENTS.map((ev) => (
                 <Checkbox
@@ -226,7 +226,7 @@ function CreateWebhookModal({ open, onClose, onCreated }: { open: boolean; onClo
 function Deliveries({ webhookId }: { webhookId: string }) {
   const { data, error, isLoading, mutate } = useApi<WebhookDelivery[]>(`/webhooks/${webhookId}/deliveries`);
   return (
-    <DataState data={data} error={error} isLoading={isLoading} onRetry={() => mutate()} empty={<p className="px-4 py-3 text-sm text-slate-600">No deliveries yet.</p>}>
+    <DataState data={data} error={error} isLoading={isLoading} onRetry={() => mutate()} empty={<p className="px-4 py-3 text-sm text-fg-muted">No deliveries yet.</p>}>
       {(rows) => (
         <Table label="Webhook deliveries">
           <THead>
@@ -245,7 +245,7 @@ function Deliveries({ webhookId }: { webhookId: string }) {
                   <StatusPill status={r.success ? "PASSED" : "FAILED"} label={r.success ? "Delivered" : "Failed"} />
                 </Td>
                 <Td className="tabular-nums">{r.statusCode ?? "—"}</Td>
-                <Td className="text-slate-600">{fmtDateTime(r.createdAt)}</Td>
+                <Td className="text-fg-muted">{fmtDateTime(r.createdAt)}</Td>
               </Tr>
             ))}
           </TBody>
@@ -281,7 +281,7 @@ export default function IntegrationsPage() {
     <>
       <PageHeader title="Integrations" description="Connect source control and issue tracking, and send events to your own systems." />
 
-      <h2 className="mb-3 text-sm font-semibold text-slate-900">Connections</h2>
+      <h2 className="mb-3 text-sm font-semibold text-fg-strong">Connections</h2>
       {integrations.error && !integrations.data ? (
         <InlineError error={integrations.error} />
       ) : (
@@ -291,26 +291,26 @@ export default function IntegrationsPage() {
             return (
               <Card key={p.id} className="flex flex-col p-5">
                 <div className="flex items-start gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700">{p.icon}</span>
+                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-overlay text-fg">{p.icon}</span>
                   <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-slate-900">{p.name}</p>
-                    <p className="text-sm text-slate-600">{p.description}</p>
+                    <p className="font-semibold text-fg-strong">{p.name}</p>
+                    <p className="text-sm text-fg-muted">{p.description}</p>
                   </div>
                 </div>
                 <div className="mt-4 flex-1 space-y-2">
                   {!integrations.data ? (
-                    <p className="text-sm text-slate-600">Loading…</p>
+                    <p className="text-sm text-fg-muted">Loading…</p>
                   ) : conns.length === 0 ? (
-                    <p className="text-sm text-slate-600">Not connected</p>
+                    <p className="text-sm text-fg-muted">Not connected</p>
                   ) : (
                     conns.map((c) => (
-                      <div key={c.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm">
+                      <div key={c.id} className="flex items-center gap-2 rounded-md bg-elevated px-3 py-2 text-sm">
                         <StatusPill status={c.connectionStatus} />
-                        <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-800">{c.config.repo || c.config.projectKey || c.config.baseUrl}</span>
+                        <span className="min-w-0 flex-1 truncate font-mono text-xs text-fg">{c.config.repo || c.config.projectKey || c.config.baseUrl}</span>
                         <button
                           type="button"
                           onClick={() => setDeleting({ kind: "integration", id: c.id, name: `${p.name} connection` })}
-                          className="rounded p-1 text-slate-500 hover:text-red-700"
+                          className="rounded p-1 text-fg-muted hover:text-red-400"
                           aria-label={`Disconnect ${p.name}`}
                         >
                           <Trash2 className="h-4 w-4" aria-hidden />
@@ -332,7 +332,7 @@ export default function IntegrationsPage() {
         <CardHeader
           title={
             <span className="flex items-center gap-2">
-              <WebhookIcon className="h-4 w-4 text-slate-500" aria-hidden /> Webhooks
+              <WebhookIcon className="h-4 w-4 text-fg-muted" aria-hidden /> Webhooks
             </span>
           }
           description="Signed HTTP callbacks for run, test and defect events."
@@ -350,12 +350,12 @@ export default function IntegrationsPage() {
           empty={<EmptyState title="No webhooks" description="Create a webhook to notify other systems about test activity." />}
         >
           {(hooks) => (
-            <ul className="divide-y divide-slate-100">
+            <ul className="divide-y divide-line">
               {hooks.map((h) => (
                 <li key={h.id}>
                   <div className="flex flex-wrap items-center gap-3 px-5 py-3">
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-mono text-sm text-slate-900">{h.url}</p>
+                      <p className="truncate font-mono text-sm text-fg-strong">{h.url}</p>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {h.events.map((e) => (
                           <Badge key={e} className="font-mono">
@@ -371,7 +371,7 @@ export default function IntegrationsPage() {
                     <Button size="sm" variant="ghost" aria-label={`Delete webhook ${h.url}`} icon={<Trash2 className="h-4 w-4" aria-hidden />} onClick={() => setDeleting({ kind: "webhook", id: h.id, name: "Webhook" })} />
                   </div>
                   {expanded === h.id && (
-                    <CardBody className="border-t border-slate-100 bg-slate-50/50 p-0">
+                    <CardBody className="border-t border-line bg-elevated/50 p-0">
                       <Deliveries webhookId={h.id} />
                     </CardBody>
                   )}

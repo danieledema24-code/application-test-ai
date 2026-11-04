@@ -36,12 +36,12 @@ export function DefectsList({ projectId: fixedProjectId }: { projectId?: string 
         </Button>
       </div>
       <Card>
-        <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 p-4">
+        <div className="flex flex-wrap items-end gap-3 border-b border-line p-4">
           <div className="relative min-w-[14rem] flex-1">
-            <label htmlFor="defect-search" className="mb-1 block text-xs font-medium text-slate-700">
+            <label htmlFor="defect-search" className="mb-1 block text-xs font-medium text-fg">
               Search
             </label>
-            <Search className="pointer-events-none absolute bottom-2.5 left-3 h-4 w-4 text-slate-500" aria-hidden />
+            <Search className="pointer-events-none absolute bottom-2.5 left-3 h-4 w-4 text-fg-muted" aria-hidden />
             <input id="defect-search" type="search" className={`${inputClass} pl-9`} placeholder="Key or title" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           {!fixedProjectId && <ProjectSelect value={projectId} onChange={setProjectId} placeholder="All projects" wrapClassName="w-48 [&_label]:text-xs" />}
@@ -75,14 +75,14 @@ export function DefectsList({ projectId: fixedProjectId }: { projectId?: string 
               <TBody>
                 {defects.map((d) => (
                   <Tr key={d.id}>
-                    <Td className="font-mono text-xs text-slate-600">{d.key}</Td>
+                    <Td className="font-mono text-xs text-fg-muted">{d.key}</Td>
                     <Td>
-                      <Link href={`/defects/${d.id}`} className="font-medium text-blue-800 hover:underline">
+                      <Link href={`/defects/${d.id}`} className="font-medium text-accent hover:underline">
                         {d.title}
                       </Link>
-                      {d.testCaseKey && <p className="text-xs text-slate-600">from {d.testCaseKey}</p>}
+                      {d.testCaseKey && <p className="text-xs text-fg-muted">from {d.testCaseKey}</p>}
                     </Td>
-                    {!fixedProjectId && <Td className="text-slate-700">{d.projectName}</Td>}
+                    {!fixedProjectId && <Td className="text-fg">{d.projectName}</Td>}
                     <Td>
                       <StatusPill status={d.severity} />
                     </Td>
@@ -93,7 +93,7 @@ export function DefectsList({ projectId: fixedProjectId }: { projectId?: string 
                       <StatusPill status={d.status} />
                     </Td>
                     <Td>{d.environmentName ? <StatusPill status={d.environmentName} dot={false} /> : "—"}</Td>
-                    <Td className="whitespace-nowrap text-slate-600">
+                    <Td className="whitespace-nowrap text-fg-muted">
                       {personName(d.createdBy)} · {timeAgo(d.createdAt)}
                     </Td>
                   </Tr>

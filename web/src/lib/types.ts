@@ -16,6 +16,8 @@ export type Environment = {
   baseUrl: string;
   configuration: Record<string, unknown>;
   hasCredentials: boolean;
+  /** v1.1: a remote Playwright browser server / cloud grid (wsEndpoint) is configured. */
+  hasRemoteBrowser?: boolean;
   authorised: boolean;
   allowDestructive: boolean;
 };
@@ -101,7 +103,8 @@ export type Script = {
   testCaseId: string;
   testCaseVersion: number;
   version: number;
-  language: "typescript" | "javascript";
+  /** v1.1 scripts are Playwright Test specs ("playwright-test"); older versions may be "typescript"/"javascript". */
+  language: "playwright-test" | "typescript" | "javascript";
   code: string;
   createdAt: string;
   createdBy: string | { id: string; fullName: string } | null;

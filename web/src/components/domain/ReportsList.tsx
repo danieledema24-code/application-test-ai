@@ -47,11 +47,11 @@ export function ReportsList({ projectId: fixedProjectId }: { projectId?: string 
               <TBody>
                 {reports.map((r) => (
                   <Tr key={r.id}>
-                    <Td className="font-medium text-slate-900">{r.title}</Td>
-                    {!fixedProjectId && <Td className="text-slate-700">{r.projectName}</Td>}
+                    <Td className="font-medium text-fg-strong">{r.title}</Td>
+                    {!fixedProjectId && <Td className="text-fg">{r.projectName}</Td>}
                     <Td>
                       {r.reportType === "RUN" && r.testRunId ? (
-                        <Link href={`/test-runs/${r.testRunId}`} className="text-blue-800 hover:underline">
+                        <Link href={`/test-runs/${r.testRunId}`} className="text-accent hover:underline">
                           Run report
                         </Link>
                       ) : (
@@ -61,13 +61,13 @@ export function ReportsList({ projectId: fixedProjectId }: { projectId?: string 
                     <Td>
                       <Badge tone={r.format === "PDF" ? "red" : "green"}>{r.format}</Badge>
                     </Td>
-                    <Td className="whitespace-nowrap text-slate-600">
+                    <Td className="whitespace-nowrap text-fg-muted">
                       {fmtDateTime(r.createdAt)} · {personName(r.createdBy)}
                     </Td>
                     <Td className="text-right">
                       <a
                         href={fileUrl(r.downloadUrl || `/reports/${r.id}/download`)}
-                        className="inline-flex items-center gap-1 text-sm font-medium text-blue-700 hover:underline"
+                        className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline"
                         aria-label={`Download ${r.title} (${r.format})`}
                       >
                         <Download className="h-4 w-4" aria-hidden /> Download

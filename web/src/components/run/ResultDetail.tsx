@@ -14,10 +14,10 @@ import { FailureAnalysisCard } from "@/components/domain/AiBits";
 import { DefectFormModal } from "@/components/domain/DefectFormModal";
 
 const STEP_OPTIONS: { status: ResultStatus; label: string; active: string }[] = [
-  { status: "PASSED", label: "Passed", active: "bg-emerald-600 text-white ring-emerald-600" },
-  { status: "FAILED", label: "Failed", active: "bg-red-600 text-white ring-red-600" },
-  { status: "BLOCKED", label: "Blocked", active: "bg-amber-500 text-slate-950 ring-amber-500" },
-  { status: "NOT_EXECUTED", label: "Not executed", active: "bg-slate-600 text-white ring-slate-600" },
+  { status: "PASSED", label: "Passed", active: "bg-emerald-500/20 text-emerald-200 ring-emerald-400" },
+  { status: "FAILED", label: "Failed", active: "bg-red-500/20 text-red-200 ring-red-400" },
+  { status: "BLOCKED", label: "Blocked", active: "bg-amber-500/20 text-amber-200 ring-amber-400" },
+  { status: "NOT_EXECUTED", label: "Not executed", active: "bg-white/10 text-fg-strong ring-fg-subtle" },
 ];
 
 function StatusButtons({ value, onChange, label }: { value: ResultStatus; onChange: (s: ResultStatus) => void; label: string }) {
@@ -30,7 +30,7 @@ function StatusButtons({ value, onChange, label }: { value: ResultStatus; onChan
           role="radio"
           aria-checked={value === o.status}
           onClick={() => onChange(o.status)}
-          className={`rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${value === o.status ? o.active : "bg-white text-slate-700 ring-slate-300 hover:bg-slate-50"}`}
+          className={`rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${value === o.status ? o.active : "bg-elevated text-fg-muted ring-line-strong hover:bg-overlay hover:text-fg-strong"}`}
         >
           {o.label}
         </button>
@@ -115,20 +115,20 @@ function ManualExecution({ result, steps, onChanged }: { result: TestResult; ste
   return (
     <div className="space-y-4">
       {steps.length === 0 ? (
-        <p className="text-sm text-slate-600">This test case has no steps; record the overall result below.</p>
+        <p className="text-sm text-fg-muted">This test case has no steps; record the overall result below.</p>
       ) : (
         <ol className="space-y-3">
           {steps.map((step, i) => {
             const sr = stepResults[i];
             return (
-              <li key={i} className="rounded-lg border border-slate-200 bg-white p-3">
+              <li key={i} className="rounded-lg border border-line bg-surface p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-slate-900">
-                      <span className="mr-1.5 font-semibold text-slate-600">{i + 1}.</span>
+                    <p className="text-sm text-fg-strong">
+                      <span className="mr-1.5 font-semibold text-fg-muted">{i + 1}.</span>
                       {step.action}
                     </p>
-                    {step.expected && <p className="mt-0.5 text-xs text-slate-600">Expected: {step.expected}</p>}
+                    {step.expected && <p className="mt-0.5 text-xs text-fg-muted">Expected: {step.expected}</p>}
                   </div>
                   <StatusButtons label={`Step ${i + 1} result`} value={sr.status} onChange={(s) => updateStep(i, { status: s })} />
                 </div>
@@ -152,10 +152,10 @@ function ManualExecution({ result, steps, onChanged }: { result: TestResult; ste
         </ol>
       )}
 
-      <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <div className="rounded-lg border border-line bg-surface p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm font-medium text-slate-900">
-            Overall result {!overridden && steps.length > 0 && <span className="text-xs font-normal text-slate-600">(derived from steps)</span>}
+          <p className="text-sm font-medium text-fg-strong">
+            Overall result {!overridden && steps.length > 0 && <span className="text-xs font-normal text-fg-muted">(derived from steps)</span>}
           </p>
           <StatusButtons
             label="Overall result"
@@ -178,8 +178,8 @@ function ManualExecution({ result, steps, onChanged }: { result: TestResult; ste
         </Button>
       </div>
 
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-3">
-        <p className="text-sm font-medium text-slate-900">Upload evidence</p>
+      <div className="rounded-lg border border-dashed border-line-strong bg-surface p-3">
+        <p className="text-sm font-medium text-fg-strong">Upload evidence</p>
         <div className="mt-2 flex flex-wrap items-end gap-2">
           <div>
             <label htmlFor={`${result.id}-file`} className="sr-only">
@@ -190,7 +190,7 @@ function ManualExecution({ result, steps, onChanged }: { result: TestResult; ste
               ref={fileRef}
               type="file"
               onChange={(e) => setFile(e.target.files?.[0] || null)}
-              className="block text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-800 hover:file:bg-slate-200"
+              className="block text-sm text-fg file:mr-3 file:rounded-md file:border-0 file:bg-overlay file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-fg hover:file:bg-overlay"
             />
           </div>
           <div className="min-w-[12rem] flex-1">
@@ -221,13 +221,13 @@ function RecordedSteps({ steps: caseSteps, stepResults }: { steps: TestStep[]; s
         const step = steps[i];
         const sr = stepResults.find((s) => s.index === i);
         return (
-          <li key={i} className="flex flex-wrap items-start gap-3 rounded-md bg-white px-3 py-2 ring-1 ring-slate-200">
-            <span className="w-5 text-xs font-semibold text-slate-600">{i + 1}.</span>
+          <li key={i} className="flex flex-wrap items-start gap-3 rounded-md bg-surface px-3 py-2 ring-1 ring-line">
+            <span className="w-5 text-xs font-semibold text-fg-muted">{i + 1}.</span>
             <div className="min-w-0 flex-1 text-sm">
-              <p className="text-slate-900">{step?.action || sr?.label || `Step ${i + 1}`}</p>
-              {step?.expected && <p className="text-xs text-slate-600">Expected: {step.expected}</p>}
-              {sr?.actual && <p className="text-xs text-slate-700">Actual: {sr.actual}</p>}
-              {sr?.note && <p className="text-xs text-slate-700">Note: {sr.note}</p>}
+              <p className="text-fg-strong">{step?.action || sr?.label || `Step ${i + 1}`}</p>
+              {step?.expected && <p className="text-xs text-fg-muted">Expected: {step.expected}</p>}
+              {sr?.actual && <p className="text-xs text-fg">Actual: {sr.actual}</p>}
+              {sr?.note && <p className="text-xs text-fg">Note: {sr.note}</p>}
             </div>
             <StatusPill status={sr?.status || "NOT_EXECUTED"} />
           </li>
@@ -286,25 +286,25 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
 
   return (
     <div className="space-y-5">
-      <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-600">
+      <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-fg-muted">
         <div>
           <dt className="inline">Duration: </dt>
-          <dd className="inline font-medium text-slate-900">{fmtDuration(result.durationMs)}</dd>
+          <dd className="inline font-medium text-fg-strong">{fmtDuration(result.durationMs)}</dd>
         </div>
         {result.scriptVersion !== null && (
           <div>
             <dt className="inline">Script: </dt>
-            <dd className="inline font-medium text-slate-900">v{result.scriptVersion}</dd>
+            <dd className="inline font-medium text-fg-strong">v{result.scriptVersion}</dd>
           </div>
         )}
         <div>
           <dt className="inline">Executed: </dt>
-          <dd className="inline font-medium text-slate-900">
+          <dd className="inline font-medium text-fg-strong">
             {fmtDateTime(result.executedAt)} {result.executedBy ? `by ${personName(result.executedBy)}` : ""}
           </dd>
         </div>
         <div>
-          <Link href={`/test-cases/${result.testCaseId}`} className="font-medium text-blue-700 hover:underline">
+          <Link href={`/test-cases/${result.testCaseId}`} className="font-medium text-accent hover:underline">
             Open test case
           </Link>
         </div>
@@ -314,20 +314,20 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
         testCase || result.steps ? (
           <ManualExecution result={result} steps={steps} onChanged={onChanged} />
         ) : (
-          <p className="text-sm text-slate-600">Loading steps…</p>
+          <p className="text-sm text-fg-muted">Loading steps…</p>
         )
       ) : (
         <>
           {(steps.length > 0 || result.stepResults?.length > 0) && (
             <section>
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Steps</h4>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">Steps</h4>
               <RecordedSteps steps={steps} stepResults={result.stepResults || []} />
             </section>
           )}
           {result.actualResult && (
             <section>
-              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">Actual result</h4>
-              <p className="whitespace-pre-wrap text-sm text-slate-800">{result.actualResult}</p>
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">Actual result</h4>
+              <p className="whitespace-pre-wrap text-sm text-fg">{result.actualResult}</p>
             </section>
           )}
         </>
@@ -335,20 +335,20 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
 
       {result.errorMessage && !isManualEditable && (
         <section>
-          <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">Error</h4>
-          <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-red-50 p-3 font-mono text-xs text-red-900 ring-1 ring-inset ring-red-200">{result.errorMessage}</pre>
+          <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">Error</h4>
+          <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-red-500/10 p-3 font-mono text-xs text-red-200 ring-1 ring-inset ring-red-500/30">{result.errorMessage}</pre>
         </section>
       )}
 
       {result.apiExchange && (
         <section>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">API exchange</h4>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">API exchange</h4>
           <ApiExchangeView exchange={result.apiExchange} />
         </section>
       )}
 
       <section>
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Evidence ({result.evidence?.length || 0})</h4>
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">Evidence ({result.evidence?.length || 0})</h4>
         <EvidenceGallery evidence={result.evidence || []} />
       </section>
 
@@ -359,7 +359,7 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
               {analysis ? "Re-analyse failure" : "Analyse failure"}
             </Button>
             {result.defectId ? (
-              <Link href={`/defects/${result.defectId}`} className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-red-800 ring-1 ring-inset ring-red-200 hover:bg-red-50">
+              <Link href={`/defects/${result.defectId}`} className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-red-300 ring-1 ring-inset ring-red-500/30 hover:bg-red-500/10">
                 <Bug className="h-4 w-4" aria-hidden /> View linked defect
               </Link>
             ) : (

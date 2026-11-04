@@ -30,13 +30,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             role={t.kind === "error" ? "alert" : "status"}
-            className="pointer-events-auto flex items-start gap-2.5 rounded-lg bg-white px-3.5 py-3 text-sm text-slate-800 shadow-lg ring-1 ring-slate-200"
+            className="pointer-events-auto flex items-start gap-2.5 rounded-lg bg-elevated px-3.5 py-3 text-sm text-fg shadow-lg shadow-black/50 ring-1 ring-line-strong"
           >
-            {t.kind === "success" && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-hidden />}
-            {t.kind === "error" && <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" aria-hidden />}
-            {t.kind === "info" && <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" aria-hidden />}
+            {t.kind === "success" && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" aria-hidden />}
+            {t.kind === "error" && <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" aria-hidden />}
+            {t.kind === "info" && <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" aria-hidden />}
             <p className="flex-1">{t.message}</p>
-            <button type="button" onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="text-slate-500 hover:text-slate-800">
+            <button type="button" onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="text-fg-muted hover:text-fg">
               <X className="h-4 w-4" aria-hidden />
             </button>
           </div>

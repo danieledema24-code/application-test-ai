@@ -4,7 +4,7 @@ import { forwardRef, useId } from "react";
 import { humanize } from "@/lib/format";
 
 const inputBase =
-  "block w-full rounded-md border-0 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-500 focus:ring-2 focus:ring-inset focus:ring-blue-600 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500";
+  "block w-full rounded-md border-0 bg-canvas px-3 py-2 text-sm text-fg-strong ring-1 ring-inset ring-line-strong placeholder:text-fg-subtle focus:ring-2 focus:ring-inset focus:ring-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-elevated disabled:text-fg-subtle";
 
 export const inputClass = inputBase;
 
@@ -29,10 +29,10 @@ function FieldWrap({
 }) {
   return (
     <div className={className}>
-      <label htmlFor={id} className={hideLabel ? "sr-only" : "mb-1 block text-sm font-medium text-slate-800"}>
+      <label htmlFor={id} className={hideLabel ? "sr-only" : "mb-1 block text-sm font-medium text-fg"}>
         {label}
         {required && (
-          <span className="text-red-700" aria-hidden>
+          <span className="text-red-400" aria-hidden>
             {" "}
             *
           </span>
@@ -40,12 +40,12 @@ function FieldWrap({
       </label>
       {children}
       {hint && !error && (
-        <p id={`${id}-hint`} className="mt-1 text-xs text-slate-600">
+        <p id={`${id}-hint`} className="mt-1 text-xs text-fg-muted">
           {hint}
         </p>
       )}
       {error && (
-        <p id={`${id}-error`} className="mt-1 text-xs text-red-700">
+        <p id={`${id}-error`} className="mt-1 text-xs text-red-400">
           {error}
         </p>
       )}
@@ -147,16 +147,16 @@ export function Checkbox({
       <input
         id={fid}
         type="checkbox"
-        className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-400 text-blue-700 accent-blue-700"
+        className="mt-0.5 h-4 w-4 shrink-0 rounded border-line-strong text-accent accent-accent"
         aria-describedby={description ? `${fid}-desc` : undefined}
         {...rest}
       />
       <div className="text-sm">
-        <label htmlFor={fid} className="font-medium text-slate-800">
+        <label htmlFor={fid} className="font-medium text-fg">
           {label}
         </label>
         {description && (
-          <p id={`${fid}-desc`} className="text-xs text-slate-600">
+          <p id={`${fid}-desc`} className="text-xs text-fg-muted">
             {description}
           </p>
         )}

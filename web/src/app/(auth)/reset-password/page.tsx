@@ -34,9 +34,9 @@ function ResetForm() {
   if (!token)
     return (
       <>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Invalid link</h1>
-        <p className="mt-2 text-sm text-slate-600">This reset link is missing its token.</p>
-        <Link href="/forgot-password" className="mt-4 inline-block text-sm font-medium text-blue-700 hover:underline">
+        <h1 className="text-2xl font-semibold tracking-tight text-fg-strong">Invalid link</h1>
+        <p className="mt-2 text-sm text-fg-muted">This reset link is missing its token.</p>
+        <Link href="/forgot-password" className="mt-4 inline-block text-sm font-medium text-accent hover:underline">
           Request a new link
         </Link>
       </>
@@ -44,11 +44,11 @@ function ResetForm() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Choose a new password</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-fg-strong">Choose a new password</h1>
       {done ? (
         <div className="mt-6" role="status">
-          <p className="text-sm text-slate-700">Your password has been reset.</p>
-          <Link href="/login" className="mt-4 inline-block text-sm font-medium text-blue-700 hover:underline">
+          <p className="text-sm text-fg">Your password has been reset.</p>
+          <Link href="/login" className="mt-4 inline-block text-sm font-medium text-accent hover:underline">
             Sign in
           </Link>
         </div>

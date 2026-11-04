@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, CheckCheck, Code2, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
+import { Check, CheckCheck, Code2, Download, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { fmtDateTime, fmtDuration, humanize, personName } from "@/lib/format";
@@ -50,6 +50,38 @@ function toForm(tc: TestCaseDetail): Form {
   };
 }
 
+const SCRIPT_PLACEHOLDER = `import { test, expect } from "../fixtures";
+
+test("TC-0001: user can sign in", async ({ page }) => {
+  await test.step("Open the login page", async () => {
+    await page.goto(process.env.BASE_URL + "/login");
+  });
+  await test.step("Sign in", async () => {
+    await page.getByLabel("Email").fill(process.env.TEST_USERNAME ?? "");
+    await page.getByLabel("Password").fill(process.env.TEST_PASSWORD ?? "");
+    await page.getByRole("button", { name: "Sign in" }).click();
+  });
+  await expect(page).toHaveURL(/dashboard/);
+});`;
+
+function languageLabel(language: string | undefined) {
+  if (!language || language === "playwright-test") return "Playwright Test (TypeScript)";
+  return `Legacy ${humanize(language)} script — regenerated as Playwright Test on next run`;
+}
+
+/** Save the script currently shown in the editor as <caseKey>.spec.ts (client-side). */
+function downloadSpec(filename: string, code: string) {
+  const blob = new Blob([code], { type: "text/typescript;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => void }) {
   const toast = useToast();
   const scripts = [...(tc.scripts || [])].sort((a, b) => b.version - a.version);
@@ -70,7 +102,8 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
     setBusy("gen");
     setError(null);
     try {
-      await api<Script>(`/test-cases/${tc.id}/scripts/generate`, { body: { language: "typescript" } });
+      // v1.1: the backend generates Playwright Test specs by default.
+      await api<Script>(`/test-cases/${tc.id}/scripts/generate`, { body: {} });
       toast("Playwright script generated — review before running");
       onChanged();
     } catch (e) {
@@ -102,12 +135,22 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
       <CardHeader
         title={
           <span className="flex items-center gap-2">
-            <Code2 className="h-4 w-4 text-slate-500" aria-hidden /> Automation script
+            <Code2 className="h-4 w-4 text-fg-muted" aria-hidden /> Automation script
           </span>
         }
-        description="Playwright (TypeScript)"
+        description={languageLabel(viewing?.language)}
         actions={
           <>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Download className="h-4 w-4" aria-hidden />}
+              disabled={!code.trim()}
+              onClick={() => downloadSpec(`${tc.key}.spec.ts`, code)}
+              title={`Save the script shown below as ${tc.key}.spec.ts`}
+            >
+              Download .spec.ts
+            </Button>
             <Button size="sm" variant="secondary" icon={<Sparkles className="h-4 w-4" aria-hidden />} loading={busy === "gen"} disabled={!canGenerate} onClick={generate} title={canGenerate ? undefined : "Approve the test case first"}>
               {scripts.length ? "Regenerate script" : "Generate script"}
             </Button>
@@ -118,15 +161,15 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
         }
       />
       <CardBody className="space-y-3">
-        {!canGenerate && <p className="text-sm text-slate-600">Scripts can be generated once the test case is approved or ready.</p>}
+        {!canGenerate && <p className="text-sm text-fg-muted">Scripts can be generated once the test case is approved or ready.</p>}
         {outdated && (
-          <p className="rounded-md bg-amber-50 p-2.5 text-sm text-amber-900">
+          <p className="rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">
             This script was written for test case v{viewing!.testCaseVersion}; the case is now v{tc.version}. Review or regenerate it.
           </p>
         )}
         {scripts.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-slate-600">Versions:</span>
+            <span className="text-xs font-medium text-fg-muted">Versions:</span>
             {scripts.map((s) => (
               <button
                 key={s.id}
@@ -136,7 +179,7 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
                   setCode(s.code);
                 }}
                 aria-pressed={viewing?.id === s.id}
-                className={`rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${viewing?.id === s.id ? "bg-blue-50 text-blue-800 ring-blue-300" : "text-slate-700 ring-slate-200 hover:bg-slate-50"}`}
+                className={`rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${viewing?.id === s.id ? "bg-accent-soft text-accent ring-accent/60" : "text-fg ring-line hover:bg-elevated"}`}
                 title={`${fmtDateTime(s.createdAt)} · ${personName(s.createdBy)}`}
               >
                 v{s.version}
@@ -152,12 +195,18 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
           spellCheck={false}
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder={canGenerate ? "Generate a script or paste Playwright code here…" : ""}
-          className="bg-slate-950 text-slate-100 placeholder:text-slate-400"
+          placeholder={canGenerate ? `Generate a script or paste a Playwright Test spec, e.g.\n\n${SCRIPT_PLACEHOLDER}` : ""}
+          className="bg-canvas text-fg placeholder:text-fg-subtle"
         />
+        <p className="text-xs text-fg-muted">
+          Standard Playwright Test spec: <code className="font-mono text-fg">import {"{ test, expect }"} from &quot;../fixtures&quot;</code>, one{" "}
+          <code className="font-mono text-fg">test(…)</code> with <code className="font-mono text-fg">test.step(…)</code> per step. Read the target from{" "}
+          <code className="font-mono text-fg">process.env.BASE_URL</code>, <code className="font-mono text-fg">TEST_USERNAME</code> and{" "}
+          <code className="font-mono text-fg">TEST_PASSWORD</code> — never hard-code credentials.
+        </p>
         {viewing && (
-          <p className="text-xs text-slate-600">
-            Viewing v{viewing.version} · {viewing.language} · for case v{viewing.testCaseVersion} · {fmtDateTime(viewing.createdAt)} · {personName(viewing.createdBy)}
+          <p className="text-xs text-fg-muted">
+            Viewing v{viewing.version} · {viewing.language === "playwright-test" ? "Playwright Test" : humanize(viewing.language)} · for case v{viewing.testCaseVersion} · {fmtDateTime(viewing.createdAt)} · {personName(viewing.createdBy)}
           </p>
         )}
         <InlineError error={error} />
@@ -261,7 +310,7 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
         }
         title={
           <span className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-base text-slate-600">{tc.key}</span> {tc.title}
+            <span className="font-mono text-base text-fg-muted">{tc.key}</span> {tc.title}
           </span>
         }
         description={
@@ -354,7 +403,7 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
                   {tc.history.map((r) => (
                     <Tr key={r.id}>
                       <Td>
-                        <Link href={`/test-runs/${r.testRunId}`} className="font-medium text-blue-800 hover:underline">
+                        <Link href={`/test-runs/${r.testRunId}`} className="font-medium text-accent hover:underline">
                           View run
                         </Link>
                       </Td>
@@ -363,7 +412,7 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
                       </Td>
                       <Td className="tabular-nums">{fmtDuration(r.durationMs)}</Td>
                       <Td>{r.scriptVersion ? `v${r.scriptVersion}` : "—"}</Td>
-                      <Td className="whitespace-nowrap text-slate-600">
+                      <Td className="whitespace-nowrap text-fg-muted">
                         {fmtDateTime(r.executedAt)} · {personName(r.executedBy)}
                       </Td>
                     </Tr>

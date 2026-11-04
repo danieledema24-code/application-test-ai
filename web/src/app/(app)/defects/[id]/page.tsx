@@ -149,7 +149,7 @@ export default function DefectPage({ params }: { params: Promise<{ id: string }>
         }
         title={
           <span className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-base text-slate-600">{d.key}</span> {d.title}
+            <span className="font-mono text-base text-fg-muted">{d.key}</span> {d.title}
           </span>
         }
         description={
@@ -211,27 +211,27 @@ export default function DefectPage({ params }: { params: Promise<{ id: string }>
                 </form>
               ) : (
                 <div className="space-y-5 text-sm">
-                  <p className="whitespace-pre-wrap text-slate-800">{d.description || <span className="text-slate-500">No description.</span>}</p>
+                  <p className="whitespace-pre-wrap text-fg">{d.description || <span className="text-fg-muted">No description.</span>}</p>
                   <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Reproduction steps</h3>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">Reproduction steps</h3>
                     {d.reproductionSteps?.length ? (
-                      <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-slate-800">
+                      <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-fg">
                         {d.reproductionSteps.map((s, i) => (
                           <li key={i}>{s}</li>
                         ))}
                       </ol>
                     ) : (
-                      <p className="mt-1 text-slate-500">None recorded.</p>
+                      <p className="mt-1 text-fg-muted">None recorded.</p>
                     )}
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div>
-                      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Expected result</h3>
-                      <p className="mt-1 whitespace-pre-wrap text-slate-800">{d.expectedResult || "—"}</p>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">Expected result</h3>
+                      <p className="mt-1 whitespace-pre-wrap text-fg">{d.expectedResult || "—"}</p>
                     </div>
                     <div>
-                      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Actual result</h3>
-                      <p className="mt-1 whitespace-pre-wrap text-slate-800">{d.actualResult || "—"}</p>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">Actual result</h3>
+                      <p className="mt-1 whitespace-pre-wrap text-fg">{d.actualResult || "—"}</p>
                     </div>
                   </div>
                 </div>
@@ -254,16 +254,16 @@ export default function DefectPage({ params }: { params: Promise<{ id: string }>
           <CardBody>
             <dl className="space-y-3 text-sm">
               {[
-                ["Project", <Link key="p" href={`/projects/${d.projectId}`} className="text-blue-800 hover:underline">{d.projectName}</Link>],
+                ["Project", <Link key="p" href={`/projects/${d.projectId}`} className="text-accent hover:underline">{d.projectName}</Link>],
                 ["Environment", d.environmentName ? <StatusPill key="e" status={d.environmentName} dot={false} /> : "—"],
-                ["Test case", d.testCaseId ? <Link key="t" href={`/test-cases/${d.testCaseId}`} className="text-blue-800 hover:underline">{d.testCaseKey}</Link> : "—"],
+                ["Test case", d.testCaseId ? <Link key="t" href={`/test-cases/${d.testCaseId}`} className="text-accent hover:underline">{d.testCaseKey}</Link> : "—"],
                 ["Raised by", personName(d.createdBy)],
                 ["Created", fmtDateTime(d.createdAt)],
                 ["Updated", fmtDateTime(d.updatedAt)],
               ].map(([k, v]) => (
                 <div key={k as string} className="flex justify-between gap-4">
-                  <dt className="text-slate-600">{k}</dt>
-                  <dd className="text-right font-medium text-slate-900">{v}</dd>
+                  <dt className="text-fg-muted">{k}</dt>
+                  <dd className="text-right font-medium text-fg-strong">{v}</dd>
                 </div>
               ))}
             </dl>

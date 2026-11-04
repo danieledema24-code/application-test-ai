@@ -3,7 +3,7 @@ import { errorMessage } from "@/lib/api";
 
 export function Spinner({ label = "Loading", className = "" }: { label?: string; className?: string }) {
   return (
-    <span role="status" className={`inline-flex items-center gap-2 text-sm text-slate-600 ${className}`}>
+    <span role="status" className={`inline-flex items-center gap-2 text-sm text-fg-muted ${className}`}>
       <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
       {label}
     </span>
@@ -19,7 +19,7 @@ export function LoadingBlock({ label = "Loading…", className = "" }: { label?:
 }
 
 export function Skeleton({ className = "" }: { className?: string }) {
-  return <div aria-hidden className={`animate-pulse rounded-md bg-slate-200/70 ${className}`} />;
+  return <div aria-hidden className={`animate-pulse rounded-md bg-overlay/70 ${className}`} />;
 }
 
 export function EmptyState({
@@ -37,11 +37,11 @@ export function EmptyState({
 }) {
   return (
     <div className={`flex flex-col items-center justify-center px-6 py-10 text-center ${className}`}>
-      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-500">
+      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-overlay text-fg-muted">
         {icon || <Inbox className="h-5 w-5" aria-hidden />}
       </div>
-      <p className="text-sm font-medium text-slate-900">{title}</p>
-      {description && <p className="mt-1 max-w-sm text-sm text-slate-600">{description}</p>}
+      <p className="text-sm font-medium text-fg-strong">{title}</p>
+      {description && <p className="mt-1 max-w-sm text-sm text-fg-muted">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   );
@@ -58,16 +58,16 @@ export function ErrorState({
 }) {
   return (
     <div role="alert" className={`flex flex-col items-center justify-center px-6 py-10 text-center ${className}`}>
-      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-red-50 text-red-600">
+      <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10 text-red-400">
         <AlertTriangle className="h-5 w-5" aria-hidden />
       </div>
-      <p className="text-sm font-medium text-slate-900">Couldn’t load this</p>
-      <p className="mt-1 max-w-md text-sm text-slate-600">{errorMessage(error)}</p>
+      <p className="text-sm font-medium text-fg-strong">Couldn’t load this</p>
+      <p className="mt-1 max-w-md text-sm text-fg-muted">{errorMessage(error)}</p>
       {onRetry && (
         <button
           type="button"
           onClick={onRetry}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent-soft"
         >
           <RefreshCw className="h-4 w-4" aria-hidden /> Try again
         </button>
@@ -79,7 +79,7 @@ export function ErrorState({
 export function InlineError({ error }: { error: unknown }) {
   if (!error) return null;
   return (
-    <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-inset ring-red-600/20">
+    <p role="alert" className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300 ring-1 ring-inset ring-red-600/20">
       {typeof error === "string" ? error : errorMessage(error)}
     </p>
   );

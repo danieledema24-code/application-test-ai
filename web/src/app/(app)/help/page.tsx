@@ -38,7 +38,7 @@ export default function HelpPage() {
           <Card key={s.title}>
             <CardHeader title={s.title} />
             <CardBody>
-              <p className="text-sm text-slate-700">{s.body}</p>
+              <p className="text-sm text-fg">{s.body}</p>
             </CardBody>
           </Card>
         ))}

@@ -74,9 +74,20 @@ check("automated run finished", ["PASSED", "FAILED", "ERROR"].includes(autoRun.s
 check("evidence stored", autoRun.results.every((x) => x.evidence.some((e) => e.fileType === "SCREENSHOT")));
 const failedAuto = autoRun.results.find((x) => x.status !== "PASSED");
 if (failedAuto) check("failure analysis attached as hypothesis", failedAuto.failureAnalysis?.hypothesis === true, failedAuto.failureAnalysis?.classification);
-const shot = autoRun.results[0].evidence[0];
+const shot = autoRun.results[0].evidence.find((e) => e.fileType === "SCREENSHOT");
 const img = await fetch(`${API.replace(/\/api$/, "")}${shot.url}?token=${token}`);
 check("evidence file downloadable", img.status === 200 && img.headers.get("content-type") === "image/png");
+
+// Playwright Test specs + exports
+const caseDetail = await call("GET", `/test-cases/${pick[0].id}`);
+const code = caseDetail.data.scripts?.[0]?.code ?? "";
+check("scripts are Playwright Test specs", /from "\.\.\/fixtures"/.test(code) && /\btest\(/.test(code), code.slice(0, 80));
+const zipRes = await fetch(`${API}/projects/${project.id}/playwright-export?caseIds=${pick.map((c) => c.id).join(",")}&token=${token}`);
+const zipBuf = Buffer.from(await zipRes.arrayBuffer());
+check("playwright project export", zipRes.status === 200 && zipRes.headers.get("content-type") === "application/zip" && zipBuf.toString("latin1").includes("playwright.config.ts"));
+const csvRes = await fetch(`${API}/projects/${project.id}/test-cases/export.csv?token=${token}`);
+const csv = await csvRes.text();
+check("test case CSV export", csvRes.status === 200 && csv.includes("Expected result") && csv.includes(cases[0].key));
 
 // AC-006 manual
 const manualCase = cases.find((c) => /Required field/i.test(c.title)) ?? cases[1];

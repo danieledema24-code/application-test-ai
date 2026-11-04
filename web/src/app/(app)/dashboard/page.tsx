@@ -37,11 +37,11 @@ function Kpi({ label, value, icon, hint }: { label: string; value: React.ReactNo
   return (
     <Card className="p-5">
       <div className="flex items-start justify-between">
-        <p className="text-sm font-medium text-slate-600">{label}</p>
-        <span className="text-slate-400">{icon}</span>
+        <p className="text-sm font-medium text-fg-muted">{label}</p>
+        <span className="text-fg-subtle">{icon}</span>
       </div>
-      <p className="mt-2 text-3xl font-semibold tabular-nums tracking-tight text-slate-900">{value}</p>
-      {hint && <p className="mt-1 text-xs text-slate-600">{hint}</p>}
+      <p className="mt-2 text-3xl font-semibold tabular-nums tracking-tight text-fg-strong">{value}</p>
+      {hint && <p className="mt-1 text-xs text-fg-muted">{hint}</p>}
     </Card>
   );
 }
@@ -128,10 +128,10 @@ export default function DashboardPage() {
               <div className="space-y-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <Link href={`/test-runs/${d.latestRun.id}`} className="block truncate font-medium text-blue-800 hover:underline">
+                    <Link href={`/test-runs/${d.latestRun.id}`} className="block truncate font-medium text-accent hover:underline">
                       {d.latestRun.key} · {d.latestRun.name}
                     </Link>
-                    <p className="mt-0.5 text-xs text-slate-600">
+                    <p className="mt-0.5 text-xs text-fg-muted">
                       {d.latestRun.projectName} · {d.latestRun.environmentName} · {timeAgo(d.latestRun.createdAt)}
                     </p>
                   </div>
@@ -139,17 +139,17 @@ export default function DashboardPage() {
                 </div>
                 <SummaryBar s={d.latestRun.summary} />
                 <dl className="grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-lg bg-slate-50 p-2">
-                    <dt className="text-xs text-slate-600">Pass rate</dt>
-                    <dd className="font-semibold text-slate-900">{fmtPct(d.latestRun.summary.passRate)}</dd>
+                  <div className="rounded-lg bg-elevated p-2">
+                    <dt className="text-xs text-fg-muted">Pass rate</dt>
+                    <dd className="font-semibold text-fg-strong">{fmtPct(d.latestRun.summary.passRate)}</dd>
                   </div>
-                  <div className="rounded-lg bg-slate-50 p-2">
-                    <dt className="text-xs text-slate-600">Duration</dt>
-                    <dd className="font-semibold text-slate-900">{fmtDuration(d.latestRun.summary.durationMs)}</dd>
+                  <div className="rounded-lg bg-elevated p-2">
+                    <dt className="text-xs text-fg-muted">Duration</dt>
+                    <dd className="font-semibold text-fg-strong">{fmtDuration(d.latestRun.summary.durationMs)}</dd>
                   </div>
-                  <div className="rounded-lg bg-slate-50 p-2">
-                    <dt className="text-xs text-slate-600">Type</dt>
-                    <dd className="text-sm font-semibold capitalize text-slate-900">{d.latestRun.executionType.toLowerCase()}</dd>
+                  <div className="rounded-lg bg-elevated p-2">
+                    <dt className="text-xs text-fg-muted">Type</dt>
+                    <dd className="text-sm font-semibold capitalize text-fg-strong">{d.latestRun.executionType.toLowerCase()}</dd>
                   </div>
                 </dl>
               </div>
@@ -203,15 +203,15 @@ export default function DashboardPage() {
                 {d.recentProjects.map((p) => (
                   <Tr key={p.id}>
                     <Td>
-                      <Link href={`/projects/${p.id}`} className="font-medium text-blue-800 hover:underline">
+                      <Link href={`/projects/${p.id}`} className="font-medium text-accent hover:underline">
                         {p.name}
                       </Link>
                     </Td>
                     <Td>
                       <Badge>{p.applicationType}</Badge>
                     </Td>
-                    <Td className="text-slate-600">{timeAgo(p.stats?.lastRunAt)}</Td>
-                    <Td>{p.stats?.lastRunStatus ? <StatusPill status={p.stats.lastRunStatus} /> : <span className="text-slate-500">—</span>}</Td>
+                    <Td className="text-fg-muted">{timeAgo(p.stats?.lastRunAt)}</Td>
+                    <Td>{p.stats?.lastRunStatus ? <StatusPill status={p.stats.lastRunStatus} /> : <span className="text-fg-muted">—</span>}</Td>
                     <Td className="text-right tabular-nums">{p.stats?.openDefects ?? "—"}</Td>
                   </Tr>
                 ))}
@@ -232,12 +232,12 @@ export default function DashboardPage() {
             ) : activity.data.length === 0 ? (
               <EmptyState title="No activity yet" icon={<ActivityIcon className="h-5 w-5" aria-hidden />} />
             ) : (
-              <ul className="divide-y divide-slate-100">
+              <ul className="divide-y divide-line">
                 {activity.data.map((a) => (
                   <li key={a.id} className="px-5 py-3">
                     <div className="flex items-start gap-2">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm text-slate-800">
+                        <p className="text-sm text-fg">
                           {a.link ? (
                             <Link href={a.link} className="hover:underline">
                               {a.message}
@@ -246,7 +246,7 @@ export default function DashboardPage() {
                             a.message
                           )}
                         </p>
-                        <p className="mt-0.5 text-xs text-slate-600">
+                        <p className="mt-0.5 text-xs text-fg-muted">
                           {[a.actor?.fullName, a.projectName, timeAgo(a.createdAt)].filter(Boolean).join(" · ")}
                         </p>
                       </div>

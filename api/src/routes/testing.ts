@@ -18,6 +18,10 @@ import { heuristicApiCases, parseOpenApi } from "../services/openapi.js";
 import { cancel } from "../services/queue.js";
 import { complete } from "../services/runner.js";
 import { generateScript } from "../services/scriptgen.js";
+import JSZip from "jszip";
+import { CONFIG_TS, envExample, FIXTURES_TS, isPlaywrightTestSpec, normaliseSpec, packageJson, readme } from "../services/playwright-project.js";
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
 
 const step = z.object({ action: z.string().min(1), expected: z.string().optional() });
 const caseFields = z.object({
@@ -55,6 +59,58 @@ export async function testingRoutes(app: FastifyInstance) {
       orderBy: { createdAt: "asc" },
     });
     return casesWithMeta(cases);
+  });
+
+  // Test cases as CSV (same filters as the list).
+  app.get("/projects/:id/test-cases/export.csv", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const project = await getProjectForUser(req.user, id);
+    const q = req.query as { search?: string; category?: string; priority?: string; status?: string };
+    const cases = await prisma.testCase.findMany({
+      where: {
+        projectId: id, ...(q.category ? { category: q.category } : {}), ...(q.priority ? { priority: q.priority } : {}), ...(q.status ? { status: q.status } : {}),
+        ...(q.search ? { OR: [{ title: { contains: q.search } }, { key: { contains: q.search } }, { description: { contains: q.search } }] } : {}),
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    const rows = [["ID", "Title", "Description", "Preconditions", "Steps", "Expected result", "Category", "Priority", "Status", "Source", "Version", "Last result"]];
+    for (const c of await casesWithMeta(cases))
+      rows.push([c.key, c.title, c.description, c.preconditions, (c.steps as { action: string; expected?: string }[]).map((st, i) => `${i + 1}. ${st.action}${st.expected ? ` → ${st.expected}` : ""}`).join("\n"),
+        c.expectedResult, c.category, c.priority, c.status, c.aiGenerated ? "AI" : c.source, String(c.version), c.lastResult ?? ""]);
+    const cell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    reply.header("content-type", "text/csv; charset=utf-8").header("content-disposition", `attachment; filename="${slug(project.name)}-test-cases.csv"`);
+    return reply.send("\uFEFF" + rows.map((r) => r.map(cell).join(",")).join("\r\n"));
+  });
+
+  // Ready-to-run Playwright Test project for the selected (or all approved/ready) cases.
+  app.get("/projects/:id/playwright-export", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const project = await getProjectForUser(req.user, id);
+    const ids = ((req.query as { caseIds?: string }).caseIds ?? "").split(",").filter(Boolean);
+    const cases = await prisma.testCase.findMany({
+      where: { projectId: id, ...(ids.length ? { id: { in: ids } } : { status: { in: ["APPROVED", "READY"] } }), apiEndpointId: null, apiSpec: null },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!cases.length) throw badRequest(ids.length ? "None of the selected cases are UI test cases" : "Approve some UI test cases first; API cases are not exported as browser specs");
+    const draft = cases.filter((c) => !["APPROVED", "READY"].includes(c.status));
+    if (draft.length) throw badRequest(`Approve these cases before exporting them: ${draft.map((c) => c.key).join(", ")}`);
+    const zip = new JSZip();
+    for (const tc of cases) {
+      let script = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
+      if (!script || script.testCaseVersion !== tc.version || !isPlaywrightTestSpec(script.code)) script = await generateScript(tc, req.user.fullName);
+      zip.file(`tests/${tc.key}.spec.ts`, normaliseSpec(script.code));
+    }
+    const env = await prisma.environment.findFirst({ where: { projectId: id }, orderBy: { createdAt: "asc" } });
+    zip.file("playwright.config.ts", CONFIG_TS);
+    zip.file("fixtures.ts", FIXTURES_TS);
+    zip.file("package.json", packageJson(project.name));
+    zip.file(".env.example", envExample(env?.baseUrl ?? project.applicationUrl));
+    zip.file(".gitignore", "node_modules\n.env\ntest-results\nplaywright-report\n");
+    zip.file("README.md", readme(project.name, cases.map((c) => c.key)));
+    zip.file("tsconfig.json", JSON.stringify({ compilerOptions: { target: "ES2022", module: "commonjs", strict: true, esModuleInterop: true, types: ["node"] } }, null, 2) + "\n");
+    await audit(req.user.organisationId, req.user.id, "playwright.exported", project.name, { cases: cases.map((c) => c.key) });
+    reply.header("content-type", "application/zip").header("content-disposition", `attachment; filename="${slug(project.name)}-playwright.zip"`);
+    return reply.send(await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
   });
 
   app.post("/projects/:id/test-cases", async (req) => {
@@ -149,9 +205,9 @@ export async function testingRoutes(app: FastifyInstance) {
   app.put("/test-cases/:id/scripts", async (req) => {
     const tc = await caseForUser(req.user, (req.params as { id: string }).id);
     const { code } = z.object({ code: z.string().min(1).max(200_000) }).parse(req.body);
-    if (!/export\s+default\s+async\s+function/.test(code)) throw badRequest("Script must `export default async function ({ page, expect, env, step })`");
+    if (!isPlaywrightTestSpec(code)) throw badRequest('Script must be a Playwright Test spec: import { test, expect } from "../fixtures" (or "@playwright/test") and define test(...)');
     const last = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
-    const s = await prisma.script.create({ data: { testCaseId: tc.id, testCaseVersion: tc.version, version: (last?.version ?? 0) + 1, code, createdById: req.user.id, createdBy: req.user.fullName } });
+    const s = await prisma.script.create({ data: { testCaseId: tc.id, testCaseVersion: tc.version, version: (last?.version ?? 0) + 1, language: "playwright-test", code, createdById: req.user.id, createdBy: req.user.fullName } });
     await audit(req.user.organisationId, req.user.id, "script.edited", tc.key, { version: s.version });
     return scriptDto(s);
   });

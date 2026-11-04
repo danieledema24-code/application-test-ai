@@ -19,12 +19,12 @@ export type ApiExchange = {
 };
 
 export const DESTRUCTIVE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-type Creds = { username?: string; password?: string; apiKey?: string; bearerToken?: string; apiKeyHeader?: string };
+type Creds = { username?: string; password?: string; apiKey?: string; bearerToken?: string; apiKeyHeader?: string; playwrightWsEndpoint?: string };
 
 export function envCredentials(env: Environment): Creds {
   return env.encryptedCredentials ? parse<Creds>(decrypt(env.encryptedCredentials), {}) : {};
 }
-export const secretValues = (c: Creds) => [c.password, c.apiKey, c.bearerToken].filter(Boolean) as string[];
+export const secretValues = (c: Creds) => [c.password, c.apiKey, c.bearerToken, c.playwrightWsEndpoint].filter(Boolean) as string[];
 
 export function endpointToSpec(e: ApiEndpoint): ApiSpec {
   return {

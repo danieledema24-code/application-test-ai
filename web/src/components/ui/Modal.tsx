@@ -76,7 +76,7 @@ export function Modal({
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <div className="absolute inset-0 bg-slate-900/50" aria-hidden onClick={onClose} />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden onClick={onClose} />
       <div
         ref={ref}
         role="dialog"
@@ -84,15 +84,15 @@ export function Modal({
         aria-labelledby={titleId}
         aria-describedby={description ? descId : undefined}
         tabIndex={-1}
-        className={`relative flex max-h-[92vh] w-full ${widths[size]} flex-col rounded-t-xl bg-white shadow-xl sm:rounded-xl`}
+        className={`relative flex max-h-[92vh] w-full ${widths[size]} flex-col rounded-t-xl bg-surface shadow-2xl shadow-black/60 ring-1 ring-line sm:rounded-xl`}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>
-            <h2 id={titleId} className="text-base font-semibold text-slate-900">
+            <h2 id={titleId} className="text-base font-semibold text-fg-strong">
               {title}
             </h2>
             {description && (
-              <p id={descId} className="mt-0.5 text-sm text-slate-600">
+              <p id={descId} className="mt-0.5 text-sm text-fg-muted">
                 {description}
               </p>
             )}
@@ -100,14 +100,14 @@ export function Modal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+            className="rounded-md p-1 text-fg-muted hover:bg-overlay hover:text-fg"
             aria-label="Close dialog"
           >
             <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-3">{footer}</div>}
+        {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
       </div>
     </div>,
     document.body,
@@ -150,7 +150,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      <div className="text-sm text-slate-700">{children}</div>
+      <div className="text-sm text-fg">{children}</div>
     </Modal>
   );
 }

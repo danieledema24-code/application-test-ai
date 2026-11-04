@@ -71,36 +71,36 @@ export function CompareModal({ open, onClose, run }: { open: boolean; onClose: (
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-sm">
             {[result.a, null, result.b].map((r, i) =>
               r ? (
-                <div key={r.id} className="rounded-lg border border-slate-200 p-3">
-                  <p className="font-medium text-slate-900">
+                <div key={r.id} className="rounded-lg border border-line p-3">
+                  <p className="font-medium text-fg-strong">
                     {r.key} <StatusPill status={r.status} className="ml-1" />
                   </p>
-                  <p className="text-xs text-slate-600">
+                  <p className="text-xs text-fg-muted">
                     Pass rate {fmtPct(r.summary.passRate)} · {r.summary.passed}/{r.summary.total} passed
                   </p>
                 </div>
               ) : (
-                <ArrowRight key={i} className="h-4 w-4 text-slate-500" aria-hidden />
+                <ArrowRight key={i} className="h-4 w-4 text-fg-muted" aria-hidden />
               ),
             )}
           </div>
           {result.changes.length === 0 ? (
             <EmptyState title="No status changes" description="Every common test case has the same result in both runs." />
           ) : (
-            <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+            <ul className="divide-y divide-line rounded-lg border border-line">
               {result.changes.map((c) => (
                 <li key={c.testCaseKey} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
-                  <span className="font-mono text-xs text-slate-600">{c.testCaseKey}</span>
-                  <span className="min-w-0 flex-1 truncate text-slate-900">{c.title}</span>
-                  {c.from ? <StatusPill status={c.from} /> : <span className="text-xs text-slate-500">not in run</span>}
-                  <ArrowRight className="h-3.5 w-3.5 text-slate-500" aria-label="changed to" />
-                  {c.to ? <StatusPill status={c.to} /> : <span className="text-xs text-slate-500">not in run</span>}
+                  <span className="font-mono text-xs text-fg-muted">{c.testCaseKey}</span>
+                  <span className="min-w-0 flex-1 truncate text-fg-strong">{c.title}</span>
+                  {c.from ? <StatusPill status={c.from} /> : <span className="text-xs text-fg-muted">not in run</span>}
+                  <ArrowRight className="h-3.5 w-3.5 text-fg-muted" aria-label="changed to" />
+                  {c.to ? <StatusPill status={c.to} /> : <span className="text-xs text-fg-muted">not in run</span>}
                 </li>
               ))}
             </ul>
           )}
-          <p className="text-xs text-slate-600">
-            <Link href={`/test-runs/${result.a.id}`} className="text-blue-700 hover:underline">
+          <p className="text-xs text-fg-muted">
+            <Link href={`/test-runs/${result.a.id}`} className="text-accent hover:underline">
               Open baseline run
             </Link>
           </p>

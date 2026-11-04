@@ -3,29 +3,91 @@
 @theme inline {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --color-navy-950: #071330;
-  --color-navy-900: #0b1b3a;
-  --color-navy-800: #13284f;
-  --color-navy-700: #1c3566;
-  --color-canvas: #f5f7fa;
-  --color-primary: #1d4ed8;
-  --color-primary-hover: #1e40af;
 }
 
-html {
-  color-scheme: light;
+/*
+ * Colour tokens — dark theme with orange calls-to-action.
+ * Every neutral/accent colour in the UI comes from these tokens. Status colours use
+ * Tailwind's palette directly: emerald = passed, red = failed/critical,
+ * amber = blocked/warning, sky = informational/running. Orange is reserved for
+ * CTAs, links, selection and focus — never for status pills.
+ *
+ * Contrast (WCAG 2.2 AA) measured on surface #141414 / elevated #1c1c1c:
+ *   fg-strong #fafafa ≈ 18:1 · fg #e5e5e5 ≈ 15:1 · fg-muted #a3a3a3 ≈ 7:1
+ *   fg-subtle #8f8f8f ≈ 5.3:1 · accent #f97316 used as text ≈ 6.4:1
+ *   on-accent #0a0a0a on accent #f97316 ≈ 7.6:1, on hover #ea580c ≈ 5.9:1
+ *   (white on #f97316 is ≈ 2.8:1 and fails, so CTA text is near-black).
+ */
+@theme {
+  /* Surfaces, back to front */
+  --color-canvas: #0a0a0a; /* page background, sidebar */
+  --color-surface: #141414; /* cards, top bar, modals, inputs */
+  --color-elevated: #1c1c1c; /* table headers, hovered rows, nested panels */
+  --color-overlay: #262626; /* chips, segmented-control track, hover on elevated */
+
+  /* Lines */
+  --color-line: #2a2a2a;
+  --color-line-strong: #3d3d3d;
+
+  /* Text */
+  --color-fg-strong: #fafafa; /* headings, key figures */
+  --color-fg: #e5e5e5; /* body text */
+  --color-fg-muted: #a3a3a3; /* secondary text, labels */
+  --color-fg-subtle: #8f8f8f; /* placeholders, disabled, tertiary */
+
+  /* Accent: CTAs, links, active nav/tab, selected toggles, focus */
+  --color-accent: #f97316;
+  --color-accent-hover: #ea580c;
+  --color-accent-bright: #fdba74; /* link hover text on dark */
+  --color-accent-soft: #2b1709; /* subtle tint for selected/active states */
+  --color-on-accent: #0a0a0a; /* text/icons on accent backgrounds */
 }
 
-body {
-  background: var(--color-canvas);
-  color: #0f172a;
-}
+/* Base styles live in the base layer so Tailwind utilities (e.g. focus:outline-none) can override them. */
+@layer base {
+  html {
+    color-scheme: dark;
+  }
 
-/* Visible, consistent focus ring for keyboard users (WCAG 2.2 focus appearance) */
-:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 2px;
-}
+  body {
+    background: var(--color-canvas);
+    color: var(--color-fg);
+  }
 
-.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
-.scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    color: var(--color-fg-strong);
+  }
+
+  /* Visible, consistent focus ring for keyboard users (WCAG 2.2 focus appearance) */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Native checkboxes, radios, range sliders and progress bars pick up the accent. */
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  progress {
+    accent-color: var(--color-accent);
+  }
+
+  select option,
+  select optgroup {
+    background: var(--color-surface);
+    color: var(--color-fg);
+  }
+
+  /* Scrollbars */
+  html {
+    scrollbar-color: var(--color-line-strong) var(--color-canvas);
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--color-line-strong); border-radius: 4px; }
+}

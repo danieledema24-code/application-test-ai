@@ -29,26 +29,26 @@ export default function ForgotPasswordPage() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Reset your password</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-fg-strong">Reset your password</h1>
       {sent ? (
         <div className="mt-6 space-y-4" role="status">
-          <p className="text-sm text-slate-700">If an account exists for {email}, a reset link has been sent.</p>
+          <p className="text-sm text-fg">If an account exists for {email}, a reset link has been sent.</p>
           {devLink && (
-            <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 ring-1 ring-inset ring-amber-600/30">
+            <div className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200 ring-1 ring-inset ring-amber-600/30">
               <p className="font-medium">Development mode</p>
               <p className="mt-1">Email isn’t configured, so here is the reset link:</p>
-              <a href={devLink} className="mt-1 block break-all font-medium text-blue-800 underline">
+              <a href={devLink} className="mt-1 block break-all font-medium text-accent underline">
                 {devLink}
               </a>
             </div>
           )}
-          <Link href="/login" className="inline-block text-sm font-medium text-blue-700 hover:underline">
+          <Link href="/login" className="inline-block text-sm font-medium text-accent hover:underline">
             Back to sign in
           </Link>
         </div>
       ) : (
         <>
-          <p className="mt-1 text-sm text-slate-600">Enter your work email and we’ll send you a reset link.</p>
+          <p className="mt-1 text-sm text-fg-muted">Enter your work email and we’ll send you a reset link.</p>
           <form onSubmit={onSubmit} className="mt-8 space-y-4">
             <TextField label="Work email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
             <InlineError error={error} />
@@ -57,7 +57,7 @@ export default function ForgotPasswordPage() {
             </Button>
           </form>
           <p className="mt-6 text-center text-sm">
-            <Link href="/login" className="font-medium text-blue-700 hover:underline">
+            <Link href="/login" className="font-medium text-accent hover:underline">
               Back to sign in
             </Link>
           </p>

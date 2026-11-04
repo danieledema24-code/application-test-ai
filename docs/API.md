@@ -168,3 +168,18 @@ type ApiEndpoint = { id; projectId; name; method: "GET"|"POST"|"PUT"|"PATCH"|"DE
 ## Search / notifications
 - `GET /search?q=` → `{ projects: {id,name}[], testCases: {id,key,title,projectId}[], defects: {id,key,title}[], runs: {id,key,name}[] }`
 - `GET /notifications` → `{ id, title, body, link, read, createdAt }[]`; `POST /notifications/read-all`
+
+## v1.1 additions — Playwright Test scripts, exports, remote browsers
+
+- Automation scripts are now standard **Playwright Test** specs (`language: "playwright-test"`), e.g.
+  `import { test, expect } from "../fixtures"; test("TC-0001: …", async ({ page }) => { await test.step(…) })`.
+  They read `process.env.BASE_URL`, `TEST_USERNAME`, `TEST_PASSWORD`. Older scripts are regenerated on next run.
+- `GET /projects/:id/playwright-export?caseIds=a,b` (supports `?token=`) → `application/zip`: a ready-to-run
+  Playwright project (package.json, playwright.config.ts, fixtures.ts, tests/TC-xxxx.spec.ts, .env.example, README.md)
+  for the given cases, or all APPROVED/READY cases when `caseIds` is omitted. Missing scripts are generated first.
+- `GET /projects/:id/test-cases/export.csv?search=&category=&priority=&status=` (supports `?token=`) → CSV of test cases.
+- Environment credentials accept `playwrightWsEndpoint` (write-only, encrypted; e.g. a Playwright browser server or
+  a cloud grid `wss://…` URL). When set, automated runs connect to that remote browser instead of launching locally.
+  `Environment` gains `hasRemoteBrowser: boolean`. `configuration` may contain `{ recordVideo?: boolean, workers?: number, timeoutMs?: number }`.
+- Automated run evidence adds `TRACE` files (`trace.zip`, open at https://trace.playwright.dev) alongside screenshots,
+  video, console and network logs.

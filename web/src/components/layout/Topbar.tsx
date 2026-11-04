@@ -123,7 +123,7 @@ function GlobalSearch() {
       <label htmlFor="global-search" className="sr-only">
         Search projects, test cases, runs and defects
       </label>
-      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" aria-hidden />
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-muted" aria-hidden />
       <input
         id="global-search"
         type="search"
@@ -138,7 +138,7 @@ function GlobalSearch() {
         onFocus={() => results && setOpen(true)}
         onKeyDown={onKeyDown}
         placeholder="Search…"
-        className="block h-9 w-full rounded-md border-0 bg-slate-100 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+        className="block h-9 w-full rounded-md border-0 bg-elevated pl-9 pr-3 text-sm text-fg-strong ring-1 ring-inset ring-line placeholder:text-fg-subtle focus:bg-canvas focus:outline-none focus:ring-2 focus:ring-accent"
       />
       {loading && (
         <span className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -146,9 +146,9 @@ function GlobalSearch() {
         </span>
       )}
       {open && results && (
-        <div className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-lg bg-white shadow-lg ring-1 ring-slate-200">
+        <div className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-lg bg-elevated shadow-xl shadow-black/50 ring-1 ring-line-strong">
           {items.length === 0 ? (
-            <p className="px-4 py-3 text-sm text-slate-600">No matches for “{q}”.</p>
+            <p className="px-4 py-3 text-sm text-fg-muted">No matches for “{q}”.</p>
           ) : (
             <ul id={listId} role="listbox" aria-label="Search results" className="max-h-80 overflow-y-auto py-1">
               {items.map((it, i) => (
@@ -162,11 +162,11 @@ function GlobalSearch() {
                     go(it);
                   }}
                   onMouseEnter={() => setActive(i)}
-                  className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm ${i === active ? "bg-blue-50" : ""}`}
+                  className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm ${i === active ? "bg-accent-soft" : ""}`}
                 >
-                  <span className="text-slate-500">{it.icon}</span>
-                  <span className="min-w-0 flex-1 truncate text-slate-900">{it.label}</span>
-                  <span className="text-xs text-slate-600">{it.sub}</span>
+                  <span className="text-fg-muted">{it.icon}</span>
+                  <span className="min-w-0 flex-1 truncate text-fg-strong">{it.label}</span>
+                  <span className="text-xs text-fg-muted">{it.sub}</span>
                 </li>
               ))}
             </ul>
@@ -201,7 +201,7 @@ function Notifications() {
         aria-expanded={open}
         aria-haspopup="true"
         aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`}
-        className="relative rounded-md p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        className="relative rounded-md p-2 text-fg-muted hover:bg-overlay hover:text-fg-strong"
       >
         <Bell className="h-5 w-5" aria-hidden />
         {unread > 0 && (
@@ -211,28 +211,28 @@ function Notifications() {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-11 z-40 w-80 overflow-hidden rounded-lg bg-white shadow-lg ring-1 ring-slate-200">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
-            <p className="text-sm font-semibold text-slate-900">Notifications</p>
+        <div className="absolute right-0 top-11 z-40 w-80 overflow-hidden rounded-lg bg-elevated shadow-xl shadow-black/50 ring-1 ring-line-strong">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+            <p className="text-sm font-semibold text-fg-strong">Notifications</p>
             {unread > 0 && (
-              <button type="button" onClick={markAll} className="text-xs font-medium text-blue-700 hover:underline">
+              <button type="button" onClick={markAll} className="text-xs font-medium text-accent hover:underline">
                 Mark all read
               </button>
             )}
           </div>
           <div className="max-h-96 overflow-y-auto">
-            {error && <p className="px-4 py-3 text-sm text-red-700">Couldn’t load notifications.</p>}
-            {!error && !data && <p className="px-4 py-3 text-sm text-slate-600">Loading…</p>}
-            {data && data.length === 0 && <p className="px-4 py-6 text-center text-sm text-slate-600">You’re all caught up.</p>}
+            {error && <p className="px-4 py-3 text-sm text-red-400">Couldn’t load notifications.</p>}
+            {!error && !data && <p className="px-4 py-3 text-sm text-fg-muted">Loading…</p>}
+            {data && data.length === 0 && <p className="px-4 py-6 text-center text-sm text-fg-muted">You’re all caught up.</p>}
             {data?.map((n) => {
               const body = (
                 <>
                   <div className="flex items-start gap-2">
-                    {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-blue-600" aria-label="Unread" />}
+                    {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-900">{n.title}</p>
-                      {n.body && <p className="mt-0.5 line-clamp-2 text-xs text-slate-600">{n.body}</p>}
-                      <p className="mt-1 text-xs text-slate-500">{timeAgo(n.createdAt)}</p>
+                      <p className="text-sm font-medium text-fg-strong">{n.title}</p>
+                      {n.body && <p className="mt-0.5 line-clamp-2 text-xs text-fg-muted">{n.body}</p>}
+                      <p className="mt-1 text-xs text-fg-muted">{timeAgo(n.createdAt)}</p>
                     </div>
                   </div>
                 </>
@@ -242,12 +242,12 @@ function Notifications() {
                   key={n.id}
                   href={n.link}
                   onClick={() => setOpen(false)}
-                  className="block border-b border-slate-50 px-4 py-3 hover:bg-slate-50"
+                  className="block border-b border-line px-4 py-3 hover:bg-overlay"
                 >
                   {body}
                 </Link>
               ) : (
-                <div key={n.id} className="border-b border-slate-50 px-4 py-3">
+                <div key={n.id} className="border-b border-line px-4 py-3">
                   {body}
                 </div>
               );
@@ -277,29 +277,29 @@ function UserMenu() {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="flex items-center gap-2 rounded-md p-1 pr-2 hover:bg-slate-100"
+        className="flex items-center gap-2 rounded-md p-1 pr-2 hover:bg-overlay"
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-navy-900 text-xs font-semibold text-white">
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-overlay text-xs font-semibold text-fg-strong ring-1 ring-line-strong">
           {initials}
         </span>
         <span className="hidden text-left md:block">
-          <span className="block text-sm font-medium leading-tight text-slate-900">{user?.fullName}</span>
-          <span className="block text-xs leading-tight text-slate-600">{user?.role === "ADMIN" ? "Admin" : "Member"}</span>
+          <span className="block text-sm font-medium leading-tight text-fg-strong">{user?.fullName}</span>
+          <span className="block text-xs leading-tight text-fg-muted">{user?.role === "ADMIN" ? "Admin" : "Member"}</span>
         </span>
-        <ChevronDown className="hidden h-4 w-4 text-slate-500 md:block" aria-hidden />
+        <ChevronDown className="hidden h-4 w-4 text-fg-muted md:block" aria-hidden />
         <span className="sr-only">Open user menu</span>
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 top-11 z-40 w-56 overflow-hidden rounded-lg bg-white py-1 shadow-lg ring-1 ring-slate-200">
-          <div className="border-b border-slate-100 px-4 py-2.5">
-            <p className="truncate text-sm font-medium text-slate-900">{user?.fullName}</p>
-            <p className="truncate text-xs text-slate-600">{user?.email}</p>
+        <div role="menu" className="absolute right-0 top-11 z-40 w-56 overflow-hidden rounded-lg bg-elevated py-1 shadow-xl shadow-black/50 ring-1 ring-line-strong">
+          <div className="border-b border-line px-4 py-2.5">
+            <p className="truncate text-sm font-medium text-fg-strong">{user?.fullName}</p>
+            <p className="truncate text-xs text-fg-muted">{user?.email}</p>
           </div>
           <Link
             role="menuitem"
             href="/settings"
             onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-slate-800 hover:bg-slate-50"
+            className="flex items-center gap-2 px-4 py-2 text-sm text-fg hover:bg-overlay"
           >
             <User className="h-4 w-4" aria-hidden /> Profile & settings
           </Link>
@@ -307,7 +307,7 @@ function UserMenu() {
             role="menuitem"
             type="button"
             onClick={() => void logout()}
-            className="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-800 hover:bg-slate-50"
+            className="flex w-full items-center gap-2 px-4 py-2 text-sm text-fg hover:bg-overlay"
           >
             <LogOut className="h-4 w-4" aria-hidden /> Log out
           </button>
@@ -320,11 +320,11 @@ function UserMenu() {
 export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
   const { organisation } = useAuth();
   return (
-    <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-canvas/85 px-4 backdrop-blur sm:px-6 lg:px-8">
       <button
         type="button"
         onClick={onOpenNav}
-        className="rounded-md p-2 text-slate-700 hover:bg-slate-100 lg:hidden"
+        className="rounded-md p-2 text-fg hover:bg-overlay lg:hidden"
         aria-label="Open navigation"
       >
         <Menu className="h-5 w-5" aria-hidden />
@@ -332,13 +332,13 @@ export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
       <GlobalSearch />
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
         {organisation && (
-          <span className="hidden max-w-[12rem] truncate rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 xl:inline" title="Workspace">
+          <span className="hidden max-w-[12rem] truncate rounded-md bg-overlay px-2.5 py-1 text-xs font-medium text-fg xl:inline" title="Workspace">
             {organisation.name}
           </span>
         )}
         <Link
           href="/help"
-          className="rounded-md p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          className="rounded-md p-2 text-fg-muted hover:bg-overlay hover:text-fg-strong"
           aria-label="Help"
           title="Help"
         >

@@ -2,14 +2,15 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { CheckCheck, Code2, Plus, Search, Sparkles, PlayCircle } from "lucide-react";
-import { api } from "@/lib/api";
+import { CheckCheck, Code2, Download, FileSpreadsheet, Plus, Search, Sparkles, PlayCircle } from "lucide-react";
+import { api, buildQuery, fileUrl } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { humanize, timeAgo } from "@/lib/format";
 import type { Category, Priority, ProjectDetail, TestCase, TestStep } from "@/lib/types";
 import { CASE_STATUSES, CATEGORIES, PRIORITIES } from "@/lib/types";
 import {
   Button,
+  buttonClass,
   Card,
   DataState,
   EmptyState,
@@ -137,10 +138,18 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
 
   const filtersActive = !!(search || category || priority || status);
 
+  // File downloads use token-authenticated URLs (see fileUrl in lib/api.ts).
+  const csvHref = fileUrl(
+    `/projects/${project.id}/test-cases/export.csv${buildQuery({ search: search.trim() || undefined, category, priority, status })}`,
+  );
+  const playwrightHref = fileUrl(
+    `/projects/${project.id}/playwright-export${buildQuery({ caseIds: selectedVisible.length ? selectedVisible.join(",") : undefined })}`,
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-600">AI-generated cases start as drafts. Approve them before they can be run.</p>
+        <p className="text-sm text-fg-muted">AI-generated cases start as drafts. Approve them before they can be run.</p>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" icon={<Plus className="h-4 w-4" aria-hidden />} onClick={() => setModal("new")}>
             New test case
@@ -150,13 +159,33 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
           </Button>
         </div>
       </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-surface px-4 py-3">
+        <a href={csvHref} download className={buttonClass("secondary", "sm")}>
+          <FileSpreadsheet className="h-4 w-4" aria-hidden />
+          Export CSV
+          {filtersActive && <span className="sr-only"> (current filters applied)</span>}
+        </a>
+        <a href={playwrightHref} download className={buttonClass("secondary", "sm")}>
+          <Download className="h-4 w-4" aria-hidden />
+          {selectedVisible.length > 0
+            ? `Download Playwright project (${selectedVisible.length} selected)`
+            : "Download Playwright project"}
+        </a>
+        <p className="text-xs text-fg-muted">
+          Standard Playwright Test project — run with <code className="rounded bg-elevated px-1 py-0.5 font-mono text-fg">npx playwright test</code>
+          <span className="text-fg-subtle">
+            {" "}
+            · {selectedVisible.length > 0 ? "includes the selected cases" : "includes all approved and ready cases"}
+          </span>
+        </p>
+      </div>
       <Card>
-        <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 p-4">
+        <div className="flex flex-wrap items-end gap-3 border-b border-line p-4">
           <div className="relative min-w-[14rem] flex-1">
             <label htmlFor="tc-search" className="sr-only">
               Search test cases
             </label>
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" aria-hidden />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-muted" aria-hidden />
             <input id="tc-search" type="search" className={`${inputClass} pl-9`} placeholder="Search by key or title" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           <SelectField label="Category" hideLabel value={category} onChange={(e) => setCategory(e.target.value)} placeholder="All categories" options={CATEGORIES} wrapClassName="w-44" />
@@ -164,8 +193,8 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
           <SelectField label="Status" hideLabel value={status} onChange={(e) => setStatus(e.target.value)} placeholder="All statuses" options={CASE_STATUSES} wrapClassName="w-40" />
         </div>
         {selectedVisible.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-blue-100 bg-blue-50/70 px-4 py-2.5" role="region" aria-label="Bulk actions">
-            <span className="text-sm font-medium text-blue-900">{selectedVisible.length} selected</span>
+          <div className="flex flex-wrap items-center gap-2 border-b border-accent/30 bg-accent-soft/70 px-4 py-2.5" role="region" aria-label="Bulk actions">
+            <span className="text-sm font-medium text-accent">{selectedVisible.length} selected</span>
             <Button size="sm" variant="success" icon={<CheckCheck className="h-4 w-4" aria-hidden />} loading={bulkBusy} onClick={() => bulk("APPROVED")}>
               Approve
             </Button>
@@ -201,7 +230,7 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
                     <input
                       type="checkbox"
                       aria-label="Select all test cases"
-                      className="h-4 w-4 accent-blue-700"
+                      className="h-4 w-4 accent-accent"
                       checked={allSelected}
                       onChange={() => setSelected(allSelected ? new Set() : new Set(visibleIds))}
                     />
@@ -217,29 +246,29 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
               </THead>
               <TBody>
                 {cases.map((c) => (
-                  <Tr key={c.id} className={selected.has(c.id) ? "bg-blue-50/40" : ""}>
+                  <Tr key={c.id} className={selected.has(c.id) ? "bg-accent-soft/40" : ""}>
                     <Td>
-                      <input type="checkbox" aria-label={`Select ${c.key}`} className="h-4 w-4 accent-blue-700" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+                      <input type="checkbox" aria-label={`Select ${c.key}`} className="h-4 w-4 accent-accent" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
                     </Td>
-                    <Td className="font-mono text-xs text-slate-600">{c.key}</Td>
+                    <Td className="font-mono text-xs text-fg-muted">{c.key}</Td>
                     <Td className="min-w-[16rem]">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Link href={`/test-cases/${c.id}`} className="font-medium text-blue-800 hover:underline">
+                        <Link href={`/test-cases/${c.id}`} className="font-medium text-accent hover:underline">
                           {c.title}
                         </Link>
-                        {c.hasScript && <Code2 className="h-3.5 w-3.5 text-slate-500" aria-label="Has automation script" />}
+                        {c.hasScript && <Code2 className="h-3.5 w-3.5 text-fg-muted" aria-label="Has automation script" />}
                       </div>
                       {c.aiGenerated && c.status === "DRAFT" && <AiDraftBadge className="mt-1" />}
                     </Td>
-                    <Td className="whitespace-nowrap text-slate-700">{humanize(c.category)}</Td>
+                    <Td className="whitespace-nowrap text-fg">{humanize(c.category)}</Td>
                     <Td>
                       <StatusPill status={c.priority} dot={false} />
                     </Td>
                     <Td>
                       <StatusPill status={c.status} />
                     </Td>
-                    <Td>{c.lastResult ? <StatusPill status={c.lastResult} /> : <span className="text-slate-500">—</span>}</Td>
-                    <Td className="whitespace-nowrap text-slate-600">{timeAgo(c.updatedAt)}</Td>
+                    <Td>{c.lastResult ? <StatusPill status={c.lastResult} /> : <span className="text-fg-muted">—</span>}</Td>
+                    <Td className="whitespace-nowrap text-fg-muted">{timeAgo(c.updatedAt)}</Td>
                   </Tr>
                 ))}
               </TBody>
