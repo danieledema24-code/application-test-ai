@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --color-navy-950: #071330;
+  --color-navy-900: #0b1b3a;
+  --color-navy-800: #13284f;
+  --color-navy-700: #1c3566;
+  --color-canvas: #f5f7fa;
+  --color-primary: #1d4ed8;
+  --color-primary-hover: #1e40af;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-canvas);
+  color: #0f172a;
+}
+
+/* Visible, consistent focus ring for keyboard users (WCAG 2.2 focus appearance) */
+:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }

@@ -1,0 +1,355 @@
+// SQLite for local development. For production switch provider to "postgresql"
+// and point DATABASE_URL at Postgres — the models use no SQLite-specific features.
+// JSON payloads are stored as strings (serialised in src/lib/json.ts) so the same
+// schema works on both providers.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Organisation {
+  id               String   @id @default(cuid())
+  name             String
+  subscriptionPlan String   @default("FREE")
+  // Monotonic counters for human-readable keys (TC-0001, RUN-0001, DEF-0001)
+  caseSeq          Int      @default(0)
+  runSeq           Int      @default(0)
+  defectSeq        Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  users         User[]
+  projects      Project[]
+  integrations  Integration[]
+  webhooks      Webhook[]
+  auditLogs     AuditLog[]
+  activities    AIActivity[]
+}
+
+model User {
+  id             String       @id @default(cuid())
+  fullName       String
+  email          String       @unique
+  passwordHash   String
+  authProvider   String       @default("password")
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  role           String       @default("MEMBER") // ADMIN | MEMBER
+  createdAt      DateTime     @default(now())
+
+  sessions      Session[]
+  resetTokens   PasswordResetToken[]
+  notifications Notification[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revoked   Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model Project {
+  id              String       @id @default(cuid())
+  organisationId  String
+  organisation    Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  name            String
+  description     String       @default("")
+  applicationUrl  String
+  applicationType String       @default("WEB") // WEB | API
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  environments Environment[]
+  testCases    TestCase[]
+  testRuns     TestRun[]
+  defects      Defect[]
+  reports      Report[]
+  discoveries  Discovery[]
+  apiEndpoints ApiEndpoint[]
+  activities   AIActivity[]
+
+  @@index([organisationId])
+}
+
+model Environment {
+  id                   String   @id @default(cuid())
+  projectId            String
+  project              Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name                 String   // DEVELOPMENT | STAGING | PRODUCTION
+  baseUrl              String
+  configuration        String   @default("{}")
+  encryptedCredentials String?  // AES-256-GCM, see src/lib/crypto.ts
+  authorised           Boolean  @default(false)
+  authorisedById       String?
+  authorisedAt         DateTime?
+  allowDestructive     Boolean  @default(true)
+  createdAt            DateTime @default(now())
+
+  testRuns TestRun[]
+}
+
+model Discovery {
+  id            String    @id @default(cuid())
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environmentId String
+  testRunId     String?
+  status        String    @default("QUEUED")
+  maxPages      Int       @default(15)
+  useCredentials Boolean  @default(false)
+  result        String    @default("{}") // pages, inaccessible, workflows, limitations…
+  summary       String    @default("")
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+}
+
+model TestCase {
+  id             String   @id @default(cuid())
+  key            String
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title          String
+  description    String   @default("")
+  preconditions  String   @default("")
+  steps          String   @default("[]")
+  expectedResult String   @default("")
+  category       String   @default("FUNCTIONAL")
+  priority       String   @default("MEDIUM")
+  status         String   @default("DRAFT")
+  source         String   @default("MANUAL")
+  aiGenerated    Boolean  @default(false)
+  version        Int      @default(1)
+  apiEndpointId  String?
+  apiSpec        String? // request definition for API test cases (overrides the linked endpoint)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  scripts Script[]
+  results TestResult[]
+
+  @@index([projectId])
+}
+
+model Script {
+  id              String   @id @default(cuid())
+  testCaseId      String
+  testCase        TestCase @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+  testCaseVersion Int
+  version         Int
+  language        String   @default("typescript")
+  code            String
+  createdById     String?
+  createdBy       String   @default("")
+  createdAt       DateTime @default(now())
+}
+
+model TestRun {
+  id             String       @id @default(cuid())
+  key            String
+  projectId      String
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name           String
+  initiatedById  String?
+  initiatedByAI  Boolean      @default(false)
+  executionType  String       // MANUAL | AUTOMATED | API | DISCOVERY
+  environmentId  String?
+  environment    Environment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+  status         String       @default("QUEUED")
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+
+  results  TestResult[]
+  evidence Evidence[]
+  reports  Report[]
+
+  @@index([projectId])
+}
+
+model TestResult {
+  id              String    @id @default(cuid())
+  testRunId       String
+  testRun         TestRun   @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+  testCaseId      String?
+  testCase        TestCase? @relation(fields: [testCaseId], references: [id], onDelete: SetNull)
+  testCaseKey     String
+  testCaseTitle   String
+  testCaseVersion Int       @default(1)
+  status          String    @default("NOT_EXECUTED")
+  actualResult    String    @default("")
+  errorMessage    String    @default("")
+  durationMs      Int?
+  scriptVersion   Int?
+  stepResults     String    @default("[]")
+  apiExchange     String?
+  failureAnalysis String?
+  executedById    String?
+  executedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  evidence Evidence[]
+  defects  Defect[]
+}
+
+model Evidence {
+  id               String      @id @default(cuid())
+  testRunId        String
+  testRun          TestRun     @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+  testResultId     String?
+  testResult       TestResult? @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+  defectId         String?
+  fileType         String
+  name             String
+  mimeType         String
+  size             Int         @default(0)
+  storageReference String
+  createdAt        DateTime    @default(now())
+}
+
+model Defect {
+  id                String      @id @default(cuid())
+  key               String
+  projectId         String
+  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  testResultId      String?
+  testResult        TestResult? @relation(fields: [testResultId], references: [id], onDelete: SetNull)
+  title             String
+  description       String      @default("")
+  severity          String      @default("MEDIUM")
+  priority          String      @default("MEDIUM")
+  status            String      @default("OPEN")
+  environmentName   String      @default("")
+  reproductionSteps String      @default("[]")
+  expectedResult    String      @default("")
+  actualResult      String      @default("")
+  aiAnalysis        String?
+  createdById       String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([projectId])
+}
+
+model ApiEndpoint {
+  id             String  @id @default(cuid())
+  projectId      String
+  project        Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name           String
+  method         String
+  path           String
+  headers        String  @default("{}")
+  query          String  @default("{}")
+  body           String?
+  auth           String  @default("NONE")
+  expectedStatus Int     @default(200)
+  maxResponseMs  Int     @default(2000)
+  requiredFields String  @default("[]")
+  jsonSchema     String?
+  createdAt      DateTime @default(now())
+}
+
+model Report {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  testRunId     String?
+  testRun       TestRun? @relation(fields: [testRunId], references: [id], onDelete: SetNull)
+  reportType    String
+  format        String
+  title         String
+  fileReference String
+  createdById   String?
+  createdAt     DateTime @default(now())
+}
+
+model Integration {
+  id                            String       @id @default(cuid())
+  organisationId                String
+  organisation                  Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  provider                      String
+  connectionStatus              String       @default("CONNECTED")
+  config                        String       @default("{}")
+  encryptedCredentialsReference String
+  createdAt                     DateTime     @default(now())
+}
+
+model Webhook {
+  id              String       @id @default(cuid())
+  organisationId  String
+  organisation    Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  url             String
+  events          String       @default("[]")
+  encryptedSecret String
+  active          Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+
+  deliveries WebhookDelivery[]
+}
+
+model WebhookDelivery {
+  id         String   @id @default(cuid())
+  webhookId  String
+  webhook    Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event      String
+  statusCode Int?
+  success    Boolean
+  createdAt  DateTime @default(now())
+}
+
+// Activity feed + auditable trail of AI-initiated actions (spec: AIActivities)
+model AIActivity {
+  id                 String       @id @default(cuid())
+  organisationId     String
+  organisation       Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  projectId          String?
+  project            Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId             String?
+  actionType         String
+  actionStatus       String       @default("DONE")
+  message            String
+  viaAI              Boolean      @default(false)
+  link               String?
+  executionReference String?
+  createdAt          DateTime     @default(now())
+
+  @@index([organisationId, createdAt])
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  actorId        String?
+  action         String
+  target         String       @default("")
+  metadata       String       @default("{}")
+  createdAt      DateTime     @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String   @default("")
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}

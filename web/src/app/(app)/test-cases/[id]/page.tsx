@@ -1,0 +1,386 @@
+"use client";
+
+import Link from "next/link";
+import { use, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Check, CheckCheck, Code2, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
+import { api } from "@/lib/api";
+import { useApi } from "@/lib/hooks";
+import { fmtDateTime, fmtDuration, humanize, personName } from "@/lib/format";
+import type { Category, Priority, Script, TestCaseDetail, TestStep } from "@/lib/types";
+import { CATEGORIES, PRIORITIES } from "@/lib/types";
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  ConfirmDialog,
+  EmptyState,
+  ErrorState,
+  InlineError,
+  LoadingBlock,
+  PageHeader,
+  SelectField,
+  StatusPill,
+  TBody,
+  THead,
+  Table,
+  Td,
+  TextArea,
+  TextField,
+  Th,
+  Tr,
+  useToast,
+} from "@/components/ui";
+import { AiDraftBadge } from "@/components/domain/AiBits";
+import { StepsEditor } from "@/components/domain/StepsEditor";
+
+type Form = { title: string; description: string; preconditions: string; expectedResult: string; category: Category; priority: Priority; steps: TestStep[] };
+
+function toForm(tc: TestCaseDetail): Form {
+  return {
+    title: tc.title,
+    description: tc.description || "",
+    preconditions: tc.preconditions || "",
+    expectedResult: tc.expectedResult || "",
+    category: tc.category,
+    priority: tc.priority,
+    steps: tc.steps?.length ? tc.steps : [{ action: "", expected: "" }],
+  };
+}
+
+function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => void }) {
+  const toast = useToast();
+  const scripts = [...(tc.scripts || [])].sort((a, b) => b.version - a.version);
+  const [viewing, setViewing] = useState<Script | null>(scripts[0] || null);
+  const [code, setCode] = useState(scripts[0]?.code || "");
+  const [busy, setBusy] = useState<null | "gen" | "save">(null);
+  const [error, setError] = useState<unknown>(null);
+  const latestId = scripts[0]?.id;
+  const canGenerate = tc.status === "APPROVED" || tc.status === "READY";
+
+  useEffect(() => {
+    const latest = (tc.scripts || []).reduce<Script | null>((m, s) => (!m || s.version > m.version ? s : m), null);
+    setViewing(latest);
+    setCode(latest?.code || "");
+  }, [latestId, tc.scripts]);
+
+  async function generate() {
+    setBusy("gen");
+    setError(null);
+    try {
+      await api<Script>(`/test-cases/${tc.id}/scripts/generate`, { body: { language: "typescript" } });
+      toast("Playwright script generated — review before running");
+      onChanged();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function save() {
+    setBusy("save");
+    setError(null);
+    try {
+      await api<Script>(`/test-cases/${tc.id}/scripts`, { method: "PUT", body: { code } });
+      toast("New script version saved");
+      onChanged();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const dirty = viewing ? code !== viewing.code : code.trim() !== "";
+  const outdated = viewing && viewing.testCaseVersion < tc.version;
+
+  return (
+    <Card>
+      <CardHeader
+        title={
+          <span className="flex items-center gap-2">
+            <Code2 className="h-4 w-4 text-slate-500" aria-hidden /> Automation script
+          </span>
+        }
+        description="Playwright (TypeScript)"
+        actions={
+          <>
+            <Button size="sm" variant="secondary" icon={<Sparkles className="h-4 w-4" aria-hidden />} loading={busy === "gen"} disabled={!canGenerate} onClick={generate} title={canGenerate ? undefined : "Approve the test case first"}>
+              {scripts.length ? "Regenerate script" : "Generate script"}
+            </Button>
+            <Button size="sm" icon={<Save className="h-4 w-4" aria-hidden />} loading={busy === "save"} disabled={!dirty} onClick={save}>
+              Save as new version
+            </Button>
+          </>
+        }
+      />
+      <CardBody className="space-y-3">
+        {!canGenerate && <p className="text-sm text-slate-600">Scripts can be generated once the test case is approved or ready.</p>}
+        {outdated && (
+          <p className="rounded-md bg-amber-50 p-2.5 text-sm text-amber-900">
+            This script was written for test case v{viewing!.testCaseVersion}; the case is now v{tc.version}. Review or regenerate it.
+          </p>
+        )}
+        {scripts.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-slate-600">Versions:</span>
+            {scripts.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => {
+                  setViewing(s);
+                  setCode(s.code);
+                }}
+                aria-pressed={viewing?.id === s.id}
+                className={`rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${viewing?.id === s.id ? "bg-blue-50 text-blue-800 ring-blue-300" : "text-slate-700 ring-slate-200 hover:bg-slate-50"}`}
+                title={`${fmtDateTime(s.createdAt)} · ${personName(s.createdBy)}`}
+              >
+                v{s.version}
+              </button>
+            ))}
+          </div>
+        )}
+        <TextArea
+          label="Script code"
+          hideLabel
+          mono
+          rows={18}
+          spellCheck={false}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder={canGenerate ? "Generate a script or paste Playwright code here…" : ""}
+          className="bg-slate-950 text-slate-100 placeholder:text-slate-400"
+        />
+        {viewing && (
+          <p className="text-xs text-slate-600">
+            Viewing v{viewing.version} · {viewing.language} · for case v{viewing.testCaseVersion} · {fmtDateTime(viewing.createdAt)} · {personName(viewing.createdBy)}
+          </p>
+        )}
+        <InlineError error={error} />
+      </CardBody>
+    </Card>
+  );
+}
+
+export default function TestCasePage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const router = useRouter();
+  const toast = useToast();
+  const { data: tc, error, isLoading, mutate } = useApi<TestCaseDetail>(`/test-cases/${id}`);
+  const [form, setForm] = useState<Form | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<unknown>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<null | "delete" | "regenerate">(null);
+
+  useEffect(() => {
+    if (tc) setForm(toForm(tc));
+  }, [tc]);
+
+  if (error && !tc)
+    return (
+      <Card>
+        <ErrorState error={error} onRetry={() => mutate()} />
+      </Card>
+    );
+  if (isLoading || !tc || !form) return <LoadingBlock label="Loading test case…" />;
+
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => (f ? { ...f, [k]: v } : f));
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api(`/test-cases/${id}`, {
+        method: "PATCH",
+        body: { ...form, steps: form.steps.filter((s) => s.action.trim()) },
+      });
+      toast("Test case saved");
+      await mutate();
+    } catch (err) {
+      setSaveError(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function setStatus(status: "APPROVED" | "READY" | "DEPRECATED") {
+    setBusy(status);
+    try {
+      await api(`/test-cases/${id}/status`, { body: { status } });
+      toast(`Status changed to ${humanize(status).toLowerCase()}`);
+      await mutate();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Update failed", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function regenerate() {
+    setBusy("regenerate");
+    try {
+      await api(`/test-cases/${id}/regenerate`, { method: "POST" });
+      toast("Test case regenerated as a draft — review it");
+      setConfirm(null);
+      await mutate();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Regenerate failed", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove() {
+    setBusy("delete");
+    try {
+      await api(`/test-cases/${id}`, { method: "DELETE" });
+      toast(`${tc!.key} deleted`);
+      router.push(`/projects/${tc!.projectId}?tab=test-cases`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Delete failed", "error");
+      setBusy(null);
+    }
+  }
+
+  const dirty = JSON.stringify(form) !== JSON.stringify(toForm(tc));
+
+  return (
+    <>
+      <PageHeader
+        breadcrumb={
+          <Link href={`/projects/${tc.projectId}?tab=test-cases`} className="hover:underline">
+            ← Back to test cases
+          </Link>
+        }
+        title={
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-base text-slate-600">{tc.key}</span> {tc.title}
+          </span>
+        }
+        description={
+          <span className="flex flex-wrap items-center gap-2">
+            <StatusPill status={tc.status} />
+            <StatusPill status={tc.priority} dot={false} />
+            <Badge>{humanize(tc.category)}</Badge>
+            <Badge>v{tc.version}</Badge>
+            <span className="text-xs">Source: {humanize(tc.source)}</span>
+            {tc.aiGenerated && tc.status === "DRAFT" && <AiDraftBadge />}
+            {tc.lastResult && (
+              <span className="inline-flex items-center gap-1 text-xs">
+                Last result <StatusPill status={tc.lastResult} />
+              </span>
+            )}
+          </span>
+        }
+        actions={
+          <>
+            {tc.status !== "APPROVED" && tc.status !== "READY" && (
+              <Button variant="success" icon={<Check className="h-4 w-4" aria-hidden />} loading={busy === "APPROVED"} onClick={() => setStatus("APPROVED")}>
+                Approve
+              </Button>
+            )}
+            {tc.status !== "READY" && (
+              <Button variant="secondary" icon={<CheckCheck className="h-4 w-4" aria-hidden />} loading={busy === "READY"} onClick={() => setStatus("READY")}>
+                Mark ready
+              </Button>
+            )}
+            <Button variant="secondary" icon={<RefreshCw className="h-4 w-4" aria-hidden />} onClick={() => setConfirm("regenerate")}>
+              Regenerate
+            </Button>
+            {tc.status !== "DEPRECATED" && (
+              <Button variant="ghost" loading={busy === "DEPRECATED"} onClick={() => setStatus("DEPRECATED")}>
+                Deprecate
+              </Button>
+            )}
+            <Button variant="ghost" icon={<Trash2 className="h-4 w-4" aria-hidden />} onClick={() => setConfirm("delete")} aria-label="Delete test case" />
+          </>
+        }
+      />
+
+      <div className="grid gap-6 2xl:grid-cols-2">
+        <Card>
+          <CardHeader title="Details" description="Editing content creates a new version and returns the case for review." />
+          <CardBody>
+            <form onSubmit={save} className="space-y-4">
+              <TextField label="Title" required value={form.title} onChange={(e) => set("title", e.target.value)} />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <SelectField label="Category" value={form.category} onChange={(e) => set("category", e.target.value as Category)} options={CATEGORIES} />
+                <SelectField label="Priority" value={form.priority} onChange={(e) => set("priority", e.target.value as Priority)} options={PRIORITIES} />
+              </div>
+              <TextArea label="Description" rows={3} value={form.description} onChange={(e) => set("description", e.target.value)} />
+              <TextArea label="Preconditions" rows={2} value={form.preconditions} onChange={(e) => set("preconditions", e.target.value)} />
+              <StepsEditor steps={form.steps} onChange={(s) => set("steps", s)} />
+              <TextArea label="Expected result" rows={2} value={form.expectedResult} onChange={(e) => set("expectedResult", e.target.value)} />
+              <InlineError error={saveError} />
+              <div className="flex gap-2">
+                <Button type="submit" loading={saving} disabled={!dirty}>
+                  Save changes
+                </Button>
+                {dirty && (
+                  <Button variant="ghost" onClick={() => setForm(toForm(tc))}>
+                    Discard
+                  </Button>
+                )}
+              </div>
+            </form>
+          </CardBody>
+        </Card>
+
+        <div className="space-y-6">
+          <ScriptPanel tc={tc} onChanged={() => mutate()} />
+          <Card>
+            <CardHeader title="Execution history" description="Recorded results for this test case" />
+            {!tc.history || tc.history.length === 0 ? (
+              <EmptyState title="Not executed yet" />
+            ) : (
+              <Table label="Execution history">
+                <THead>
+                  <tr>
+                    <Th>Run</Th>
+                    <Th>Result</Th>
+                    <Th>Duration</Th>
+                    <Th>Script</Th>
+                    <Th>Executed</Th>
+                  </tr>
+                </THead>
+                <TBody>
+                  {tc.history.map((r) => (
+                    <Tr key={r.id}>
+                      <Td>
+                        <Link href={`/test-runs/${r.testRunId}`} className="font-medium text-blue-800 hover:underline">
+                          View run
+                        </Link>
+                      </Td>
+                      <Td>
+                        <StatusPill status={r.status} />
+                      </Td>
+                      <Td className="tabular-nums">{fmtDuration(r.durationMs)}</Td>
+                      <Td>{r.scriptVersion ? `v${r.scriptVersion}` : "—"}</Td>
+                      <Td className="whitespace-nowrap text-slate-600">
+                        {fmtDateTime(r.executedAt)} · {personName(r.executedBy)}
+                      </Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            )}
+          </Card>
+        </div>
+      </div>
+
+      <ConfirmDialog open={confirm === "delete"} onClose={() => setConfirm(null)} onConfirm={remove} loading={busy === "delete"} danger title={`Delete ${tc.key}?`} confirmLabel="Delete">
+        This permanently deletes the test case and its automation scripts.
+      </ConfirmDialog>
+      <ConfirmDialog open={confirm === "regenerate"} onClose={() => setConfirm(null)} onConfirm={regenerate} loading={busy === "regenerate"} title="Regenerate with AI?" confirmLabel="Regenerate">
+        AI will rewrite this test case. It will return to <strong>Draft</strong> and must be reviewed and approved again.
+      </ConfirmDialog>
+    </>
+  );
+}
