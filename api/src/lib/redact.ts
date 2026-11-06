@@ -26,3 +26,8 @@ export function redactDeep<T>(value: T, secrets: string[] = []): T {
   }
   return value;
 }
+
+/** Masks token-like query parameters (?token=, &access_token=, ?key=…) in a URL or path. */
+export function redactUrlTokens(url: string): string {
+  return url.replace(/([?&](?:token|access_token|api[-_]?key|key|signature)=)[^&#]*/gi, "$1[REDACTED]");
+}

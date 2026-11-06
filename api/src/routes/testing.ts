@@ -7,6 +7,7 @@ import { authenticate, getProjectForUser, type AuthUser } from "../auth.js";
 import { badRequest, HttpError, notFound } from "../lib/errors.js";
 import { parse, provided, str } from "../lib/json.js";
 import { nextKey } from "../lib/keys.js";
+import { csvCell } from "../lib/csv.js";
 import { checkSpec } from "../lib/spec-guard.js";
 import { getObject, putObject } from "../lib/storage.js";
 import { casesWithMeta, evidenceDto, resultDtos, runDtos, runInclude, scriptDto, environmentDto } from "../lib/serialize.js";
@@ -79,9 +80,8 @@ export async function testingRoutes(app: FastifyInstance) {
     for (const c of await casesWithMeta(cases))
       rows.push([c.key, c.title, c.description, c.preconditions, (c.steps as { action: string; expected?: string }[]).map((st, i) => `${i + 1}. ${st.action}${st.expected ? ` → ${st.expected}` : ""}`).join("\n"),
         c.expectedResult, c.category, c.priority, c.status, c.aiGenerated ? "AI" : c.source, String(c.version), c.lastResult ?? ""]);
-    const cell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
     reply.header("content-type", "text/csv; charset=utf-8").header("content-disposition", `attachment; filename="${slug(project.name)}-test-cases.csv"`);
-    return reply.send("\uFEFF" + rows.map((r) => r.map(cell).join(",")).join("\r\n"));
+    return reply.send("\uFEFF" + rows.map((r) => r.map(csvCell).join(",")).join("\r\n"));
   });
 
   // Ready-to-run Playwright Test project for the selected (or all approved/ready) cases.

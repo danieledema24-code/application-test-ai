@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { config } from "./config.js";
 import { prisma } from "./db.js";
 import { HttpError } from "./lib/errors.js";
+import { redactUrlTokens } from "./lib/redact.js";
 import { authRoutes } from "./routes/auth.js";
 import { projectRoutes } from "./routes/projects.js";
 import { testingRoutes } from "./routes/testing.js";
@@ -17,7 +18,15 @@ import { runDiscovery } from "./services/discovery.js";
 import { aiStatus } from "./services/ai.js";
 
 export async function buildApp() {
-  const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info", redact: ["req.headers.authorization"] }, bodyLimit: 5 * 1024 * 1024 });
+  const app = Fastify({
+    logger: {
+      level: process.env.LOG_LEVEL ?? "info",
+      redact: ["req.headers.authorization"],
+      // File/stream links carry the session token as ?token= (img/video tags can't send headers): keep it out of logs.
+      serializers: { req: (req) => ({ method: req.method, url: redactUrlTokens(req.url), host: req.host, remoteAddress: req.ip }) },
+    },
+    bodyLimit: 5 * 1024 * 1024,
+  });
   await app.register(cors, { origin: config.webOrigin.split(","), credentials: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE"] });
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
   // Treat an empty JSON body (common for bodiless POST actions) as {} instead of a 400.

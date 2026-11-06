@@ -109,6 +109,8 @@ const reportFile = process.env.ATA_REPORT_FILE;
 
 export default defineConfig({
   testDir: "./tests",
+  // Per-run folder on the platform (videos, traces); ./test-results next to this file elsewhere.
+  outputDir: process.env.ATA_OUTPUT_DIR ?? "./test-results",
   timeout: Number(process.env.TEST_TIMEOUT_MS ?? 60_000),
   expect: { timeout: 10_000 },
   workers: Number(process.env.PW_WORKERS ?? 2),

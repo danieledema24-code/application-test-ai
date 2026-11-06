@@ -71,7 +71,7 @@ export async function authRoutes(app: FastifyInstance) {
     await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 3600_000) } });
     const link = `${config.webOrigin}/reset-password?token=${token}`;
     // No SMTP provider is configured in the MVP; in dev the link is returned and logged.
-    console.log(`[auth] password reset link for ${addr}: ${link}`);
+    if (config.devMode) console.log(`[auth] password reset link for ${addr}: ${link}`);
     return config.devMode ? { ok: true, devResetLink: link } : { ok: true };
   });
 
@@ -81,7 +81,8 @@ export async function authRoutes(app: FastifyInstance) {
     if (!rec || rec.usedAt || rec.expiresAt < new Date()) throw badRequest("This reset link is invalid or has expired");
     await prisma.$transaction([
       prisma.user.update({ where: { id: rec.userId }, data: { passwordHash: await bcrypt.hash(body.password, 12) } }),
-      prisma.passwordResetToken.update({ where: { id: rec.id }, data: { usedAt: new Date() } }),
+      // Spend every outstanding link for this user, not just the one used, so older emails stop working.
+      prisma.passwordResetToken.updateMany({ where: { userId: rec.userId, usedAt: null }, data: { usedAt: new Date() } }),
       prisma.session.updateMany({ where: { userId: rec.userId }, data: { revoked: true } }),
     ]);
     await audit(rec.user.organisationId, rec.userId, "user.password_reset", rec.user.email);

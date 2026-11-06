@@ -36,6 +36,9 @@ const TONES: Record<string, Tone> = {
   NEEDS_CONFIRMATION: "amber",
   CONNECTED: "green",
   DISCONNECTED: "grey",
+  AUTH_FAILED: "red",
+  UNREACHABLE: "amber",
+  BLOCKED_TARGET: "red",
   ACTIVE: "green",
   INACTIVE: "grey",
   // environments

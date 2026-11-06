@@ -143,7 +143,7 @@ export async function executeAutomatedRun(runId: string) {
     const { output } = await runPlaywright(workDir, {
       BASE_URL: base.toString(), TEST_USERNAME: creds.username ?? "", TEST_PASSWORD: creds.password ?? "",
       ATA_ALLOWED_HOSTS: [base.hostname, ...(cfg.extraHosts ?? [])].join(","), ATA_ALLOW_PRIVATE: String(config.allowPrivateTargets),
-      ATA_REPORT_FILE: reportFile, PW_WORKERS: String(workers), RECORD_VIDEO: String(cfg.recordVideo ?? true), TEST_TIMEOUT_MS: String(perTest),
+      ATA_REPORT_FILE: reportFile, ATA_OUTPUT_DIR: path.join(workDir, "test-results"), PW_WORKERS: String(workers), RECORD_VIDEO: String(cfg.recordVideo ?? true), TEST_TIMEOUT_MS: String(perTest),
       ATA_LIVE_DIR: liveDir(run.id), PW_SLOWMO_MS: String(Math.min(Math.max(cfg.slowMoMs ?? 0, 0), 3000)),
       ...(creds.playwrightWsEndpoint ? { PW_WS_ENDPOINT: creds.playwrightWsEndpoint } : {}),
     }, run.id, perTest * Math.ceil(byFile.size / workers) + 120_000);

@@ -91,3 +91,20 @@ test("API tests cannot redirect requests (and credentials) to another host", asy
   const abs = await executeApi({ method: "GET", path: "http://127.0.0.1:4987/exfil", auth: "BEARER" }, env);
   assert.match(abs.assertions[0].message, /relative to the environment URL/);
 });
+
+test("CSV cells cannot start a spreadsheet formula", async () => {
+  const { csvCell } = await import("../src/lib/csv.js");
+  assert.equal(csvCell('=HYPERLINK("http://evil.example","x")'), `"'=HYPERLINK(""http://evil.example"",""x"")"`);
+  assert.equal(csvCell("@SUM(1+1)"), "'@SUM(1+1)");
+  assert.equal(csvCell("+cmd|' /C calc'!A0"), "'+cmd|' /C calc'!A0");
+  assert.equal(csvCell("-2+3"), "'-2+3");
+  assert.equal(csvCell("Login works"), "Login works");
+  assert.equal(csvCell("a,b"), '"a,b"');
+});
+
+test("session tokens in query strings are masked for logs", async () => {
+  const { redactUrlTokens } = await import("../src/lib/redact.js");
+  assert.equal(redactUrlTokens("/api/evidence/x/file?token=eyJabc.def&download=1"), "/api/evidence/x/file?token=[REDACTED]&download=1");
+  assert.equal(redactUrlTokens("/a?x=1&access_token=s3cr3t"), "/a?x=1&access_token=[REDACTED]");
+  assert.equal(redactUrlTokens("/api/projects?search=token"), "/api/projects?search=token");
+});

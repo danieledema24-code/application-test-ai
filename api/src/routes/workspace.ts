@@ -290,14 +290,20 @@ export async function workspaceRoutes(app: FastifyInstance) {
 }
 
 async function verifyIntegration(provider: string, cfg: { baseUrl?: string; email?: string }, token: string): Promise<string> {
+  const target: { url: string; headers: Record<string, string> } | null =
+    provider === "GITHUB" ? { url: "https://api.github.com/user", headers: { authorization: `Bearer ${token}`, "user-agent": "application-test-ai" } }
+    : provider === "GITLAB" ? { url: `${(cfg.baseUrl ?? "https://gitlab.com").replace(/\/$/, "")}/api/v4/user`, headers: { "private-token": token } }
+    : cfg.baseUrl ? { url: `${cfg.baseUrl.replace(/\/$/, "")}/rest/api/3/myself`, headers: { authorization: `Basic ${Buffer.from(`${cfg.email ?? ""}:${token}`).toString("base64")}` } }
+    : null;
+  if (!target) return "PENDING_CONFIGURATION";
+  // Self-hosted base URLs are user input: block internal targets and don't follow redirects with the token attached.
   try {
-    const req =
-      provider === "GITHUB" ? fetch("https://api.github.com/user", { headers: { authorization: `Bearer ${token}`, "user-agent": "application-test-ai" }, signal: AbortSignal.timeout(8000) })
-      : provider === "GITLAB" ? fetch(`${cfg.baseUrl ?? "https://gitlab.com"}/api/v4/user`, { headers: { "private-token": token }, signal: AbortSignal.timeout(8000) })
-      : cfg.baseUrl ? (await assertSafeTarget(cfg.baseUrl), fetch(`${cfg.baseUrl.replace(/\/$/, "")}/rest/api/3/myself`, { headers: { authorization: `Basic ${Buffer.from(`${cfg.email ?? ""}:${token}`).toString("base64")}` }, signal: AbortSignal.timeout(8000) }))
-      : null;
-    if (!req) return "PENDING_CONFIGURATION";
-    const res = await req;
+    await assertSafeTarget(target.url);
+  } catch {
+    return "BLOCKED_TARGET";
+  }
+  try {
+    const res = await fetch(target.url, { headers: target.headers, redirect: "manual", signal: AbortSignal.timeout(8000) });
     return res.ok ? "CONNECTED" : "AUTH_FAILED";
   } catch {
     return "UNREACHABLE";

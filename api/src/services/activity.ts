@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { assertSafeTarget } from "../lib/ssrf.js";
 import { prisma } from "../db.js";
 import { decrypt } from "../lib/crypto.js";
 import { parse, str } from "../lib/json.js";
@@ -51,10 +52,14 @@ export function emitWebhook(organisationId: string, event: WebhookEvent, payload
       const signature = crypto.createHmac("sha256", decrypt(hook.encryptedSecret)).update(body).digest("hex");
       let statusCode: number | null = null;
       try {
+        // Re-checked at delivery (DNS may have changed since the hook was saved); redirects are not followed,
+        // so a hook can't bounce the request to an internal address.
+        await assertSafeTarget(hook.url);
         const res = await fetch(hook.url, {
           method: "POST",
           headers: { "content-type": "application/json", "x-ata-event": event, "x-ata-signature": `sha256=${signature}` },
           body,
+          redirect: "manual",
           signal: AbortSignal.timeout(5000),
         });
         statusCode = res.status;

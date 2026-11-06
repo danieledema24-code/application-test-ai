@@ -3,14 +3,13 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { CheckCheck, Code2, Download, FileSpreadsheet, Plus, Search, Sparkles, PlayCircle } from "lucide-react";
-import { api, buildQuery, fileUrl } from "@/lib/api";
+import { api, buildQuery, downloadFile } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { humanize, timeAgo } from "@/lib/format";
 import type { Category, Priority, ProjectDetail, TestCase, TestStep } from "@/lib/types";
 import { CASE_STATUSES, CATEGORIES, PRIORITIES } from "@/lib/types";
 import {
   Button,
-  buttonClass,
   Card,
   DataState,
   EmptyState,
@@ -138,13 +137,21 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
 
   const filtersActive = !!(search || category || priority || status);
 
-  // File downloads use token-authenticated URLs (see fileUrl in lib/api.ts).
-  const csvHref = fileUrl(
-    `/projects/${project.id}/test-cases/export.csv${buildQuery({ search: search.trim() || undefined, category, priority, status })}`,
-  );
-  const playwrightHref = fileUrl(
-    `/projects/${project.id}/playwright-export${buildQuery({ caseIds: selectedVisible.length ? selectedVisible.join(",") : undefined })}`,
-  );
+  // Downloads go through fetch so API errors (e.g. draft cases selected) show as a toast, not a raw error page.
+  const [downloading, setDownloading] = useState<"csv" | "playwright" | null>(null);
+  async function download(kind: "csv" | "playwright") {
+    const path = kind === "csv"
+      ? `/projects/${project.id}/test-cases/export.csv${buildQuery({ search: search.trim() || undefined, category, priority, status })}`
+      : `/projects/${project.id}/playwright-export${buildQuery({ caseIds: selectedVisible.length ? selectedVisible.join(",") : undefined })}`;
+    setDownloading(kind);
+    try {
+      await downloadFile(path, kind === "csv" ? "test-cases.csv" : "playwright-tests.zip");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Download failed", "error");
+    } finally {
+      setDownloading(null);
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -160,17 +167,15 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-surface px-4 py-3">
-        <a href={csvHref} download className={buttonClass("secondary", "sm")}>
-          <FileSpreadsheet className="h-4 w-4" aria-hidden />
+        <Button variant="secondary" size="sm" loading={downloading === "csv"} icon={<FileSpreadsheet className="h-4 w-4" aria-hidden />} onClick={() => download("csv")}>
           Export CSV
           {filtersActive && <span className="sr-only"> (current filters applied)</span>}
-        </a>
-        <a href={playwrightHref} download className={buttonClass("secondary", "sm")}>
-          <Download className="h-4 w-4" aria-hidden />
+        </Button>
+        <Button variant="secondary" size="sm" loading={downloading === "playwright"} icon={<Download className="h-4 w-4" aria-hidden />} onClick={() => download("playwright")}>
           {selectedVisible.length > 0
             ? `Download Playwright project (${selectedVisible.length} selected)`
             : "Download Playwright project"}
-        </a>
+        </Button>
         <p className="text-xs text-fg-muted">
           Standard Playwright Test project — run with <code className="rounded bg-elevated px-1 py-0.5 font-mono text-fg">npx playwright test</code>
           <span className="text-fg-subtle">

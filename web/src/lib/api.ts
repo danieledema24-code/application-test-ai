@@ -116,6 +116,33 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
 }
 
 /**
+ * Downloads an API file with the session header (no token in the URL) and saves it under the server's filename.
+ * Errors come back as ApiError with the API's message, so callers can show them instead of a raw error page.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const token = getToken();
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  } catch {
+    throw new ApiError(0, "Cannot reach the API server. Check that it is running.", null);
+  }
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorised();
+    const data = await res.json().catch(() => null);
+    throw new ApiError(res.status, (data && typeof data.error === "string" && data.error) || `Download failed (${res.status})`, data);
+  }
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const name = decodeURIComponent(disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1] ?? "") || disposition.match(/filename="([^"]+)"/i)?.[1] || fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
  * Build an absolute, token-authenticated URL for <img>, <video> and download links.
  * Accepts either an API-relative path ("/evidence/x/file"), a path that already
  * includes the "/api" prefix ("/api/evidence/x/file"), or an absolute URL.

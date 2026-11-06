@@ -1,4 +1,5 @@
 import PDFDocument from "pdfkit";
+import { csvCell } from "../lib/csv.js";
 import { z } from "zod/v4";
 import { prisma } from "../db.js";
 import { parse } from "../lib/json.js";
@@ -73,11 +74,6 @@ export async function generateReport(opts: { projectId: string; testRunId?: stri
   });
 }
 
-const cell = (v: unknown) => {
-  const s = String(v ?? "");
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
 function csv(d: Awaited<ReturnType<typeof gather>>) {
   const rows = [["Run", "Environment", "Test case", "Title", "Status", "Duration (ms)", "Executed at", "Error", "AI classification (hypothesis)"]];
   for (const r of d.results)
@@ -85,7 +81,7 @@ function csv(d: Awaited<ReturnType<typeof gather>>) {
   rows.push([], ["Summary"], ["Total test cases", String(d.summary.totalCases)], ["Executed", String(d.summary.executed)], ["Passed", String(d.summary.passed)],
     ["Failed", String(d.summary.failed)], ["Blocked", String(d.summary.blocked)], ["Not executed", String(d.summary.notExecuted)], ["Pass %", String(d.summary.passRate ?? "n/a")]);
   rows.push([], ["Defect", "Title", "Severity", "Status", "Environment"], ...d.defects.map((x) => [x.key, x.title, x.severity, x.status, x.environmentName]));
-  return rows.map((r) => r.map(cell).join(",")).join("\n");
+  return rows.map((r) => r.map(csvCell).join(",")).join("\n");
 }
 
 const NAVY = "#0B1B3A", GREY = "#5B6475", GREEN = "#15803D", RED = "#B91C1C", AMBER = "#B45309";

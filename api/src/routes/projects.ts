@@ -1,8 +1,8 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod/v4";
 import { prisma } from "../db.js";
 import { authenticate, getProjectForUser } from "../auth.js";
-import { badRequest, HttpError, notFound } from "../lib/errors.js";
+import { badRequest, forbidden, HttpError, notFound } from "../lib/errors.js";
 import { decrypt, encrypt } from "../lib/crypto.js";
 import { parse, provided, str } from "../lib/json.js";
 import { nextKey } from "../lib/keys.js";
@@ -105,6 +105,15 @@ export async function projectRoutes(app: FastifyInstance) {
     authorised: z.boolean().optional(), allowDestructive: z.boolean().optional(),
   });
 
+  // Production is the admin's call: authorising a production target or allowing destructive tests on it needs the
+  // ADMIN role. Only turning a flag on counts, so re-sending the current value (as the edit form does) is fine.
+  const requireAdminForProduction = (req: FastifyRequest, name: string, body: { authorised?: boolean; allowDestructive?: boolean }, current?: { authorised: boolean; allowDestructive: boolean }) => {
+    if (name !== "PRODUCTION") return;
+    if ((body.authorised === true && !current?.authorised) || (body.allowDestructive === true && !current?.allowDestructive)) {
+      if (req.user.role !== "ADMIN") throw forbidden("Only workspace admins can authorise production or allow destructive tests on it");
+    }
+  };
+
   const authorisation = (authorised: boolean | undefined, userId: string) =>
     authorised === undefined ? {} : { authorised, authorisedById: authorised ? userId : null, authorisedAt: authorised ? new Date() : null };
 
@@ -112,6 +121,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     await getProjectForUser(req.user, id);
     const body = envBody.parse(req.body);
+    requireAdminForProduction(req, body.name, body);
     await assertSafeTarget(body.baseUrl);
     await checkCredentials(body.credentials);
     const env = await prisma.environment.create({
@@ -135,17 +145,23 @@ export async function projectRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await envForUser(req.user.organisationId, id);
     const body = provided(envBody.partial().parse(req.body), req.body);
-    if (body.baseUrl) await assertSafeTarget(body.baseUrl);
-    await checkCredentials(body.credentials);
     // Changing the target URL withdraws the authorisation confirmation for the old one.
     const urlChanged = body.baseUrl && body.baseUrl !== existing.baseUrl;
+    const becomesProd = body.name === "PRODUCTION" && existing.name !== "PRODUCTION";
+    requireAdminForProduction(req, body.name ?? existing.name, body, {
+      authorised: existing.authorised && !urlChanged && !becomesProd, allowDestructive: existing.allowDestructive && !becomesProd,
+    });
+    if (body.baseUrl) await assertSafeTarget(body.baseUrl);
+    await checkCredentials(body.credentials);
     const env = await prisma.environment.update({
       where: { id },
       data: {
         ...(body.name ? { name: body.name } : {}), ...(body.baseUrl ? { baseUrl: body.baseUrl } : {}),
         ...(body.configuration ? { configuration: str(body.configuration) } : {}),
         ...(body.credentials ? { encryptedCredentials: mergeCredentials(existing.encryptedCredentials, body.credentials) } : {}),
-        ...(body.allowDestructive !== undefined ? { allowDestructive: body.allowDestructive } : {}),
+        ...(body.allowDestructive !== undefined ? { allowDestructive: body.allowDestructive }
+          // Becoming PRODUCTION switches destructive tests off unless an admin explicitly keeps them on.
+          : becomesProd ? { allowDestructive: false } : {}),
         ...authorisation(urlChanged && body.authorised === undefined ? false : body.authorised, req.user.id),
       },
     });

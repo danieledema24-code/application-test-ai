@@ -21,6 +21,7 @@ type Form = {
   slowMoMs: string;
   authorised: boolean;
   allowDestructive: boolean;
+  clearCredentials: boolean;
 };
 
 /** Configuration keys edited through dedicated controls rather than the JSON box. */
@@ -52,6 +53,7 @@ function initialForm(env?: Environment | null): Form {
     // Re-confirmation is required on every save.
     authorised: false,
     allowDestructive: env?.allowDestructive ?? true,
+    clearCredentials: false,
   };
 }
 
@@ -97,11 +99,13 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
         .map(([k, v]) => [k, k === "playwrightWsEndpoint" ? v.trim() : v] as const)
         .filter(([, v]) => v.trim() !== ""),
     );
+    // Blank fields keep stored values, so removal is explicit: an empty string deletes each stored credential.
+    const cleared = { username: "", password: "", apiKey: "", bearerToken: "", apiKeyHeader: "", playwrightWsEndpoint: "" };
     const body = {
       name: f.name,
       baseUrl: f.baseUrl,
       configuration,
-      ...(Object.keys(creds).length ? { credentials: creds } : {}),
+      ...(f.clearCredentials ? { credentials: cleared } : Object.keys(creds).length ? { credentials: creds } : {}),
       authorised: true,
       allowDestructive: f.allowDestructive,
     };
@@ -187,7 +191,16 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
             Credentials are encrypted and never shown again.
             {env?.hasCredentials ? " Credentials are currently stored — leave fields blank to keep them." : ""}
           </p>
-          <div className="grid gap-3 sm:grid-cols-2">
+          {env?.hasCredentials && (
+            <Checkbox
+              className="mb-3"
+              label="Remove all stored credentials"
+              description="Deletes the stored username, password, API key, bearer token and remote browser endpoint when you save."
+              checked={f.clearCredentials}
+              onChange={(e) => set("clearCredentials", e.target.checked)}
+            />
+          )}
+          <fieldset disabled={f.clearCredentials} className="grid gap-3 disabled:opacity-50 sm:grid-cols-2">
             <TextField label="Username" autoComplete="off" value={f.username} onChange={(e) => set("username", e.target.value)} />
             <TextField label="Password" type="password" autoComplete="new-password" value={f.password} onChange={(e) => set("password", e.target.value)} />
             <TextField label="API key" type="password" autoComplete="off" value={f.apiKey} onChange={(e) => set("apiKey", e.target.value)} />
@@ -204,7 +217,7 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
               value={f.playwrightWsEndpoint}
               onChange={(e) => set("playwrightWsEndpoint", e.target.value)}
             />
-          </div>
+          </fieldset>
         </fieldset>
 
         <fieldset className="rounded-lg border border-line p-3">
