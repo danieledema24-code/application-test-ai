@@ -194,7 +194,7 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
         </div>
         {selectedVisible.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 border-b border-accent/30 bg-accent-soft/70 px-4 py-2.5" role="region" aria-label="Bulk actions">
-            <span className="text-sm font-medium text-accent">{selectedVisible.length} selected</span>
+            <span className="text-sm font-medium text-fg-strong">{selectedVisible.length} selected</span>
             <Button size="sm" variant="success" icon={<CheckCheck className="h-4 w-4" aria-hidden />} loading={bulkBusy} onClick={() => bulk("APPROVED")}>
               Approve
             </Button>
@@ -253,7 +253,7 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
                     <Td className="font-mono text-xs text-fg-muted">{c.key}</Td>
                     <Td className="min-w-[16rem]">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Link href={`/test-cases/${c.id}`} className="font-medium text-accent hover:underline">
+                        <Link href={`/test-cases/${c.id}`} className="font-medium text-fg-strong hover:underline">
                           {c.title}
                         </Link>
                         {c.hasScript && <Code2 className="h-3.5 w-3.5 text-fg-muted" aria-label="Has automation script" />}

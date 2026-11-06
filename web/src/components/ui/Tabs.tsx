@@ -51,7 +51,7 @@ export function Tabs({
               onKeyDown={(e) => onKeyDown(e, i)}
               className={`relative -mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                 selected
-                  ? "border-accent text-accent"
+                  ? "border-accent text-fg-strong"
                   : "border-transparent text-fg-muted hover:border-line-strong hover:text-fg-strong"
               }`}
             >

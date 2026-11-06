@@ -38,7 +38,7 @@
   /* Accent: CTAs, links, active nav/tab, selected toggles, focus */
   --color-accent: #f97316;
   --color-accent-hover: #ea580c;
-  --color-accent-bright: #fdba74; /* link hover text on dark */
+  --color-accent-bright: #fdba74; /* unused: links use text colours */
   --color-accent-soft: #2b1709; /* subtle tint for selected/active states */
   --color-on-accent: #0a0a0a; /* text/icons on accent backgrounds */
 }

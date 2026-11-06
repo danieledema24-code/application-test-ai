@@ -75,7 +75,7 @@ export type Priority = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export const PRIORITIES: Priority[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 export type CaseStatus = "DRAFT" | "APPROVED" | "READY" | "DEPRECATED";
 export const CASE_STATUSES: CaseStatus[] = ["DRAFT", "APPROVED", "READY", "DEPRECATED"];
-export type TestStep = { action: string; expected?: string };
+export type TestStep = { action: string; data?: string; expected?: string };
 
 export type TestCase = {
   id: string;

@@ -18,12 +18,13 @@ type Form = {
   playwrightWsEndpoint: string;
   recordVideo: boolean;
   workers: string;
+  slowMoMs: string;
   authorised: boolean;
   allowDestructive: boolean;
 };
 
 /** Configuration keys edited through dedicated controls rather than the JSON box. */
-const MANAGED_CONFIG_KEYS = ["recordVideo", "workers"] as const;
+const MANAGED_CONFIG_KEYS = ["recordVideo", "workers", "slowMoMs"] as const;
 const DEFAULT_WORKERS = 2;
 const MAX_WORKERS = 8;
 
@@ -47,6 +48,7 @@ function initialForm(env?: Environment | null): Form {
     playwrightWsEndpoint: "",
     recordVideo: typeof cfg.recordVideo === "boolean" ? cfg.recordVideo : true,
     workers: String(typeof cfg.workers === "number" ? cfg.workers : DEFAULT_WORKERS),
+    slowMoMs: String(typeof cfg.slowMoMs === "number" ? cfg.slowMoMs : 0),
     // Re-confirmation is required on every save.
     authorised: false,
     allowDestructive: env?.allowDestructive ?? true,
@@ -78,10 +80,12 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
     if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKERS) {
       return setError(`Parallel workers must be a whole number from 1 to ${MAX_WORKERS}.`);
     }
+    const slowMoMs = Number(f.slowMoMs || 0);
+    if (!Number.isInteger(slowMoMs) || slowMoMs < 0 || slowMoMs > 3000) return setError("Slow motion must be a whole number of milliseconds from 0 to 3000.");
     const ws = f.playwrightWsEndpoint.trim();
     if (ws && !/^wss?:\/\//i.test(ws)) return setError("The remote Playwright endpoint must start with wss:// or ws://.");
     // Merge the dedicated controls into the rest of the configuration so other keys are kept.
-    const configuration: Record<string, unknown> = { ...extra, recordVideo: f.recordVideo, workers };
+    const configuration: Record<string, unknown> = { ...extra, recordVideo: f.recordVideo, workers, slowMoMs };
     const creds = Object.fromEntries(
       Object.entries({
         username: f.username,
@@ -205,10 +209,10 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
 
         <fieldset className="rounded-lg border border-line p-3">
           <legend className="px-1 text-sm font-medium text-fg">Automated runs</legend>
-          <div className="grid items-start gap-4 sm:grid-cols-[1fr_10rem]">
+          <div className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_10rem_14rem]">
             <Checkbox
               label="Record video"
-              description="Save a video of each automated test as evidence."
+              description="Save a full video of every automated test as evidence."
               checked={f.recordVideo}
               onChange={(e) => set("recordVideo", e.target.checked)}
             />
@@ -224,12 +228,23 @@ function EnvForm({ project, env, onClose, onSaved }: { project: ProjectDetail; e
               value={f.workers}
               onChange={(e) => set("workers", e.target.value)}
             />
+            <TextField
+              label="Slow motion (ms per action)"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={3000}
+              step={100}
+              hint="0 = full speed. 300–800 makes the live view easy to follow. Local browsers only."
+              value={f.slowMoMs}
+              onChange={(e) => set("slowMoMs", e.target.value)}
+            />
           </div>
         </fieldset>
 
         <TextArea
           label="Additional configuration (optional JSON)"
-          hint="Other settings, e.g. timeoutMs or loginPath. Record video and workers above take precedence."
+          hint="Other settings, e.g. timeoutMs or loginPath. The settings above take precedence."
           mono
           rows={4}
           placeholder='{ "loginPath": "/login", "timeoutMs": 30000 }'

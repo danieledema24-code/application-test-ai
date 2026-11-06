@@ -77,7 +77,7 @@ export function DefectsList({ projectId: fixedProjectId }: { projectId?: string 
                   <Tr key={d.id}>
                     <Td className="font-mono text-xs text-fg-muted">{d.key}</Td>
                     <Td>
-                      <Link href={`/defects/${d.id}`} className="font-medium text-accent hover:underline">
+                      <Link href={`/defects/${d.id}`} className="font-medium text-fg-strong hover:underline">
                         {d.title}
                       </Link>
                       {d.testCaseKey && <p className="text-xs text-fg-muted">from {d.testCaseKey}</p>}

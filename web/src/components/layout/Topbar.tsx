@@ -215,7 +215,7 @@ function Notifications() {
           <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
             <p className="text-sm font-semibold text-fg-strong">Notifications</p>
             {unread > 0 && (
-              <button type="button" onClick={markAll} className="text-xs font-medium text-accent hover:underline">
+              <button type="button" onClick={markAll} className="text-xs font-medium text-fg-strong hover:underline">
                 Mark all read
               </button>
             )}

@@ -128,7 +128,7 @@ export default function DashboardPage() {
               <div className="space-y-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <Link href={`/test-runs/${d.latestRun.id}`} className="block truncate font-medium text-accent hover:underline">
+                    <Link href={`/test-runs/${d.latestRun.id}`} className="block truncate font-medium text-fg-strong hover:underline">
                       {d.latestRun.key} · {d.latestRun.name}
                     </Link>
                     <p className="mt-0.5 text-xs text-fg-muted">
@@ -203,7 +203,7 @@ export default function DashboardPage() {
                 {d.recentProjects.map((p) => (
                   <Tr key={p.id}>
                     <Td>
-                      <Link href={`/projects/${p.id}`} className="font-medium text-accent hover:underline">
+                      <Link href={`/projects/${p.id}`} className="font-medium text-fg-strong hover:underline">
                         {p.name}
                       </Link>
                     </Td>

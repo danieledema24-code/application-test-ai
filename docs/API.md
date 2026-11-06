@@ -183,3 +183,14 @@ type ApiEndpoint = { id; projectId; name; method: "GET"|"POST"|"PUT"|"PATCH"|"DE
   `Environment` gains `hasRemoteBrowser: boolean`. `configuration` may contain `{ recordVideo?: boolean, workers?: number, timeoutMs?: number }`.
 - Automated run evidence adds `TRACE` files (`trace.zip`, open at https://trace.playwright.dev) alongside screenshots,
   video, console and network logs.
+
+## v1.2 additions — live view, video, readable steps
+
+- `TestStep` gains optional `data` (exact test data for the step): `{ action, data?, expected? }`.
+  Generated `preconditions` hold one condition per line, prefixed with `• `.
+- `GET /test-runs/:id/live` → `{ status, live, slots: [{ slot, title, state: "running"|"passed"|"failed", at, hasFrame }] }`
+  for a RUNNING automated run (one slot per Playwright worker).
+- `GET /test-runs/:id/live/:slot` → `multipart/x-mixed-replace` JPEG stream of that worker's browser; usable as
+  `<img src>` with `?token=`. Chromium only; ends when the run finishes.
+- Environment `configuration.slowMoMs` (0–3000) slows each browser action; `recordVideo` accepts `true` (every test,
+  default), `"failures"` or `false`.

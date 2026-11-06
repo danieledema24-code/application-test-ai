@@ -66,7 +66,7 @@ export default function ProjectsPage() {
                 {projects.map((p) => (
                   <Tr key={p.id}>
                     <Td>
-                      <Link href={`/projects/${p.id}`} className="font-medium text-accent hover:underline">
+                      <Link href={`/projects/${p.id}`} className="font-medium text-fg-strong hover:underline">
                         {p.name}
                       </Link>
                       <p className="max-w-xs truncate text-xs text-fg-muted">{p.applicationUrl}</p>

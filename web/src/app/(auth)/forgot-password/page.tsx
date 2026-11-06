@@ -37,12 +37,12 @@ export default function ForgotPasswordPage() {
             <div className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200 ring-1 ring-inset ring-amber-600/30">
               <p className="font-medium">Development mode</p>
               <p className="mt-1">Email isn’t configured, so here is the reset link:</p>
-              <a href={devLink} className="mt-1 block break-all font-medium text-accent underline">
+              <a href={devLink} className="mt-1 block break-all font-medium text-fg-strong underline decoration-line-strong underline-offset-4 hover:decoration-fg-strong">
                 {devLink}
               </a>
             </div>
           )}
-          <Link href="/login" className="inline-block text-sm font-medium text-accent hover:underline">
+          <Link href="/login" className="inline-block text-sm font-medium text-fg-strong underline decoration-line-strong underline-offset-4 hover:decoration-fg-strong">
             Back to sign in
           </Link>
         </div>
@@ -57,7 +57,7 @@ export default function ForgotPasswordPage() {
             </Button>
           </form>
           <p className="mt-6 text-center text-sm">
-            <Link href="/login" className="font-medium text-accent hover:underline">
+            <Link href="/login" className="font-medium text-fg-strong underline decoration-line-strong underline-offset-4 hover:decoration-fg-strong">
               Back to sign in
             </Link>
           </p>

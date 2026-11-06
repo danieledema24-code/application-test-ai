@@ -6,3 +6,5 @@ storage
 .next
 *.local.txt
 .runs
+test-results
+playwright-report

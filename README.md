@@ -56,7 +56,12 @@ Playwright project and runs `playwright test`, so the same files run anywhere:
   `fixtures.ts`, `tests/*.spec.ts` and `.env.example`. Run it with `npm install && npx playwright test`.
 - **Remote browser grid:** set *Remote Playwright endpoint* (`wss://…`) on an environment and
   runs execute on that browser server instead of local Chromium. Exported projects use `PW_WS_ENDPOINT`.
-- **Evidence:** a masked final screenshot, console and network logs per test; video and trace on failure.
+- **Live view:** while an automated run is in progress, the run page streams what each browser is showing.
+  Set *Slow motion* on the environment (e.g. 500 ms per action) to make it easy to follow. Local browsers only.
+- **Evidence:** a full video of every test (set `recordVideo` to `"failures"` to keep failed ones only), a masked
+  final screenshot, console and network logs; failed tests also keep a Playwright trace.
+- **Readable test cases:** every case has an objective, preconditions, numbered steps with the exact test data
+  and an expected result per step, and an overall pass criterion.
 - **Exports:** test cases as CSV (*Test cases → Export CSV*); run and project reports as PDF/CSV.
 
 ## End-to-end check

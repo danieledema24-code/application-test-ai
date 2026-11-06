@@ -119,7 +119,7 @@ export function GenerateCasesModal({
             {result.generated.map((c) => (
               <li key={c.id} className="flex items-center gap-3 px-3 py-2 text-sm">
                 <span className="font-mono text-xs text-fg-muted">{c.key}</span>
-                <Link href={`/test-cases/${c.id}`} className="min-w-0 flex-1 truncate font-medium text-accent hover:underline">
+                <Link href={`/test-cases/${c.id}`} className="min-w-0 flex-1 truncate font-medium text-fg-strong hover:underline">
                   {c.title}
                 </Link>
                 <span className="text-xs text-fg-muted">{humanize(c.category)}</span>

@@ -299,7 +299,7 @@ export function DiscoveryTab({ project, onChanged }: { project: ProjectDetail; o
             {d.completedAt && <span>· Completed {fmtDateTime(d.completedAt)}</span>}
             {running && <span className="text-fg-muted">· {d.pages.length} pages so far — refreshing every 2s</span>}
             {d.status === "COMPLETED" && (
-              <Link href={`/projects/${project.id}?tab=test-cases`} className="ml-auto font-medium text-accent hover:underline">
+              <Link href={`/projects/${project.id}?tab=test-cases`} className="ml-auto font-medium text-fg-strong hover:underline">
                 Generate test cases from this map →
               </Link>
             )}

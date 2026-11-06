@@ -73,7 +73,7 @@ function ActionCard({
             )}
           </dl>
           {action.link && (
-            <Link href={action.link} className="mt-1.5 inline-flex items-center gap-1 font-medium text-accent hover:underline">
+            <Link href={action.link} className="mt-1.5 inline-flex items-center gap-1 font-medium text-fg-strong hover:underline">
               Open <ExternalLink className="h-3 w-3" aria-hidden />
             </Link>
           )}

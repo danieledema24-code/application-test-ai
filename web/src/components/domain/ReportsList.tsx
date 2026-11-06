@@ -51,7 +51,7 @@ export function ReportsList({ projectId: fixedProjectId }: { projectId?: string 
                     {!fixedProjectId && <Td className="text-fg">{r.projectName}</Td>}
                     <Td>
                       {r.reportType === "RUN" && r.testRunId ? (
-                        <Link href={`/test-runs/${r.testRunId}`} className="text-accent hover:underline">
+                        <Link href={`/test-runs/${r.testRunId}`} className="text-fg-strong hover:underline">
                           Run report
                         </Link>
                       ) : (
@@ -67,7 +67,7 @@ export function ReportsList({ projectId: fixedProjectId }: { projectId?: string 
                     <Td className="text-right">
                       <a
                         href={fileUrl(r.downloadUrl || `/reports/${r.id}/download`)}
-                        className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline"
+                        className="inline-flex items-center gap-1 text-sm font-medium text-fg-strong hover:underline"
                         aria-label={`Download ${r.title} (${r.format})`}
                       >
                         <Download className="h-4 w-4" aria-hidden /> Download

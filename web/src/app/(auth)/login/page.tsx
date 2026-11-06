@@ -37,7 +37,7 @@ function LoginForm() {
         <TextField label="Work email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
         <TextField label="Password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         <div className="flex justify-end">
-          <Link href="/forgot-password" className="text-sm font-medium text-accent hover:underline">
+          <Link href="/forgot-password" className="text-sm font-medium text-fg-strong underline decoration-line-strong underline-offset-4 hover:decoration-fg-strong">
             Forgot password?
           </Link>
         </div>
@@ -48,7 +48,7 @@ function LoginForm() {
       </form>
       <p className="mt-6 text-center text-sm text-fg-muted">
         New to Application Test AI?{" "}
-        <Link href="/register" className="font-medium text-accent hover:underline">
+        <Link href="/register" className="font-medium text-fg-strong underline decoration-line-strong underline-offset-4 hover:decoration-fg-strong">
           Create a workspace
         </Link>
       </p>

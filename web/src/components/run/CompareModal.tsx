@@ -100,7 +100,7 @@ export function CompareModal({ open, onClose, run }: { open: boolean; onClose: (
             </ul>
           )}
           <p className="text-xs text-fg-muted">
-            <Link href={`/test-runs/${result.a.id}`} className="text-accent hover:underline">
+            <Link href={`/test-runs/${result.a.id}`} className="text-fg-strong hover:underline">
               Open baseline run
             </Link>
           </p>

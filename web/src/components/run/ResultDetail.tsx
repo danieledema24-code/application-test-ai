@@ -128,7 +128,16 @@ function ManualExecution({ result, steps, onChanged }: { result: TestResult; ste
                       <span className="mr-1.5 font-semibold text-fg-muted">{i + 1}.</span>
                       {step.action}
                     </p>
-                    {step.expected && <p className="mt-0.5 text-xs text-fg-muted">Expected: {step.expected}</p>}
+                    {step.data?.trim() && (
+                      <p className="mt-1 text-xs text-fg-muted">
+                        Test data: <code className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[11px] text-fg break-all">{step.data}</code>
+                      </p>
+                    )}
+                    {step.expected && (
+                      <p className="mt-1 text-xs text-fg">
+                        <span className="font-semibold text-emerald-400">Expected:</span> {step.expected}
+                      </p>
+                    )}
                   </div>
                   <StatusButtons label={`Step ${i + 1} result`} value={sr.status} onChange={(s) => updateStep(i, { status: s })} />
                 </div>
@@ -304,7 +313,7 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
           </dd>
         </div>
         <div>
-          <Link href={`/test-cases/${result.testCaseId}`} className="font-medium text-accent hover:underline">
+          <Link href={`/test-cases/${result.testCaseId}`} className="font-medium text-fg-strong hover:underline">
             Open test case
           </Link>
         </div>

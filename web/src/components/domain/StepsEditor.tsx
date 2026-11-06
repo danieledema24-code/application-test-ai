@@ -20,7 +20,7 @@ export function StepsEditor({ steps, onChange }: { steps: TestStep[]; onChange: 
         {steps.map((s, i) => (
           <li key={i} className="flex gap-2 rounded-lg border border-line bg-elevated/60 p-2">
             <span className="mt-2 w-6 shrink-0 text-center text-xs font-semibold text-fg-muted">{i + 1}</span>
-            <div className="grid flex-1 gap-2 sm:grid-cols-2">
+            <div className="grid flex-1 gap-2 sm:grid-cols-[2fr_1fr_2fr]">
               <div>
                 <label htmlFor={`step-${i}-action`} className="sr-only">
                   Step {i + 1} action
@@ -34,13 +34,25 @@ export function StepsEditor({ steps, onChange }: { steps: TestStep[]; onChange: 
                 />
               </div>
               <div>
+                <label htmlFor={`step-${i}-data`} className="sr-only">
+                  Step {i + 1} test data
+                </label>
+                <input
+                  id={`step-${i}-data`}
+                  className={inputClass}
+                  placeholder="Test data (optional)"
+                  value={s.data || ""}
+                  onChange={(e) => update(i, { data: e.target.value })}
+                />
+              </div>
+              <div>
                 <label htmlFor={`step-${i}-expected`} className="sr-only">
                   Step {i + 1} expected result
                 </label>
                 <input
                   id={`step-${i}-expected`}
                   className={inputClass}
-                  placeholder="Expected (optional)"
+                  placeholder="Expected result"
                   value={s.expected || ""}
                   onChange={(e) => update(i, { expected: e.target.value })}
                 />
@@ -60,7 +72,7 @@ export function StepsEditor({ steps, onChange }: { steps: TestStep[]; onChange: 
           </li>
         ))}
       </ol>
-      <Button size="sm" variant="secondary" className="mt-2" onClick={() => onChange([...steps, { action: "", expected: "" }])} icon={<Plus className="h-4 w-4" aria-hidden />}>
+      <Button size="sm" variant="secondary" className="mt-2" onClick={() => onChange([...steps, { action: "", data: "", expected: "" }])} icon={<Plus className="h-4 w-4" aria-hidden />}>
         Add step
       </Button>
     </fieldset>

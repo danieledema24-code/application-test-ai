@@ -254,9 +254,9 @@ export default function DefectPage({ params }: { params: Promise<{ id: string }>
           <CardBody>
             <dl className="space-y-3 text-sm">
               {[
-                ["Project", <Link key="p" href={`/projects/${d.projectId}`} className="text-accent hover:underline">{d.projectName}</Link>],
+                ["Project", <Link key="p" href={`/projects/${d.projectId}`} className="text-fg-strong hover:underline">{d.projectName}</Link>],
                 ["Environment", d.environmentName ? <StatusPill key="e" status={d.environmentName} dot={false} /> : "—"],
-                ["Test case", d.testCaseId ? <Link key="t" href={`/test-cases/${d.testCaseId}`} className="text-accent hover:underline">{d.testCaseKey}</Link> : "—"],
+                ["Test case", d.testCaseId ? <Link key="t" href={`/test-cases/${d.testCaseId}`} className="text-fg-strong hover:underline">{d.testCaseKey}</Link> : "—"],
                 ["Raised by", personName(d.createdBy)],
                 ["Created", fmtDateTime(d.createdAt)],
                 ["Updated", fmtDateTime(d.updatedAt)],

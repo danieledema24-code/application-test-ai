@@ -23,6 +23,9 @@ const PW_CLI = path.join(API_ROOT, "node_modules/@playwright/test/cli.js");
 // Run workspaces live under api/.runs so specs resolve @playwright/test from api/node_modules.
 const RUNS_DIR = path.join(API_ROOT, ".runs");
 
+/** Where a running automated run's fixtures drop live viewport frames (w<slot>.jpg + w<slot>.json). */
+export const liveDir = (runId: string) => path.join(RUNS_DIR, runId, "live");
+
 async function loadRun(runId: string) {
   return prisma.testRun.findUniqueOrThrow({
     where: { id: runId },
@@ -99,7 +102,7 @@ export async function executeAutomatedRun(runId: string) {
   const env = run.environment!;
   const creds = envCredentials(env);
   const secrets = secretValues(creds);
-  const cfg = parse<{ recordVideo?: boolean; timeoutMs?: number; workers?: number; extraHosts?: string[] }>(env.configuration, {});
+  const cfg = parse<{ recordVideo?: boolean | "failures"; timeoutMs?: number; workers?: number; slowMoMs?: number; extraHosts?: string[] }>(env.configuration, {});
   let base: URL;
   try {
     base = await assertSafeTarget(env.baseUrl);
@@ -111,6 +114,7 @@ export async function executeAutomatedRun(runId: string) {
 
   const workDir = path.join(RUNS_DIR, run.id);
   await fs.mkdir(path.join(workDir, "tests"), { recursive: true });
+  await fs.mkdir(liveDir(run.id), { recursive: true });
   try {
     await fs.writeFile(path.join(workDir, "fixtures.ts"), FIXTURES_TS);
     await fs.writeFile(path.join(workDir, "playwright.config.ts"), CONFIG_TS);
@@ -137,6 +141,7 @@ export async function executeAutomatedRun(runId: string) {
       BASE_URL: base.toString(), TEST_USERNAME: creds.username ?? "", TEST_PASSWORD: creds.password ?? "",
       ATA_ALLOWED_HOSTS: [base.hostname, ...(cfg.extraHosts ?? [])].join(","), ATA_ALLOW_PRIVATE: String(config.allowPrivateTargets),
       ATA_REPORT_FILE: reportFile, PW_WORKERS: String(workers), RECORD_VIDEO: String(cfg.recordVideo ?? true), TEST_TIMEOUT_MS: String(perTest),
+      ATA_LIVE_DIR: liveDir(run.id), PW_SLOWMO_MS: String(Math.min(Math.max(cfg.slowMoMs ?? 0, 0), 3000)),
       ...(creds.playwrightWsEndpoint ? { PW_WS_ENDPOINT: creds.playwrightWsEndpoint } : {}),
     }, run.id, perTest * Math.ceil(byFile.size / workers) + 120_000);
 

@@ -67,7 +67,7 @@ export function ErrorState({
         <button
           type="button"
           onClick={onRetry}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-accent hover:bg-accent-soft"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-fg-strong hover:bg-overlay"
         >
           <RefreshCw className="h-4 w-4" aria-hidden /> Try again
         </button>

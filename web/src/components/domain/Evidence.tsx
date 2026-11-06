@@ -37,7 +37,7 @@ function TextViewer({ ev, onClose }: { ev: Evidence; onClose: () => void }) {
           {text || "(empty)"}
         </pre>
       )}
-      <a href={evidenceUrl(ev)} download={ev.name} className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+      <a href={evidenceUrl(ev)} download={ev.name} className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-fg-strong hover:underline">
         <Download className="h-4 w-4" aria-hidden /> Download
       </a>
     </Modal>
@@ -102,7 +102,7 @@ export function EvidenceGallery({ evidence }: { evidence: Evidence[] }) {
                         href="https://trace.playwright.dev"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-0.5 font-medium text-accent hover:text-accent-bright hover:underline"
+                        className="inline-flex items-center gap-0.5 font-medium text-fg-strong hover:underline"
                       >
                         trace.playwright.dev
                         <ExternalLink className="h-3 w-3" aria-hidden />
@@ -112,7 +112,7 @@ export function EvidenceGallery({ evidence }: { evidence: Evidence[] }) {
                     </span>
                   </span>
                   <span className="text-xs text-fg-muted">Trace · {fmtBytes(e.size)}</span>
-                  <a href={evidenceUrl(e)} download={e.name || "trace.zip"} className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline">
+                  <a href={evidenceUrl(e)} download={e.name || "trace.zip"} className="inline-flex items-center gap-1 text-xs font-medium text-fg-strong hover:underline">
                     <Download className="h-3.5 w-3.5" aria-hidden /> Download trace.zip
                   </a>
                 </li>
@@ -126,11 +126,11 @@ export function EvidenceGallery({ evidence }: { evidence: Evidence[] }) {
                   {humanize(e.fileType)} · {fmtBytes(e.size)}
                 </span>
                 {isText && (
-                  <button type="button" onClick={() => setViewing(e)} className="text-xs font-medium text-accent hover:underline">
+                  <button type="button" onClick={() => setViewing(e)} className="text-xs font-medium text-fg-strong hover:underline">
                     View
                   </button>
                 )}
-                <a href={evidenceUrl(e)} download={e.name} className="inline-flex items-center gap-1 text-xs font-medium text-accent hover:underline">
+                <a href={evidenceUrl(e)} download={e.name} className="inline-flex items-center gap-1 text-xs font-medium text-fg-strong hover:underline">
                   <Download className="h-3.5 w-3.5" aria-hidden /> Download
                 </a>
               </li>
@@ -143,7 +143,7 @@ export function EvidenceGallery({ evidence }: { evidence: Evidence[] }) {
         <Modal open onClose={() => setZoom(null)} title={zoom.name} size="xl">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={evidenceUrl(zoom)} alt={`Screenshot: ${zoom.name}`} className="w-full rounded border border-line" />
-          <a href={evidenceUrl(zoom)} download={zoom.name} className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+          <a href={evidenceUrl(zoom)} download={zoom.name} className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-fg-strong hover:underline">
             <Download className="h-4 w-4" aria-hidden /> Download
           </a>
         </Modal>

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, CheckCheck, Code2, Download, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
+import { Check, CheckCheck, Code2, Download, Eye, Pencil, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { fmtDateTime, fmtDuration, humanize, personName } from "@/lib/format";
@@ -35,6 +35,7 @@ import {
 } from "@/components/ui";
 import { AiDraftBadge } from "@/components/domain/AiBits";
 import { StepsEditor } from "@/components/domain/StepsEditor";
+import { TestCaseDocument } from "@/components/domain/TestCaseDocument";
 
 type Form = { title: string; description: string; preconditions: string; expectedResult: string; category: Category; priority: Priority; steps: TestStep[] };
 
@@ -46,7 +47,7 @@ function toForm(tc: TestCaseDetail): Form {
     expectedResult: tc.expectedResult || "",
     category: tc.category,
     priority: tc.priority,
-    steps: tc.steps?.length ? tc.steps : [{ action: "", expected: "" }],
+    steps: tc.steps?.length ? tc.steps : [{ action: "", data: "", expected: "" }],
   };
 }
 
@@ -179,7 +180,7 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
                   setCode(s.code);
                 }}
                 aria-pressed={viewing?.id === s.id}
-                className={`rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${viewing?.id === s.id ? "bg-accent-soft text-accent ring-accent/60" : "text-fg ring-line hover:bg-elevated"}`}
+                className={`rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${viewing?.id === s.id ? "bg-accent-soft text-fg-strong ring-accent/60" : "text-fg ring-line hover:bg-elevated"}`}
                 title={`${fmtDateTime(s.createdAt)} · ${personName(s.createdBy)}`}
               >
                 v{s.version}
@@ -223,6 +224,7 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
   const [form, setForm] = useState<Form | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<unknown>(null);
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | "delete" | "regenerate">(null);
 
@@ -252,6 +254,7 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
       });
       toast("Test case saved");
       await mutate();
+      setEditing(false);
     } catch (err) {
       setSaveError(err);
     } finally {
@@ -355,30 +358,42 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
 
       <div className="grid gap-6 2xl:grid-cols-2">
         <Card>
-          <CardHeader title="Details" description="Editing content creates a new version and returns the case for review." />
+          <CardHeader
+            title={editing ? "Edit test case" : "Test case"}
+            description={editing ? "Saving creates a new version and returns the case for review." : "Follow the steps in order and compare each outcome with the expected result."}
+            actions={
+              <Button size="sm" variant="secondary" icon={editing ? <Eye className="h-4 w-4" aria-hidden /> : <Pencil className="h-4 w-4" aria-hidden />} onClick={() => setEditing((v) => !v)}>
+                {editing ? "View" : "Edit"}
+              </Button>
+            }
+          />
           <CardBody>
-            <form onSubmit={save} className="space-y-4">
-              <TextField label="Title" required value={form.title} onChange={(e) => set("title", e.target.value)} />
-              <div className="grid gap-4 sm:grid-cols-2">
-                <SelectField label="Category" value={form.category} onChange={(e) => set("category", e.target.value as Category)} options={CATEGORIES} />
-                <SelectField label="Priority" value={form.priority} onChange={(e) => set("priority", e.target.value as Priority)} options={PRIORITIES} />
-              </div>
-              <TextArea label="Description" rows={3} value={form.description} onChange={(e) => set("description", e.target.value)} />
-              <TextArea label="Preconditions" rows={2} value={form.preconditions} onChange={(e) => set("preconditions", e.target.value)} />
-              <StepsEditor steps={form.steps} onChange={(s) => set("steps", s)} />
-              <TextArea label="Expected result" rows={2} value={form.expectedResult} onChange={(e) => set("expectedResult", e.target.value)} />
-              <InlineError error={saveError} />
-              <div className="flex gap-2">
-                <Button type="submit" loading={saving} disabled={!dirty}>
-                  Save changes
-                </Button>
-                {dirty && (
-                  <Button variant="ghost" onClick={() => setForm(toForm(tc))}>
-                    Discard
+            {editing ? (
+              <form onSubmit={save} className="space-y-4">
+                <TextField label="Title" required value={form.title} onChange={(e) => set("title", e.target.value)} />
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <SelectField label="Category" value={form.category} onChange={(e) => set("category", e.target.value as Category)} options={CATEGORIES} />
+                  <SelectField label="Priority" value={form.priority} onChange={(e) => set("priority", e.target.value as Priority)} options={PRIORITIES} />
+                </div>
+                <TextArea label="Description" rows={3} value={form.description} onChange={(e) => set("description", e.target.value)} />
+                <TextArea label="Preconditions" rows={2} value={form.preconditions} onChange={(e) => set("preconditions", e.target.value)} />
+                <StepsEditor steps={form.steps} onChange={(s) => set("steps", s)} />
+                <TextArea label="Expected result" rows={2} value={form.expectedResult} onChange={(e) => set("expectedResult", e.target.value)} />
+                <InlineError error={saveError} />
+                <div className="flex gap-2">
+                  <Button type="submit" loading={saving} disabled={!dirty}>
+                    Save changes
                   </Button>
-                )}
-              </div>
-            </form>
+                  {dirty && (
+                    <Button variant="ghost" onClick={() => setForm(toForm(tc))}>
+                      Discard
+                    </Button>
+                  )}
+                </div>
+              </form>
+            ) : (
+              <TestCaseDocument description={tc.description} preconditions={tc.preconditions} steps={tc.steps ?? []} expectedResult={tc.expectedResult} />
+            )}
           </CardBody>
         </Card>
 
@@ -403,7 +418,7 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
                   {tc.history.map((r) => (
                     <Tr key={r.id}>
                       <Td>
-                        <Link href={`/test-runs/${r.testRunId}`} className="font-medium text-accent hover:underline">
+                        <Link href={`/test-runs/${r.testRunId}`} className="font-medium text-fg-strong hover:underline">
                           View run
                         </Link>
                       </Td>

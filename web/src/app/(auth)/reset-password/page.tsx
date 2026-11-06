@@ -36,7 +36,7 @@ function ResetForm() {
       <>
         <h1 className="text-2xl font-semibold tracking-tight text-fg-strong">Invalid link</h1>
         <p className="mt-2 text-sm text-fg-muted">This reset link is missing its token.</p>
-        <Link href="/forgot-password" className="mt-4 inline-block text-sm font-medium text-accent hover:underline">
+        <Link href="/forgot-password" className="mt-4 inline-block text-sm font-medium text-fg-strong underline decoration-line-strong underline-offset-4 hover:decoration-fg-strong">
           Request a new link
         </Link>
       </>
@@ -48,7 +48,7 @@ function ResetForm() {
       {done ? (
         <div className="mt-6" role="status">
           <p className="text-sm text-fg">Your password has been reset.</p>
-          <Link href="/login" className="mt-4 inline-block text-sm font-medium text-accent hover:underline">
+          <Link href="/login" className="mt-4 inline-block text-sm font-medium text-fg-strong underline decoration-line-strong underline-offset-4 hover:decoration-fg-strong">
             Sign in
           </Link>
         </div>

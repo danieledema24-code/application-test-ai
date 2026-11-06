@@ -6,11 +6,15 @@ export const CATEGORIES = ["FUNCTIONAL", "POSITIVE", "NEGATIVE", "BOUNDARY", "RE
 export const PRIORITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
 
 const CaseSchema = z.object({
-  title: z.string(),
-  description: z.string(),
-  preconditions: z.string(),
-  steps: z.array(z.object({ action: z.string(), expected: z.string() })),
-  expectedResult: z.string(),
+  title: z.string().describe("Short, specific outcome being verified, e.g. \"Contact form rejects an invalid email address\""),
+  description: z.string().describe("Objective: one or two plain sentences on what is verified and why it matters"),
+  preconditions: z.string().describe("One condition per line, starting with \"• \", e.g. the start page, user state and data that must exist"),
+  steps: z.array(z.object({
+    action: z.string().describe("One concrete action in the imperative, with exact paths and quoted UI labels"),
+    data: z.string().describe("Exact test data typed or selected in this step, or empty string when none"),
+    expected: z.string().describe("What the tester should observe immediately after this action"),
+  })),
+  expectedResult: z.string().describe("The overall pass criterion for the whole case"),
   category: z.enum(CATEGORIES),
   priority: z.enum(PRIORITIES),
 });
@@ -33,7 +37,11 @@ export async function generateCases(opts: {
     task:
       `Write up to ${count} manual test cases for the application, from the ${opts.source.toLowerCase().replace("_", " ")} below. ` +
       `Use only these categories: ${categories.join(", ")}. Mix positive, negative and boundary scenarios where relevant. ` +
-      "Steps must be concrete and executable by a human tester (one action per step, with an expected outcome). " +
+      "Write every case so a new tester can follow it without knowing the application: " +
+      "a clear objective; preconditions one per line; 4 to 10 numbered steps with exactly one action each; " +
+      "the exact test data for each step in its data field (realistic sample values such as jane.doe@example.com); " +
+      "and a specific, observable expected result for every step (what appears, changes or is blocked), never vague wording like \"works\" or \"is correct\". " +
+      "Start with opening the exact URL path and end with a verification step. " +
       "Use exact URL paths and quoted UI text where known, e.g. Click \"Sign in\". Never include real credentials; refer to \"a valid test user\". " +
       "Do not invent features that the input does not support; record assumptions in notes.",
     input,
@@ -48,8 +56,10 @@ export async function generateCases(opts: {
   };
 }
 
-const c = (category: GeneratedCase["category"], priority: GeneratedCase["priority"], title: string, steps: [string, string][], expectedResult: string, preconditions = "", description = ""): GeneratedCase => ({
-  title, description: description || title, preconditions, steps: steps.map(([action, expected]) => ({ action, expected })), expectedResult, category, priority,
+type Step = [action: string, expected: string, data?: string];
+const c = (category: GeneratedCase["category"], priority: GeneratedCase["priority"], title: string, steps: Step[], expectedResult: string, preconditions: string[] = [], description = ""): GeneratedCase => ({
+  title, description: description || title, preconditions: preconditions.map((p) => `• ${p}`).join("\n"),
+  steps: steps.map(([action, expected, data]) => ({ action, expected, data: data ?? "" })), expectedResult, category, priority,
 });
 
 function pathOf(url: string) {
@@ -61,34 +71,115 @@ function pathOf(url: string) {
   }
 }
 
+type Field = DiscoveredPage["forms"][number]["fields"][number];
+const label = (f: Field) => f.label || f.name || f.type;
+
+/** Realistic sample value for a field, so the tester (and the generated script) uses concrete data. */
+function sample(f: Field): string {
+  const k = `${f.label} ${f.name}`.toLowerCase();
+  if (f.type === "textarea" || /message|comment|feedback|description/.test(k)) return "Hello, I would like to know when my order will arrive.";
+  if (f.type === "email" || /e-?mail/.test(k)) return "jane.doe@example.com";
+  if (f.type === "tel" || /phone|mobile/.test(k)) return "+44 7700 900123";
+  if (f.type === "number" || /\b(qty|quantity|amount|age)\b/.test(k)) return "2";
+  if (f.type === "url" || /website|url/.test(k)) return "https://example.com";
+  if (f.type === "date") return "2026-12-01";
+  if (/first/.test(k)) return "Jane";
+  if (/last|surname/.test(k)) return "Doe";
+  if (/name/.test(k)) return "Jane Doe";
+  if (/search|query/.test(k)) return "shoes";
+  if (/post|zip/.test(k)) return "SW1A 1AA";
+  if (/city|town/.test(k)) return "London";
+  return "Sample text";
+}
+
 function fromPages(pages: DiscoveredPage[]): GeneratedCase[] {
   const out: GeneratedCase[] = [];
   for (const p of pages.slice(0, 8)) {
     const path = pathOf(p.url);
     const name = p.title || path;
-    out.push(c("FUNCTIONAL", "HIGH", `Page "${name}" loads successfully`, [[`Open ${path}`, "Page responds without an error"], [`Verify the page title contains "${p.title}"`, "Title is correct"]], `The page loads and shows "${p.headings[0] ?? p.title}"`));
-    if (p.headings[0]) out.push(c("UI", "MEDIUM", `Main heading is visible on ${name}`, [[`Open ${path}`, "Page loads"], [`Verify "${p.headings[0]}" is displayed`, "Heading visible"]], `"${p.headings[0]}" is visible`));
+    const heading = p.headings[0];
+    const reachable = `The application is reachable and ${path} is publicly accessible`;
+    const open: Step = [`Open ${path}`, heading ? `The page loads and the heading "${heading}" is displayed` : "The page loads without an error page or blank screen"];
+
+    out.push(c("FUNCTIONAL", "HIGH", `Page "${name}" loads successfully`, [
+      [`Open ${path}`, "The page responds without an error page, blank screen or browser warning"],
+      [`Verify the page title contains "${p.title}"`, `The browser tab shows the title ${p.title}`],
+      ...(heading ? [[`Verify the heading "${heading}" is displayed`, "The main heading is visible near the top of the page"] as Step] : []),
+    ], `The ${name} page opens with the correct title and its main content visible, and no errors are shown`,
+    [reachable], `Confirms that ${path} can be opened directly and renders its main content.`));
+
+    if (heading) out.push(c("UI", "MEDIUM", `Main heading is visible on ${name}`, [
+      [`Open ${path}`, "The page loads completely"],
+      [`Verify "${heading}" is displayed`, "The heading text is fully visible, readable and not cut off"],
+    ], `The heading "${heading}" is shown at the top of ${name}`, [reachable], `Checks that the primary heading on ${name} is rendered for the user.`));
+
     for (const f of p.forms.slice(0, 2)) {
       const required = f.fields.filter((x) => x.required);
       const pwd = f.fields.some((x) => x.type === "password");
-      const fname = pwd ? "login" : "form";
-      out.push(c(pwd ? "AUTHENTICATION" : "POSITIVE", "HIGH", `Submit ${fname} on ${name} with valid data`,
-        [[`Open ${path}`, "Form is displayed"], ...f.fields.map((x): [string, string] => [x.type === "password" ? `Enter a valid password in the "${x.label || x.name}" field` : `Enter valid ${x.label || x.name || x.type} in the "${x.label || x.name}" field`, "Value accepted"]), ["Submit the form", "Form submits"]],
-        pwd ? "The user is signed in and redirected to an authenticated page" : "The submission succeeds and a confirmation is shown", pwd ? "A valid test user exists" : ""));
-      out.push(c("FORM_VALIDATION", "HIGH", `Required field validation on ${name}`, [[`Open ${path}`, "Form is displayed"], ["Submit the form without entering any values", "Submission is blocked"]],
-        `Validation messages are shown for required fields${required.length ? ` (${required.map((x) => x.label || x.name).join(", ")})` : ""}`));
-      if (pwd) out.push(c("NEGATIVE", "HIGH", `Login rejects invalid password on ${name}`, [[`Open ${path}`, "Login form displayed"], [`Enter a valid username in the "${f.fields.find((x) => x.type !== "password")?.label || "username"}" field`, "Accepted"], ['Enter "wrong-password-123" in the "Password" field', "Accepted"], ["Submit the form", "Login is refused"]], "An error message is displayed and the user is not signed in"));
+      const kind = pwd ? "login" : "form";
+      const fill = f.fields.map((x): Step => x.type === "password"
+        ? [`Enter a valid password in the "${label(x)}" field`, "The password is accepted and shown masked as dots", "Password of the test user (from the environment credentials)"]
+        : pwd ? [`Enter a valid username in the "${label(x)}" field`, "The value appears in the field with no error message", "Username of the test user (from the environment credentials)"]
+        : [`Enter "${sample(x)}" in the "${label(x)}" field`, "The value appears in the field with no error message", sample(x)]);
+
+      out.push(c(pwd ? "AUTHENTICATION" : "POSITIVE", "HIGH", `Submit ${kind} on ${name} with valid data`,
+        [open, ...fill, ["Submit the form", pwd ? "The sign-in request is sent and a loading state or redirect follows" : "The form is submitted without validation errors"]],
+        pwd ? "The user is signed in, redirected to an authenticated page and sees their account area" : "The submission succeeds and a confirmation message is shown; no error is displayed",
+        pwd ? [reachable, "A valid test user exists and its credentials are stored on the environment", "The user is signed out"] : [reachable],
+        pwd ? `Verifies that a registered user can sign in on ${name}.` : `Verifies the happy path of the form on ${name} with realistic valid data.`));
+
+      out.push(c("FORM_VALIDATION", "HIGH", `Required field validation on ${name}`, [
+        open,
+        ["Submit the form without entering any values", "The form is not submitted and the page stays on the form"],
+        [`Verify a validation message is shown for each required field${required.length ? `: ${required.map(label).join(", ")}` : ""}`, "Each empty required field is highlighted with a message explaining it is required"],
+      ], `Validation messages are shown for required fields${required.length ? ` (${required.map(label).join(", ")})` : ""} and nothing is submitted`,
+      [reachable, "All form fields are empty"], `Checks that the form on ${name} cannot be submitted while required fields are empty.`));
+
+      if (pwd) {
+        const user = f.fields.find((x) => x.type !== "password");
+        out.push(c("NEGATIVE", "HIGH", `Login rejects invalid password on ${name}`, [
+          open,
+          [`Enter a valid username in the "${user ? label(user) : "username"}" field`, "The value appears in the field", "Username of the test user"],
+          ['Enter "wrong-password-123" in the "Password" field', "The password is shown masked as dots", "wrong-password-123"],
+          ["Submit the form", "The sign-in attempt is refused"],
+          ["Verify an error message about invalid credentials is displayed", "An error message is shown and the user remains on the sign-in page"],
+        ], "An error message is displayed, the user is not signed in and no account details are revealed",
+        [reachable, "A valid test user exists", "The user is signed out"], `Ensures sign-in on ${name} fails safely with a wrong password.`));
+      }
       const email = f.fields.find((x) => x.type === "email");
-      if (email) out.push(c("NEGATIVE", "MEDIUM", `Invalid email format rejected on ${name}`, [[`Open ${path}`, "Form displayed"], [`Enter "not-an-email" in the "${email.label || email.name}" field`, "Value entered"], ["Submit the form", "Submission blocked"]], "An email format validation message is shown"));
+      if (email) out.push(c("NEGATIVE", "MEDIUM", `Invalid email format rejected on ${name}`, [
+        open,
+        [`Enter "not-an-email" in the "${label(email)}" field`, "The value appears in the field", "not-an-email"],
+        ["Submit the form", "The form is not submitted"],
+        ["Verify an email format validation message is displayed", "A message asks for a valid email address next to the field"],
+      ], "An email format validation message is shown and the form is not submitted", [reachable], `Checks email format validation on ${name}.`));
+
       const text = f.fields.find((x) => ["text", "textarea"].includes(x.type));
-      if (text) out.push(c("BOUNDARY", "LOW", `Maximum length input in "${text.label || text.name}" on ${name}`, [[`Open ${path}`, "Form displayed"], [`Enter "${"A".repeat(256)}" in the "${text.label || text.name}" field`, "Input is truncated or accepted gracefully"], ["Submit the form", "No server error"]], "The application handles long input without errors or layout breakage"));
+      if (text) out.push(c("BOUNDARY", "LOW", `Maximum length input in "${label(text)}" on ${name}`, [
+        open,
+        [`Enter "${"A".repeat(256)}" in the "${label(text)}" field`, "The input is either limited to the maximum length or accepted without breaking the layout", "256 × the letter A"],
+        ["Submit the form", "The application responds with a validation message or success, never a server error"],
+      ], "Long input is handled gracefully: limited or rejected with a clear message, with no server error or broken layout", [reachable],
+      `Checks the upper length boundary of the ${label(text)} field on ${name}.`));
     }
   }
   if (pages.length) {
     const nav = [...new Set(pages.flatMap((p) => p.navItems))].slice(0, 6);
-    if (nav.length) out.push(c("REGRESSION", "MEDIUM", "Primary navigation links work", [["Open the home page /", "Page loads"], ...nav.map((n): [string, string] => [`Click "${n}"`, "Destination page loads without error"])], "Every primary navigation item opens a working page"));
-    out.push(c("ACCESSIBILITY", "MEDIUM", "Keyboard navigation and focus visibility", [["Open the home page /", "Page loads"], ["Press Tab repeatedly through interactive elements", "Focus moves in a logical order"], ["Verify focus indicator is visible", "Focused element is visibly highlighted"]], "All interactive elements are reachable by keyboard with a visible focus indicator"));
-    out.push(c("ACCESSIBILITY", "LOW", "Images and form fields have accessible names", [["Open the home page /", "Page loads"], ["Inspect images for alt text and inputs for labels", "Accessible names present"]], "Images have alt text and every input has a label"));
+    if (nav.length) out.push(c("REGRESSION", "MEDIUM", "Primary navigation links work", [
+      ["Open the home page /", "The home page loads with the main navigation visible"],
+      ...nav.map((n): Step => [`Click "${n}"`, `The ${n} page opens without an error`]),
+    ], "Every primary navigation item opens a working page", ["The application is reachable"], "Checks each item in the main navigation leads to a working page."));
+    out.push(c("ACCESSIBILITY", "MEDIUM", "Keyboard navigation and focus visibility", [
+      ["Open the home page /", "The home page loads"],
+      ["Press Tab repeatedly through the interactive elements", "Focus moves through links, buttons and fields in a logical reading order"],
+      ["Verify the focus indicator is visible on each element", "The focused element always has a clearly visible outline or highlight"],
+    ], "All interactive elements are reachable by keyboard with a visible focus indicator", ["The application is reachable", "Use a keyboard only (no mouse)"],
+    "Checks that keyboard-only users can reach and see every interactive element."));
+    out.push(c("ACCESSIBILITY", "LOW", "Images and form fields have accessible names", [
+      ["Open the home page /", "The home page loads"],
+      ["Check images for alt text and inputs for labels", "Every meaningful image has alt text and every input has a visible or programmatic label"],
+    ], "Images have alt text and every input has a label", ["The application is reachable", "Browser developer tools or a screen reader is available"],
+    "Checks basic accessible naming for screen-reader users."));
   }
   return out;
 }
@@ -98,8 +189,18 @@ function fromText(text: string): GeneratedCase[] {
   const out: GeneratedCase[] = [];
   for (const req of items) {
     const short = req.length > 70 ? `${req.slice(0, 67)}…` : req;
-    out.push(c("FUNCTIONAL", "HIGH", `Verify: ${short}`, [["Open the application /", "Application loads"], [`Perform the behaviour described: ${req}`, "Behaviour can be performed"], ["Observe the outcome", "Outcome matches the requirement"]], `The system satisfies: ${req}`, "", req));
-    out.push(c("NEGATIVE", "MEDIUM", `Invalid input handling: ${short}`, [["Open the application /", "Application loads"], [`Attempt the behaviour with invalid or missing data: ${req}`, "Attempt made"], ["Observe the outcome", "Error handled"]], "The system rejects invalid input with a clear message and no data is corrupted", "", req));
+    out.push(c("FUNCTIONAL", "HIGH", `Verify: ${short}`, [
+      ["Open the application /", "The home page loads without errors"],
+      ["Navigate to the area of the application that provides this feature", "The relevant page or form is displayed"],
+      [`Perform the behaviour described: ${req}`, "Each action is accepted without errors", "Valid, realistic data for this feature"],
+      ["Check the outcome on screen", "The result described in the requirement is visible to the user"],
+    ], `The system satisfies the requirement: ${req}`, ["The application is reachable", "A valid test user exists if the feature needs sign-in"], req));
+    out.push(c("NEGATIVE", "MEDIUM", `Invalid input handling: ${short}`, [
+      ["Open the application /", "The home page loads without errors"],
+      ["Navigate to the area of the application that provides this feature", "The relevant page or form is displayed"],
+      [`Attempt the behaviour with missing or invalid data: ${req}`, "The application blocks the action", "Empty required values and an invalid email such as not-an-email"],
+      ["Check the error messages on screen", "A clear message explains what is wrong and how to fix it; no data is saved"],
+    ], "The system rejects invalid input with a clear message and no data is corrupted", ["The application is reachable"], req));
   }
   return out;
 }

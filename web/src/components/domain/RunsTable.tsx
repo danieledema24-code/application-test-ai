@@ -24,7 +24,7 @@ export function RunsTable({ runs, showProject = true }: { runs: TestRun[]; showP
         {runs.map((r) => (
           <Tr key={r.id}>
             <Td>
-              <Link href={`/test-runs/${r.id}`} className="font-medium text-accent hover:underline">
+              <Link href={`/test-runs/${r.id}`} className="font-medium text-fg-strong hover:underline">
                 <span className="font-mono text-xs text-fg-muted">{r.key}</span> {r.name}
               </Link>
             </Td>

@@ -24,6 +24,7 @@ import { SummaryBar } from "@/components/domain/Charts";
 import { GenerateReportModal } from "@/components/domain/GenerateReportModal";
 import { ResultDetail } from "@/components/run/ResultDetail";
 import { CompareModal } from "@/components/run/CompareModal";
+import { LiveView } from "@/components/run/LiveView";
 
 const ACTIVE = ["QUEUED", "RUNNING"];
 
@@ -135,7 +136,9 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
                 Cancel run
               </Button>
             )}
-            {manualInProgress && (
+            {active && run.executionType === "AUTOMATED" && <LiveView runId={run.id} />}
+
+      {manualInProgress && (
               <Button variant="success" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} onClick={() => setModal("complete")}>
                 Complete run
               </Button>

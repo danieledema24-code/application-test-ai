@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod/v4";
 import { prisma } from "../db.js";
@@ -16,14 +17,14 @@ import { aiJSON } from "../services/ai.js";
 import { CATEGORIES, PRIORITIES } from "../services/generation.js";
 import { heuristicApiCases, parseOpenApi } from "../services/openapi.js";
 import { cancel } from "../services/queue.js";
-import { complete } from "../services/runner.js";
+import { complete, liveDir } from "../services/runner.js";
 import { generateScript } from "../services/scriptgen.js";
 import JSZip from "jszip";
 import { CONFIG_TS, envExample, FIXTURES_TS, isPlaywrightTestSpec, normaliseSpec, packageJson, readme } from "../services/playwright-project.js";
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
 
-const step = z.object({ action: z.string().min(1), expected: z.string().optional() });
+const step = z.object({ action: z.string().min(1), data: z.string().optional(), expected: z.string().optional() });
 const caseFields = z.object({
   title: z.string().trim().min(1).max(300), description: z.string().default(""), preconditions: z.string().default(""),
   steps: z.array(step).default([]), expectedResult: z.string().default(""), category: z.enum(CATEGORIES).default("FUNCTIONAL"), priority: z.enum(PRIORITIES).default("MEDIUM"),
@@ -248,6 +249,51 @@ export async function testingRoutes(app: FastifyInstance) {
     const [dto] = await runDtos([run]);
     const discovery = run.executionType === "DISCOVERY" ? await prisma.discovery.findFirst({ where: { testRunId: id } }) : null;
     return { ...dto, environment: run.environment ? environmentDto(run.environment) : null, results: await resultDtos(await fullResults({ testRunId: id })), discoveryId: discovery?.id ?? null };
+  });
+
+  // Live view of an automated run: which tests are on screen in each worker slot right now.
+  app.get("/test-runs/:id/live", async (req) => {
+    const { id } = req.params as { id: string };
+    const run = await prisma.testRun.findFirst({ where: { id, project: { organisationId: req.user.organisationId } } });
+    if (!run) throw notFound("Test run");
+    const dir = liveDir(id);
+    const files = run.status === "RUNNING" ? await fs.readdir(dir).catch(() => []) : [];
+    const slots = await Promise.all(files.filter((f) => /^w\d+\.json$/.test(f)).map(async (f) => ({
+      slot: Number(f.slice(1, -5)), ...parse<{ title?: string; state?: string; at?: number }>(await fs.readFile(path.join(dir, f), "utf8").catch(() => null), {}),
+      hasFrame: files.includes(f.replace(".json", ".jpg")),
+    })));
+    return { status: run.status, live: run.status === "RUNNING" && run.executionType === "AUTOMATED", slots: slots.sort((a, b) => a.slot - b.slot) };
+  });
+
+  // MJPEG stream of one worker slot; usable directly as <img src>. Ends when the run's workspace is removed.
+  app.get("/test-runs/:id/live/:slot", async (req, reply) => {
+    const { id, slot } = req.params as { id: string; slot: string };
+    if (!/^\d{1,2}$/.test(slot)) throw badRequest("Invalid slot");
+    const run = await prisma.testRun.findFirst({ where: { id, project: { organisationId: req.user.organisationId } } });
+    if (!run) throw notFound("Test run");
+    const file = path.join(liveDir(id), `w${slot}.jpg`);
+    reply.hijack();
+    reply.raw.writeHead(200, { "content-type": "multipart/x-mixed-replace; boundary=frame", "cache-control": "no-store", connection: "close" });
+    let lastMtime = 0, missingSince = 0;
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      const st = await fs.stat(file).catch(() => null);
+      if (!st) {
+        missingSince ||= Date.now();
+        if (Date.now() - missingSince > 15_000 && !(await fs.stat(liveDir(id)).catch(() => null))) return stop();
+      } else if (st.mtimeMs !== lastMtime) {
+        missingSince = 0;
+        lastMtime = st.mtimeMs;
+        const frame = await fs.readFile(file).catch(() => null);
+        if (frame) reply.raw.write(Buffer.concat([Buffer.from(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`), frame, Buffer.from("\r\n")]));
+      }
+      if (Date.now() - started > 60 * 60_000) stop();
+    }, 120);
+    const stop = () => {
+      clearInterval(timer);
+      if (!reply.raw.writableEnded) reply.raw.end();
+    };
+    req.raw.on("close", stop);
   });
 
   app.post("/test-runs/:id/cancel", async (req) => {

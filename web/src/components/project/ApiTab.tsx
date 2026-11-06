@@ -444,7 +444,7 @@ export function ApiTab({ project }: { project: ProjectDetail }) {
           {(generated || []).map((c) => (
             <li key={c.id} className="px-3 py-2 text-sm">
               <span className="font-mono text-xs text-fg-muted">{c.key}</span>{" "}
-              <Link href={`/test-cases/${c.id}`} className="font-medium text-accent hover:underline">
+              <Link href={`/test-cases/${c.id}`} className="font-medium text-fg-strong hover:underline">
                 {c.title}
               </Link>
             </li>
