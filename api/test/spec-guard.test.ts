@@ -108,3 +108,35 @@ test("session tokens in query strings are masked for logs", async () => {
   assert.equal(redactUrlTokens("/a?x=1&access_token=s3cr3t"), "/a?x=1&access_token=[REDACTED]");
   assert.equal(redactUrlTokens("/api/projects?search=token"), "/api/projects?search=token");
 });
+
+test("rule-based scripts turn verify steps into real checks", () => {
+  const code = heuristicScript({ key: "TC-2", title: "Message required", expectedResult: "The form is not accepted while Message is empty" }, [
+    { action: "Open /contact" },
+    { action: 'Enter "Jane Doe" in the "Name" field' },
+    { action: 'Leave the "Message" field empty' },
+    { action: "Submit the form" },
+    { action: "Verify the form is not accepted", expected: "A message asks for Message" },
+    { action: "Verify the user is signed in" },
+    { action: "Press Tab repeatedly through the interactive elements" },
+    { action: "Verify the vibe is immaculate" },
+  ]);
+  assert.deepEqual(checkSpec(normaliseSpec(code)), { ok: true });
+  assert.match(code, /getByLabel\("Message", \{ exact: false \}\)\.first\(\)\.fill\(""\)/);
+  assert.match(code, /page\.locator\("form"\)\.or\(.*\)\.first\(\), "A message asks for Message"\)\.toBeVisible\(\)/);
+  assert.match(code, /input\[type="password"\]:visible'\), .*\)\.toHaveCount\(0\)/);
+  assert.match(code, /for \(let i = 0; i < 5; i\+\+\) await page\.keyboard\.press\("Tab"\)/);
+  assert.match(code, /framenavigated/);
+  assert.match(code, /TODO: automate check — wording not recognised: Verify the vibe is immaculate/);
+  assert.doesNotMatch(code, /getByRole\("button", \{ name: "Tab/);
+  const long = heuristicScript({ key: "TC-3", title: "x", expectedResult: "" }, [{ action: `Enter "${"A".repeat(256)}" in the "Name" field` }]);
+  assert.ok(long.includes(`fill("${"A".repeat(256)}")`), "256-character value is used, not a fragment of the sentence");
+});
+
+test("failures are described in plain language", async () => {
+  const { describeFailure } = await import("../src/services/runner.js");
+  assert.equal(
+    describeFailure("Verify the form is not accepted", "Error: A message asks for Message\n\nexpect(locator).toBeVisible() failed", { url: "/contact", title: "Contact", heading: "Thank you", messages: ["Message sent"] }),
+    'Step "Verify the form is not accepted" failed: A message asks for Message. The page showed "Thank you" at /contact (Message sent).',
+  );
+  assert.equal(describeFailure(null, "", null), "The test failed during setup.");
+});

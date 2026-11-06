@@ -284,7 +284,7 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
     } catch (e) {
       setDraftError(e);
       setDraft({
-        title: `${result.testCaseKey}: ${result.testCaseTitle} failed`,
+        title: `${result.testCaseKey}: ${result.testCaseTitle} ${result.status.toLowerCase()}`,
         actualResult: result.actualResult || result.errorMessage || "",
         environmentName: run.environmentName,
       });

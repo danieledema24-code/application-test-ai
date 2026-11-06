@@ -27,6 +27,16 @@ const DraftSchema = z.object({
   expectedResult: z.string(), actualResult: z.string(),
 });
 
+/** "<case>: <first failed check>" (API) or "<case>: step "<step>" failed" (UI), instead of a bare "— failed". */
+function defectTitle(caseTitle: string, status: string, stepResults: { status: string; label?: string; note?: string }[]) {
+  const failed = stepResults.find((s) => s.status === "FAILED");
+  const cause = !failed ? status.toLowerCase()
+    : failed.note && failed.note.length <= 120 && !/\n/.test(failed.note) ? `${failed.label ? `${failed.label} — ` : ""}${failed.note}`
+    : `step "${failed.label}" failed`;
+  const title = `${caseTitle}: ${cause}`;
+  return title.length > 200 ? `${title.slice(0, 197)}…` : title;
+}
+
 export async function defectDraftFromResult(user: AuthUser, resultId: string) {
   const r = await prisma.testResult.findFirst({ where: { id: resultId, testRun: { project: { organisationId: user.organisationId } } }, include: { testCase: true, testRun: { include: { environment: true } } } });
   if (!r) throw notFound("Test result");
@@ -36,7 +46,7 @@ export async function defectDraftFromResult(user: AuthUser, resultId: string) {
   const severity = r.testCase?.priority === "CRITICAL" ? "CRITICAL" : r.testCase?.priority === "HIGH" ? "HIGH" : "MEDIUM";
   const base = {
     projectId: r.testRun.projectId, testResultId: r.id,
-    title: `${r.testCaseTitle} — ${r.status.toLowerCase()}`,
+    title: defectTitle(r.testCaseTitle, r.status, stepResults),
     description: `Test ${r.testCaseKey} ${r.status.toLowerCase()} during ${r.testRun.key} (${r.testRun.executionType.toLowerCase()}).\n\n${r.errorMessage}`.trim(),
     severity, priority: severity, reproductionSteps: steps.length ? steps : stepResults.map((s) => s.label ?? `Step ${s.index + 1}`),
     expectedResult: r.testCase?.expectedResult ?? "", actualResult: r.actualResult || r.errorMessage || stepResults.filter((s) => s.status === "FAILED").map((s) => s.note).join("; "),

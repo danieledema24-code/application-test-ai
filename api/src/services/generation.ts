@@ -123,7 +123,8 @@ function fromPages(pages: DiscoveredPage[]): GeneratedCase[] {
         : [`Enter "${sample(x)}" in the "${label(x)}" field`, "The value appears in the field with no error message", sample(x)]);
 
       out.push(c(pwd ? "AUTHENTICATION" : "POSITIVE", "HIGH", `Submit ${kind} on ${name} with valid data`,
-        [open, ...fill, ["Submit the form", pwd ? "The sign-in request is sent and a loading state or redirect follows" : "The form is submitted without validation errors"]],
+        [open, ...fill, ["Submit the form", pwd ? "The sign-in request is sent and a loading state or redirect follows" : "The form is submitted without validation errors"],
+          pwd ? ["Verify the user is signed in", "The sign-in form is no longer shown and no error message appears"] : ["Verify a confirmation message is shown", "A success or thank-you message appears and no error message is shown"]],
         pwd ? "The user is signed in, redirected to an authenticated page and sees their account area" : "The submission succeeds and a confirmation message is shown; no error is displayed",
         pwd ? [reachable, "A valid test user exists and its credentials are stored on the environment", "The user is signed out"] : [reachable],
         pwd ? `Verifies that a registered user can sign in on ${name}.` : `Verifies the happy path of the form on ${name} with realistic valid data.`));
@@ -131,9 +132,24 @@ function fromPages(pages: DiscoveredPage[]): GeneratedCase[] {
       out.push(c("FORM_VALIDATION", "HIGH", `Required field validation on ${name}`, [
         open,
         ["Submit the form without entering any values", "The form is not submitted and the page stays on the form"],
-        [`Verify a validation message is shown for each required field${required.length ? `: ${required.map(label).join(", ")}` : ""}`, "Each empty required field is highlighted with a message explaining it is required"],
+        ["Verify the form is not accepted", `The form stays on screen and each empty required field${required.length ? ` (${required.map(label).join(", ")})` : ""} shows a message explaining it is required`],
       ], `Validation messages are shown for required fields${required.length ? ` (${required.map(label).join(", ")})` : ""} and nothing is submitted`,
       [reachable, "All form fields are empty"], `Checks that the form on ${name} cannot be submitted while required fields are empty.`));
+
+      // Fields the page does not mark as required but that a form like this normally needs. These are assumptions:
+      // the case says so, and a tester deletes it if the field really is optional.
+      if (!pwd) {
+        const unmarked = f.fields.filter((x) => !x.required && ["text", "textarea", "email"].includes(x.type) && !/optional/i.test(label(x))).slice(0, 2);
+        for (const field of unmarked) out.push(c("FORM_VALIDATION", "MEDIUM", `"${label(field)}" is required on ${name}`, [
+          open,
+          ...f.fields.filter((x) => x !== field).map((x): Step => [`Enter "${sample(x)}" in the "${label(x)}" field`, "The value appears in the field with no error message", sample(x)]),
+          [`Leave the "${label(field)}" field empty`, "The field stays empty"],
+          ["Submit the form", "The submission is blocked or answered with a validation message"],
+          ["Verify the form is not accepted", `A message asks for ${label(field)} and no success message appears`],
+        ], `The form is not accepted while ${label(field)} is empty`,
+        [reachable, `Assumption: ${label(field)} is mandatory (the page does not mark it as required). Confirm with the requirements and delete this case if the field is optional.`],
+        `Checks that the form on ${name} cannot be sent without ${label(field)}. Generated as an assumption because the field is not marked required.`));
+      }
 
       if (pwd) {
         const user = f.fields.find((x) => x.type !== "password");
@@ -151,15 +167,18 @@ function fromPages(pages: DiscoveredPage[]): GeneratedCase[] {
         open,
         [`Enter "not-an-email" in the "${label(email)}" field`, "The value appears in the field", "not-an-email"],
         ["Submit the form", "The form is not submitted"],
-        ["Verify an email format validation message is displayed", "A message asks for a valid email address next to the field"],
+        ["Verify the form is not accepted", "A message asks for a valid email address next to the field and no success message appears"],
       ], "An email format validation message is shown and the form is not submitted", [reachable], `Checks email format validation on ${name}.`));
 
       const text = f.fields.find((x) => ["text", "textarea"].includes(x.type));
       if (text) out.push(c("BOUNDARY", "LOW", `Maximum length input in "${label(text)}" on ${name}`, [
         open,
+        // Other fields get valid values so the long input is what the application actually receives.
+        ...f.fields.filter((x) => x !== text).map((x): Step => [`Enter "${sample(x)}" in the "${label(x)}" field`, "The value appears in the field with no error message", sample(x)]),
         [`Enter "${"A".repeat(256)}" in the "${label(text)}" field`, "The input is either limited to the maximum length or accepted without breaking the layout", "256 × the letter A"],
-        ["Submit the form", "The application responds with a validation message or success, never a server error"],
-      ], "Long input is handled gracefully: limited or rejected with a clear message, with no server error or broken layout", [reachable],
+        ["Submit the form", "The application responds with a validation message or success"],
+        ["Verify no server error is shown", "No server error, exception or blank page is displayed"],
+      ], "Long input is handled gracefully and no server error or broken layout appears", [reachable],
       `Checks the upper length boundary of the ${label(text)} field on ${name}.`));
     }
   }

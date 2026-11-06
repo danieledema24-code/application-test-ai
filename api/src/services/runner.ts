@@ -75,6 +75,21 @@ function collectSpecs(suites: PwSuite[] = [], out: PwSpec[] = []) {
 
 const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, "");
 
+type PageState = { url: string; title: string; heading: string; messages: string[] };
+
+/**
+ * Plain-language actual result: the step that failed, what it expected (the assertion message generated
+ * scripts carry), and what the page showed at the end, e.g.
+ * Step "Verify the form is not accepted" failed: A message asks for Message… The page showed "Thank you" at /contact ("Message sent").
+ */
+export function describeFailure(failedStep: string | null, error: string, state: PageState | null) {
+  const first = error.split("\n").map((l) => l.replace(/^Error:\s*/, "").trim()).find(Boolean) ?? "";
+  const reason = first.length > 300 ? `${first.slice(0, 297)}…` : first;
+  const where = failedStep ? `Step "${failedStep}" failed` : "The test failed during setup";
+  const shown = state ? ` The page showed "${state.heading || state.title || "(no heading)"}" at ${state.url}${state.messages.length ? ` (${state.messages.join(" · ")})` : ""}.` : "";
+  return `${where}${reason ? `: ${reason}` : "."}${/[.!?…]$/.test(reason) || !reason ? "" : "."}${shown}`;
+}
+
 /** Runs the whole automated run as one Playwright Test invocation (parallel workers, optional remote browser). */
 async function runPlaywright(workDir: string, env: Record<string, string>, runId: string, timeoutMs: number) {
   return new Promise<{ code: number | null; output: string }>((resolve) => {
@@ -173,12 +188,14 @@ export async function executeAutomatedRun(runId: string) {
       const failedStep = steps.find((st) => st.error)?.title ?? null;
 
       let consoleText = "", networkText = "";
+      let pageState: PageState | null = null;
       for (const att of pw.attachments ?? []) {
         // Only read attachment files Playwright wrote inside this run's workspace.
         const inside = att.path ? await fs.realpath(att.path).then((p) => p.startsWith(realWork + path.sep)).catch(() => false) : false;
         const data = inside ? await fs.readFile(att.path!).catch(() => null) : att.body ? Buffer.from(att.body, "base64") : null;
         if (!data) continue;
-        if (att.name === "console" || att.name === "network") {
+        if (att.name === "page-state") pageState = parse<PageState | null>(redactText(data.toString("utf8"), secrets), null);
+        else if (att.name === "console" || att.name === "network") {
           const text = redactText(data.toString("utf8"), secrets);
           if (att.name === "console") consoleText = text; else networkText = text;
           await storeData(run, result.id, `${att.name}.log`, Buffer.from(text), att.name === "console" ? "CONSOLE_LOG" : "NETWORK_LOG", att.name === "console" ? "Browser console.log" : "Network errors.log", "text/plain");
@@ -188,7 +205,7 @@ export async function executeAutomatedRun(runId: string) {
       }
       await finishResult(run, result, {
         status, errorMessage: error.slice(0, 8000), durationMs: Math.round(pw.duration), scriptVersion: script.version,
-        actualResult: status === "PASSED" ? "All automated steps passed." : `Failed at step: ${failedStep ?? "(test setup)"}`,
+        actualResult: status === "PASSED" ? "All automated steps passed." : describeFailure(failedStep, error, pageState),
         stepResults: str(steps.map((st, i) => ({ index: i, label: st.title, status: st.error ? "FAILED" : "PASSED", note: st.error?.message ? redactText(stripAnsi(st.error.message), secrets).slice(0, 500) : undefined, durationMs: Math.round(st.duration) }))),
       }, status === "PASSED" ? undefined : {
         testCase: caseInput, executionType: "AUTOMATED", status, errorMessage: error, failedStep, kind,
@@ -230,7 +247,9 @@ export async function executeApiRun(runId: string) {
     const errorMessage = failedAssertions.map((a) => `${a.name}: ${a.message}`).join("\n");
     await finishResult(run, result, {
       status, errorMessage, durationMs: exchange.response?.timeMs ?? Date.now() - t0, apiExchange: str(exchange),
-      actualResult: exchange.response ? `HTTP ${exchange.response.status} in ${exchange.response.timeMs}ms` : "No response",
+      actualResult: exchange.response
+        ? `HTTP ${exchange.response.status} in ${exchange.response.timeMs}ms${failedAssertions.length ? `. Failed checks: ${failedAssertions.map((a) => `${a.name}: ${a.message}`).join("; ")}` : ""}`
+        : failedAssertions[0]?.message ?? "No response",
       stepResults: str(exchange.assertions.map((a, i) => ({ index: i, label: a.name, status: a.passed ? "PASSED" : "FAILED", note: a.message }))),
     }, {
       testCase: { key: tc.key, title: tc.title, steps: parse(tc.steps, []), expectedResult: tc.expectedResult }, executionType: "API",

@@ -66,6 +66,17 @@ export const test = base.extend<{ _policy: void; _evidence: void; _live: void }>
       const shot = await page.screenshot({ fullPage: true, mask: [page.locator("input[type=password]")] });
       await testInfo.attach("final-state", { body: shot, contentType: "image/png" });
     } catch { /* page already closed */ }
+    // Where the test ended up, so a failure can say what the page actually showed.
+    try {
+      const state = await page.evaluate(() => ({
+        url: location.pathname + location.search,
+        title: document.title,
+        heading: document.querySelector("h1")?.textContent?.trim() ?? "",
+        messages: Array.from(document.querySelectorAll('[role="alert"], .error, .alert, .ok, .success, .invalid-feedback'))
+          .map((e) => (e.textContent ?? "").trim()).filter(Boolean).slice(0, 3),
+      }));
+      await testInfo.attach("page-state", { body: JSON.stringify(state), contentType: "application/json" });
+    } catch { /* page already closed */ }
     if (consoleLines.length) await testInfo.attach("console", { body: consoleLines.join("\\n"), contentType: "text/plain" });
     if (networkLines.length) await testInfo.attach("network", { body: networkLines.join("\\n"), contentType: "text/plain" });
   }, { auto: true }],

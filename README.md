@@ -64,6 +64,26 @@ Playwright project and runs `playwright test`, so the same files run anywhere:
   and an expected result per step, and an overall pass criterion.
 - **Exports:** test cases as CSV (*Test cases → Export CSV*); run and project reports as PDF/CSV.
 
+### Rule-based tests that find bugs
+
+Without AI, scripts come from a rule-based translator of the plain-English steps. Verify steps become
+real checks, never a bare "page loaded" assertion:
+
+| Step wording | Check |
+|---|---|
+| *Verify the form is not accepted* (or *validation message*) | Still on the form or an error is shown, and no success message |
+| *Verify an error message about invalid credentials is displayed* | An error/alert is visible |
+| *Verify the user is signed in* | No password field and no error message remain |
+| *Verify a confirmation message is shown* | A success/thank-you message and no error |
+| *Verify no server error is shown* | No server error, exception or stack trace text |
+| *Verify "text" is displayed* | That exact text is visible |
+
+Wording it doesn't recognise becomes a `TODO` that fails loudly instead of passing silently. Generated
+forms also get **assumed-required** cases for fields the page doesn't mark as required (labelled as an
+assumption to confirm). On DemoShop this catches the empty-message bug, and API cases catch the price
+returned as a string. Failures read as *Step "…" failed: <expected behaviour>. The page showed "…" at /path*,
+and defect drafts are titled after the failing check.
+
 ## End-to-end check
 
 With the API and demo target running:
