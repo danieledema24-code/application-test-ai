@@ -67,7 +67,12 @@ export async function generateCasesForProject(user: AuthUser, projectId: string,
     const r = parse<DiscoveryResult>(d.result, {} as DiscoveryResult);
     pages = r.pages ?? [];
     workflows = r.workflows;
-  } else if (!input.text?.trim()) throw badRequest("Provide the text to generate test cases from");
+  } else {
+    if (!input.text?.trim()) throw badRequest("Provide the text to generate test cases from");
+    // Text sources still use the latest discovery, if any, to find the page and its real field labels.
+    const d = await prisma.discovery.findFirst({ where: { projectId, status: "COMPLETED" }, orderBy: { createdAt: "desc" } });
+    pages = d ? parse<DiscoveryResult>(d.result, {} as DiscoveryResult).pages ?? [] : [];
+  }
   if (input.source === "OPENAPI") throw badRequest("Use the API tab's OpenAPI import, then 'Generate API tests'");
   const { cases, generatedBy, notes } = await generateCases({ ...input, pages, workflows, applicationUrl: project.applicationUrl });
   const keys = await nextKey(user.organisationId, "case", cases.length || 1);

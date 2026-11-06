@@ -6,7 +6,7 @@ import { CheckCheck, Code2, Download, FileSpreadsheet, Plus, Search, Sparkles, P
 import { api, buildQuery, downloadFile } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { humanize, timeAgo } from "@/lib/format";
-import type { Category, Priority, ProjectDetail, TestCase, TestStep } from "@/lib/types";
+import type { AiStatus, Category, Priority, ProjectDetail, TestCase, TestStep } from "@/lib/types";
 import { CASE_STATUSES, CATEGORIES, PRIORITIES } from "@/lib/types";
 import {
   Button,
@@ -95,6 +95,8 @@ function NewCaseModal({ projectId, open, onClose, onCreated }: { projectId: stri
 
 export function TestCasesTab({ project }: { project: ProjectDetail }) {
   const toast = useToast();
+  const { data: aiStatus } = useApi<AiStatus>("/ai/status");
+  const generateLabel = aiStatus?.enabled === false ? "Generate test cases" : "Generate with AI";
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [priority, setPriority] = useState("");
@@ -162,7 +164,7 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
             New test case
           </Button>
           <Button icon={<Sparkles className="h-4 w-4" aria-hidden />} onClick={() => setModal("generate")}>
-            Generate with AI
+            {generateLabel}
           </Button>
         </div>
       </div>
@@ -222,8 +224,8 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
           empty={
             <EmptyState
               title={filtersActive ? "No test cases match these filters" : "No test cases yet"}
-              description={filtersActive ? undefined : "Generate drafts with AI or write one by hand."}
-              action={!filtersActive && <Button onClick={() => setModal("generate")}>Generate with AI</Button>}
+              description={filtersActive ? undefined : "Generate drafts or write one by hand."}
+              action={!filtersActive && <Button onClick={() => setModal("generate")}>{generateLabel}</Button>}
             />
           }
         >

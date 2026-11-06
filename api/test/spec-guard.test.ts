@@ -140,3 +140,26 @@ test("failures are described in plain language", async () => {
   );
   assert.equal(describeFailure(null, "", null), "The test failed during setup.");
 });
+
+test("rule-based generation turns a feature description into concrete cases", async () => {
+  const { generateCases } = await import("../src/services/generation.js");
+  const contact = { url: "http://x/contact", title: "Contact", status: 200, depth: 1, links: [], buttons: [], navItems: [], headings: ["Contact us"], screenshotEvidenceId: null,
+    forms: [{ action: "/contact", method: "post", fields: [{ name: "name", label: "Name", type: "text", required: true }, { name: "email", label: "Email", type: "email", required: true }, { name: "message", label: "Message", type: "textarea", required: false }] }] };
+  const all = ["FUNCTIONAL", "POSITIVE", "NEGATIVE", "FORM_VALIDATION", "BOUNDARY", "AUTHENTICATION"];
+  const r = await generateCases({ source: "DESCRIPTION", applicationUrl: "http://x", categories: all, pages: [contact],
+    text: "The contact page at /contact lets a visitor send a message. Name, Email and Message are required. The email must be a valid address. After sending, a thank-you message is shown." });
+  assert.deepEqual(r.cases.map((c) => c.title), [
+    "Submit Contact with valid data", '"Name" is required on Contact', '"Email" is required on Contact', '"Message" is required on Contact', "Invalid email address is rejected on Contact",
+  ]);
+  const msg = r.cases[3];
+  assert.deepEqual(msg.steps.map((s) => s.action), ["Open /contact", 'Enter "Jane Doe" in the "Name" field', 'Enter "jane.doe@example.com" in the "Email" field', 'Leave the "Message" field empty', "Submit the form", "Verify the form is not accepted"]);
+  for (const c of r.cases) assert.deepEqual(checkSpec(normaliseSpec(heuristicScript({ key: "TC-1", title: c.title, expectedResult: c.expectedResult }, c.steps))), { ok: true }, c.title);
+
+  const login = await generateCases({ source: "USER_STORY", applicationUrl: "http://x", categories: all, pages: [],
+    text: "As a registered customer I want to sign in with my email and password so that I can see my account. A wrong password shows an error." });
+  assert.deepEqual(login.cases.map((c) => c.title), ["Sign in on the sign-in page with valid credentials", "Sign-in with a wrong password is refused on the sign-in page"]);
+  assert.equal(login.cases[0].steps[0].action, "Open /login");
+
+  const vague = await generateCases({ source: "REQUIREMENTS", applicationUrl: "http://x", categories: all, pages: [], text: "Reports are exported every night to the archive." });
+  assert.match(vague.cases[0].title, /^Manual check: /);
+});
