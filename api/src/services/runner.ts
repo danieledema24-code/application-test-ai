@@ -10,12 +10,12 @@ import { parse, str } from "../lib/json.js";
 import { assertSafeTarget } from "../lib/ssrf.js";
 import { putObject } from "../lib/storage.js";
 import { redactText } from "../lib/redact.js";
-import { CONFIG_TS, FIXTURES_TS, isPlaywrightTestSpec, normaliseSpec } from "./playwright-project.js";
+import { CONFIG_TS, FIXTURES_TS } from "./playwright-project.js";
 import { emitWebhook, notify, recordActivity } from "./activity.js";
 import { analyseFailure } from "./analysis.js";
 import { endpointToSpec, envCredentials, executeApi, secretValues, type ApiSpec } from "./api-runner.js";
 import { isCancelled } from "./queue.js";
-import { generateScript } from "./scriptgen.js";
+import { scriptForRun } from "./scriptgen.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const API_ROOT = path.resolve(here, "../..");
@@ -125,11 +125,14 @@ export async function executeAutomatedRun(runId: string) {
         await finishResult(run, result, { status: "ERROR", errorMessage: "Test case was deleted before execution" });
         continue;
       }
-      let script = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
-      // Regenerate when the case changed since the script was written, or the script predates Playwright Test specs.
-      if (!script || script.testCaseVersion !== tc.version || !isPlaywrightTestSpec(script.code)) script = await generateScript(tc, initiator?.fullName ?? "system");
+      // Regenerates stale scripts; a script that fails the safety or syntax check errors on its own without breaking the run.
+      const { script, code, problem } = await scriptForRun(tc, initiator?.fullName ?? "system");
+      if (problem) {
+        await finishResult(run, result, { status: "ERROR", errorMessage: `Script not run: ${problem}`, actualResult: `Script not run: ${problem}`, scriptVersion: script.version });
+        continue;
+      }
       const file = `${tc.key}.spec.ts`;
-      await fs.writeFile(path.join(workDir, "tests", file), normaliseSpec(script.code));
+      await fs.writeFile(path.join(workDir, "tests", file), code);
       byFile.set(file, { result, script });
     }
     if (!byFile.size) return await complete(run.id);
@@ -147,6 +150,7 @@ export async function executeAutomatedRun(runId: string) {
 
     const report = parse<{ suites?: PwSuite[]; errors?: { message?: string }[] } | null>(await fs.readFile(reportFile, "utf8").catch(() => null), null);
     const specs = collectSpecs(report?.suites);
+    const realWork = await fs.realpath(workDir);
     const globalError = redactText(stripAnsi([...(report?.errors ?? []).map((e) => e.message ?? ""), report ? "" : output.slice(-1500)].join("\n").trim()), secrets);
 
     for (const [file, { result, script }] of byFile) {
@@ -170,7 +174,9 @@ export async function executeAutomatedRun(runId: string) {
 
       let consoleText = "", networkText = "";
       for (const att of pw.attachments ?? []) {
-        const data = att.path ? await fs.readFile(att.path).catch(() => null) : att.body ? Buffer.from(att.body, "base64") : null;
+        // Only read attachment files Playwright wrote inside this run's workspace.
+        const inside = att.path ? await fs.realpath(att.path).then((p) => p.startsWith(realWork + path.sep)).catch(() => false) : false;
+        const data = inside ? await fs.readFile(att.path!).catch(() => null) : att.body ? Buffer.from(att.body, "base64") : null;
         if (!data) continue;
         if (att.name === "console" || att.name === "network") {
           const text = redactText(data.toString("utf8"), secrets);

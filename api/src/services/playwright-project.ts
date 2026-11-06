@@ -16,20 +16,35 @@ const allowPrivate = process.env.ATA_ALLOW_PRIVATE === "true";
 const liveDir = process.env.ATA_LIVE_DIR;
 const METADATA = new Set(["169.254.169.254", "metadata.google.internal", "metadata", "100.100.100.200"]);
 const PRIVATE = /^(10\\.|127\\.|0\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.)/;
+// "::ffff:a9fe:a9fe" / "::ffff:169.254.169.254" are IPv4 addresses in IPv6 form; check them as IPv4.
+const v4 = (host: string) => {
+  const m = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (m) { const a = parseInt(m[1], 16), b = parseInt(m[2], 16); return [a >> 8, a & 255, b >> 8, b & 255].join("."); }
+  return host.replace(/^::ffff:(?=\\d+\\.\\d+\\.\\d+\\.\\d+$)/i, "");
+};
 
 export const test = base.extend<{ _policy: void; _evidence: void; _live: void }>({
   // Blocks cloud metadata endpoints always, and (when ATA_ALLOWED_HOSTS is set) top-level
   // navigation away from the approved application hosts.
-  _policy: [async ({ context }, use) => {
+  _policy: [async ({ context, page }, use) => {
+    // Only web pages can be opened: file://, chrome:// and similar would expose the machine running the tests.
+    const frame = Object.getPrototypeOf(page.mainFrame());
+    if (!frame.__ataGoto) {
+      frame.__ataGoto = frame.goto;
+      frame.goto = function (this: unknown, url: string, options?: unknown) {
+        if (/^[a-z][\\w+.-]*:/i.test(url) && !/^(https?:|about:blank$|data:)/i.test(url)) throw new Error("BLOCKED by policy: only http(s) pages can be opened (" + url + ")");
+        return frame.__ataGoto.call(this, url, options);
+      };
+    }
     await context.route("**/*", (route) => {
       const req = route.request();
       let url: URL;
       try { url = new URL(req.url()); } catch { return route.abort(); }
       if (url.protocol === "data:" || url.protocol === "blob:") return route.continue();
-      const host = url.hostname.replace(/^\\[|\\]$/g, "");
+      const host = v4(url.hostname.replace(/^\\[|\\]$/g, "").toLowerCase());
       const approved = !allowedHosts.length || allowedHosts.some((h) => host === h || host.endsWith("." + h));
       const offDomainNav = req.isNavigationRequest() && req.frame() === req.frame().page().mainFrame() && !approved;
-      if (METADATA.has(host) || (!allowPrivate && !approved && PRIVATE.test(host)) || offDomainNav) {
+      if (METADATA.has(host) || host.startsWith("169.254.") || (!allowPrivate && !approved && PRIVATE.test(host)) || offDomainNav) {
         console.warn("BLOCKED by policy " + req.url());
         return route.abort("blockedbyclient");
       }

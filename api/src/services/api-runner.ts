@@ -45,8 +45,14 @@ export const requestSchema = (e: ApiEndpoint) => parse<Record<string, unknown>>(
 export async function executeApi(spec: ApiSpec, env: Environment): Promise<ApiExchange> {
   const creds = envCredentials(env);
   const secrets = secretValues(creds);
-  const url = new URL(spec.path.replace(/^\//, ""), env.baseUrl.endsWith("/") ? env.baseUrl : `${env.baseUrl}/`);
+  const base = new URL(env.baseUrl.endsWith("/") ? env.baseUrl : `${env.baseUrl}/`);
+  const url = new URL(spec.path.replace(/^\/+/, ""), base);
   for (const [k, v] of Object.entries(spec.query ?? {})) url.searchParams.set(k, String(v));
+  // An absolute path ("https://elsewhere/…") would send the environment's credentials to another host.
+  if (url.origin !== base.origin) {
+    return { request: { method: spec.method, url: redactText(url.toString(), secrets), headers: {} }, response: null,
+      assertions: [{ name: "Request completed", passed: false, message: `Blocked: the endpoint path must be relative to the environment URL (${base.origin})` }] };
+  }
   await assertSafeTarget(url.toString());
 
   const headers: Record<string, string> = { accept: "application/json", ...(spec.headers ?? {}) };

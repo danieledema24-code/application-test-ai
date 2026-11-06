@@ -84,7 +84,7 @@ assistant → workspace isolation → password reset.
 | FastAPI (Python) | Fastify + TypeScript | One language across UI, API and Playwright scripts |
 | PostgreSQL | Prisma + SQLite | Change `provider` to `postgresql` in `api/prisma/schema.prisma` and set `DATABASE_URL`; JSON is stored as text for portability |
 | Redis queue | In-process bounded worker pool (`services/queue.ts`); job state lives in the DB, interrupted runs are recovered on restart | Replace `enqueue`/pump with BullMQ; handlers are unchanged |
-| Docker workers | Each automated test runs in a separate child process (`worker/runner-child.ts`) with a scrubbed environment, a fresh browser and a network policy; job input arrives over stdin | Run the same entrypoint in a per-job container with egress firewall rules |
+| Docker workers | Each automated run is one Playwright Test child process (`services/runner.ts`) with a scrubbed environment and the network policy in `fixtures.ts`. Every spec is checked before it is saved, exported or run (`lib/spec-guard.ts`): no imports besides the fixtures, no Node globals, prototype escapes, private Playwright internals or host file paths, and only `process.env.NAME` reads. The browser can only open http(s) pages | Run the runner in a per-job container or VM with egress firewall rules, especially for multi-tenant hosting: the spec guard is a safeguard, not an OS sandbox |
 | S3 storage | Local filesystem, keys namespaced by `org/project/...` (`lib/storage.ts`) | Swap `putObject/getObject` for an S3 client |
 | Managed auth | bcrypt + JWT sessions (revocable, 12 h), password reset tokens (dev mode returns the link, since no SMTP is configured) | Plug in a managed IdP |
 

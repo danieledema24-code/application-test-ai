@@ -7,6 +7,7 @@ import { authenticate, getProjectForUser, type AuthUser } from "../auth.js";
 import { badRequest, HttpError, notFound } from "../lib/errors.js";
 import { parse, provided, str } from "../lib/json.js";
 import { nextKey } from "../lib/keys.js";
+import { checkSpec } from "../lib/spec-guard.js";
 import { getObject, putObject } from "../lib/storage.js";
 import { casesWithMeta, evidenceDto, resultDtos, runDtos, runInclude, scriptDto, environmentDto } from "../lib/serialize.js";
 import { audit, recordActivity } from "../services/activity.js";
@@ -18,7 +19,7 @@ import { CATEGORIES, PRIORITIES } from "../services/generation.js";
 import { heuristicApiCases, parseOpenApi } from "../services/openapi.js";
 import { cancel } from "../services/queue.js";
 import { complete, liveDir } from "../services/runner.js";
-import { generateScript } from "../services/scriptgen.js";
+import { generateScript, scriptForRun } from "../services/scriptgen.js";
 import JSZip from "jszip";
 import { CONFIG_TS, envExample, FIXTURES_TS, isPlaywrightTestSpec, normaliseSpec, packageJson, readme } from "../services/playwright-project.js";
 
@@ -96,11 +97,13 @@ export async function testingRoutes(app: FastifyInstance) {
     const draft = cases.filter((c) => !["APPROVED", "READY"].includes(c.status));
     if (draft.length) throw badRequest(`Approve these cases before exporting them: ${draft.map((c) => c.key).join(", ")}`);
     const zip = new JSZip();
+    const rejected: string[] = [];
     for (const tc of cases) {
-      let script = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
-      if (!script || script.testCaseVersion !== tc.version || !isPlaywrightTestSpec(script.code)) script = await generateScript(tc, req.user.fullName);
-      zip.file(`tests/${tc.key}.spec.ts`, normaliseSpec(script.code));
+      const { code, problem } = await scriptForRun(tc, req.user.fullName);
+      if (problem) rejected.push(`${tc.key}: ${problem}`);
+      else zip.file(`tests/${tc.key}.spec.ts`, code);
     }
+    if (rejected.length) throw badRequest(`Fix these scripts before exporting them. ${rejected.join("; ")}`);
     const env = await prisma.environment.findFirst({ where: { projectId: id }, orderBy: { createdAt: "asc" } });
     zip.file("playwright.config.ts", CONFIG_TS);
     zip.file("fixtures.ts", FIXTURES_TS);
@@ -207,6 +210,8 @@ export async function testingRoutes(app: FastifyInstance) {
     const tc = await caseForUser(req.user, (req.params as { id: string }).id);
     const { code } = z.object({ code: z.string().min(1).max(200_000) }).parse(req.body);
     if (!isPlaywrightTestSpec(code)) throw badRequest('Script must be a Playwright Test spec: import { test, expect } from "../fixtures" (or "@playwright/test") and define test(...)');
+    const check = checkSpec(normaliseSpec(code));
+    if (!check.ok) throw badRequest(`Script rejected: ${check.error}`);
     const last = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
     const s = await prisma.script.create({ data: { testCaseId: tc.id, testCaseVersion: tc.version, version: (last?.version ?? 0) + 1, language: "playwright-test", code, createdById: req.user.id, createdBy: req.user.fullName } });
     await audit(req.user.organisationId, req.user.id, "script.edited", tc.key, { version: s.version });
@@ -384,13 +389,22 @@ export async function testingRoutes(app: FastifyInstance) {
     if (!ev) throw notFound("Evidence");
     const data = await getObject(ev.storageReference).catch(() => null);
     if (!data) throw notFound("Evidence file");
-    reply.header("content-type", ev.mimeType).header("content-disposition", `inline; filename="${ev.name.replace(/"/g, "")}"`).header("cache-control", "private, max-age=300");
+    // Uploaded files carry a client-chosen MIME type: only passive formats open inline, everything else downloads,
+    // and the sandbox CSP stops any HTML/SVG that slips through from running script on this origin.
+    const inline = INLINE_MIME.has(ev.mimeType.toLowerCase());
+    reply
+      .header("content-type", inline ? ev.mimeType : "application/octet-stream")
+      .header("content-disposition", contentDisposition(inline ? "inline" : "attachment", ev.name))
+      .header("x-content-type-options", "nosniff")
+      .header("content-security-policy", "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
+      .header("cache-control", "private, max-age=300");
     return reply.send(data);
   });
 
   // ---------------- API testing ----------------
   const endpointBody = z.object({
-    name: z.string().trim().min(1), method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]), path: z.string().min(1),
+    name: z.string().trim().min(1), method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+    path: z.string().min(1).refine((p) => !/^([a-z][\w+.-]*:|\/\/|\\)/i.test(p.trim()), "Path must be relative to the environment URL, e.g. /api/items"),
     headers: z.record(z.string(), z.string()).default({}), query: z.record(z.string(), z.string()).default({}), body: z.unknown().optional(),
     auth: z.enum(["NONE", "BEARER", "API_KEY", "BASIC"]).default("NONE"), expectedStatus: z.number().int().default(200), maxResponseMs: z.number().int().default(2000),
     requiredFields: z.array(z.string()).default([]), jsonSchema: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -487,3 +501,10 @@ export async function testingRoutes(app: FastifyInstance) {
   });
 }
 
+const INLINE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "video/webm", "video/mp4", "text/plain"]);
+
+/** RFC 6266 header with an ASCII fallback and a UTF-8 filename*, so non-Latin names don't break the response. */
+function contentDisposition(type: "inline" | "attachment", name: string) {
+  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "") || "file";
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
