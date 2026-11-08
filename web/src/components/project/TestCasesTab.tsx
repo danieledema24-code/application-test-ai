@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
-import { CheckCheck, Code2, Download, FileSpreadsheet, Plus, Search, Sparkles, PlayCircle } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CheckCheck, Code2, Download, FileSpreadsheet, Plus, Radar, Search, Sparkles, PlayCircle } from "lucide-react";
 import { api, buildQuery, downloadFile } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
-import { humanize, timeAgo } from "@/lib/format";
-import type { AiStatus, Category, Priority, ProjectDetail, TestCase, TestStep } from "@/lib/types";
+import { fmtDate, humanize, plural, timeAgo } from "@/lib/format";
+import type { AiStatus, Category, DiscoverySummary, Priority, ProjectDetail, TestCase, TestStep } from "@/lib/types";
 import { CASE_STATUSES, CATEGORIES, PRIORITIES } from "@/lib/types";
 import {
   Button,
@@ -103,12 +103,21 @@ export function TestCasesTab({ project, onChanged }: { project: ProjectDetail; o
   const [priority, setPriority] = useState("");
   const [status, setStatus] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  // ?generate=1 (from the discovery map) opens the generator straight away.
-  const [modal, setModal] = useState<null | "generate" | "new" | "run">(useSearchParams().get("generate") ? "generate" : null);
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  // ?generate=1 (from the site scan) opens the generator straight away.
+  const [modal, setModal] = useState<null | "generate" | "new" | "run">(params.get("generate") ? "generate" : null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  // ?scan=<id> shows only the checks written by that site scan; &run=1 also approves its drafts and opens the run dialog.
+  const scanParam = params.get("scan") || "";
+  const { data: scanInfo, error: scanError } = useApi<DiscoverySummary>(scanParam ? `/discovery/${scanParam}` : null);
+  // A scan id from another project (or one that no longer exists) is ignored and all checks are shown.
+  const scanInvalid = !!scanParam && (!!scanError || (!!scanInfo && scanInfo.projectId !== project.id));
+  const scan = scanInvalid ? "" : scanParam;
   const { data, error, isLoading, mutate } = useApi<TestCase[]>(
     `/projects/${project.id}/test-cases`,
-    { search: search.trim() || undefined, category, priority, status },
+    { search: search.trim() || undefined, category, priority, status, scan: scan || undefined },
     { keepPreviousData: true },
   );
 
@@ -133,18 +142,45 @@ export function TestCasesTab({ project, onChanged }: { project: ProjectDetail; o
     }
   }
 
-  async function approveAndRun(ids: string[]) {
+  /** Approves `ids`, then opens the run dialog with `runIds` (default: the same checks) selected. */
+  async function approveAndRun(ids: string[], runIds = ids) {
     try {
-      await api("/test-cases/bulk-status", { body: { ids, status: "APPROVED" } });
-      toast(`${ids.length} checks approved`);
-      setSelected(new Set(ids));
+      if (ids.length) {
+        await api("/test-cases/bulk-status", { body: { ids, status: "APPROVED" } });
+        toast(`${plural(ids.length, "check")} approved`);
+      }
+      setSelected(new Set(runIds));
       await mutate();
       onChanged?.();
-      setModal("run");
+      if (runIds.length) setModal("run");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Approve failed", "error");
     }
   }
+
+  function setParams(change: Record<string, string | null>) {
+    const next = new URLSearchParams(params.toString());
+    for (const [k, v] of Object.entries(change)) {
+      if (v === null) next.delete(k);
+      else next.set(k, v);
+    }
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }
+
+  // "Approve all and run" from the scan page: only this scan's drafts are approved, and only because the user
+  // clicked it there. run=1 is removed first so a refresh never approves again. The run covers the checks
+  // with an automated test.
+  const runHandled = useRef(false);
+  const wantsRun = !!scan && params.get("run") === "1";
+  useEffect(() => {
+    if (!wantsRun || runHandled.current || !data || isLoading || scanInfo?.projectId !== project.id) return;
+    runHandled.current = true;
+    setParams({ run: null });
+    const fromScan = data.filter((c) => c.discoveryId === scan);
+    const drafts = fromScan.filter((c) => c.status === "DRAFT").map((c) => c.id);
+    approveAndRun(drafts, fromScan.filter((c) => c.hasScript && c.status !== "DEPRECATED").map((c) => c.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when the scan's checks first load
+  }, [wantsRun, data, isLoading, scanInfo]);
 
   function toggle(id: string) {
     setSelected((s) => {
@@ -155,13 +191,13 @@ export function TestCasesTab({ project, onChanged }: { project: ProjectDetail; o
     });
   }
 
-  const filtersActive = !!(search || category || priority || status);
+  const filtersActive = !!(search || category || priority || status || scan);
 
   // Downloads go through fetch so API errors (e.g. draft cases selected) show as a toast, not a raw error page.
   const [downloading, setDownloading] = useState<"csv" | "playwright" | null>(null);
   async function download(kind: "csv" | "playwright") {
     const path = kind === "csv"
-      ? `/projects/${project.id}/test-cases/export.csv${buildQuery({ search: search.trim() || undefined, category, priority, status })}`
+      ? `/projects/${project.id}/test-cases/export.csv${buildQuery({ search: search.trim() || undefined, category, priority, status, scan: scan || undefined })}`
       : `/projects/${project.id}/playwright-export${buildQuery({ caseIds: selectedVisible.length ? selectedVisible.join(",") : undefined })}`;
     setDownloading(kind);
     try {
@@ -204,6 +240,24 @@ export function TestCasesTab({ project, onChanged }: { project: ProjectDetail; o
           </span>
         </p>
       </div>
+      {scanParam && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-4 py-2">
+          <Radar className="h-4 w-4 text-fg-muted" aria-hidden />
+          <span className="text-sm text-fg">
+            {scanInvalid ? (
+              "We couldn’t find that scan in this project, so all checks are shown."
+            ) : (
+              <>
+                From the scan on {fmtDate(scanInfo?.completedAt ?? scanInfo?.startedAt)}
+                {data && <> · {plural(data.length, "check")}</>}
+              </>
+            )}
+          </span>
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setParams({ scan: null, run: null })}>
+            Show all
+          </Button>
+        </div>
+      )}
       <Card>
         <div className="flex flex-wrap items-end gap-3 border-b border-line p-4">
           <div className="relative min-w-[14rem] flex-1">

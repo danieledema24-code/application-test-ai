@@ -8,6 +8,7 @@ import { badRequest, HttpError, notFound } from "../lib/errors.js";
 import { parse, provided, str } from "../lib/json.js";
 import { nextKey } from "../lib/keys.js";
 import { csvCell } from "../lib/csv.js";
+import { caseListWhere, type CaseQuery } from "../lib/case-filter.js";
 import { checkSpec } from "../lib/spec-guard.js";
 import { getObject, putObject } from "../lib/storage.js";
 import { casesWithMeta, evidenceDto, resultDtos, runDtos, runInclude, scriptDto, environmentDto } from "../lib/serialize.js";
@@ -20,7 +21,7 @@ import { CATEGORIES, PRIORITIES } from "../services/generation.js";
 import { heuristicApiCases, parseOpenApi } from "../services/openapi.js";
 import { cancel } from "../services/queue.js";
 import { complete, liveDir } from "../services/runner.js";
-import { generateScript, scriptForRun } from "../services/scriptgen.js";
+import { generateScript, pageStructureHint, scriptForRun } from "../services/scriptgen.js";
 import JSZip from "jszip";
 import { CONFIG_TS, envExample, FIXTURES_TS, isPlaywrightTestSpec, normaliseSpec, packageJson, readme } from "../services/playwright-project.js";
 
@@ -53,14 +54,7 @@ export async function testingRoutes(app: FastifyInstance) {
   app.get("/projects/:id/test-cases", async (req) => {
     const { id } = req.params as { id: string };
     await getProjectForUser(req.user, id);
-    const q = req.query as { search?: string; category?: string; priority?: string; status?: string };
-    const cases = await prisma.testCase.findMany({
-      where: {
-        projectId: id, ...(q.category ? { category: q.category } : {}), ...(q.priority ? { priority: q.priority } : {}), ...(q.status ? { status: q.status } : {}),
-        ...(q.search ? { OR: [{ title: { contains: q.search } }, { key: { contains: q.search } }, { description: { contains: q.search } }] } : {}),
-      },
-      orderBy: { createdAt: "asc" },
-    });
+    const cases = await prisma.testCase.findMany({ where: caseListWhere(id, req.query as CaseQuery), orderBy: { createdAt: "asc" } });
     return casesWithMeta(cases);
   });
 
@@ -68,14 +62,7 @@ export async function testingRoutes(app: FastifyInstance) {
   app.get("/projects/:id/test-cases/export.csv", async (req, reply) => {
     const { id } = req.params as { id: string };
     const project = await getProjectForUser(req.user, id);
-    const q = req.query as { search?: string; category?: string; priority?: string; status?: string };
-    const cases = await prisma.testCase.findMany({
-      where: {
-        projectId: id, ...(q.category ? { category: q.category } : {}), ...(q.priority ? { priority: q.priority } : {}), ...(q.status ? { status: q.status } : {}),
-        ...(q.search ? { OR: [{ title: { contains: q.search } }, { key: { contains: q.search } }, { description: { contains: q.search } }] } : {}),
-      },
-      orderBy: { createdAt: "asc" },
-    });
+    const cases = await prisma.testCase.findMany({ where: caseListWhere(id, req.query as CaseQuery), orderBy: { createdAt: "asc" } });
     const rows = [["ID", "Title", "Description", "Preconditions", "Steps", "Expected result", "Category", "Priority", "Status", "Source", "Version", "Last result"]];
     for (const c of await casesWithMeta(cases))
       rows.push([c.key, c.title, c.description, c.preconditions, (c.steps as { action: string; expected?: string }[]).map((st, i) => `${i + 1}. ${st.action}${st.expected ? ` → ${st.expected}` : ""}`).join("\n"),
@@ -200,9 +187,9 @@ export async function testingRoutes(app: FastifyInstance) {
 
   app.post("/test-cases/:id/scripts/generate", async (req) => {
     const tc = await caseForUser(req.user, (req.params as { id: string }).id);
-    if (!["APPROVED", "READY"].includes(tc.status)) throw badRequest("Approve the test case before generating an automation script");
+    // Drafts may have a script too (site scans attach them automatically); only running a check needs approval.
     const d = await prisma.discovery.findFirst({ where: { projectId: tc.projectId, status: "COMPLETED" }, orderBy: { createdAt: "desc" } });
-    const hint = d ? parse<{ pages?: { url: string; title: string; forms: unknown; buttons: string[] }[] }>(d.result, {}).pages?.slice(0, 6).map((p) => ({ url: p.url, title: p.title, forms: p.forms, buttons: p.buttons.slice(0, 15) })) : undefined;
+    const hint = d ? pageStructureHint(parse<{ pages?: { url: string; title: string; forms: unknown; buttons: string[] }[] }>(d.result, {}).pages) : undefined;
     return scriptDto(await generateScript(tc, req.user.fullName, hint));
   });
 
@@ -256,7 +243,7 @@ export async function testingRoutes(app: FastifyInstance) {
     return { ...dto, environment: run.environment ? environmentDto(run.environment) : null, results: await resultDtos(await fullResults({ testRunId: id })), discoveryId: discovery?.id ?? null };
   });
 
-  // Live view of an automated run: which tests are on screen in each worker slot right now.
+  // Live view of an automated run or site scan: what is on screen in each browser slot right now.
   app.get("/test-runs/:id/live", async (req) => {
     const { id } = req.params as { id: string };
     const run = await prisma.testRun.findFirst({ where: { id, project: { organisationId: req.user.organisationId } } });
@@ -267,7 +254,7 @@ export async function testingRoutes(app: FastifyInstance) {
       slot: Number(f.slice(1, -5)), ...parse<{ title?: string; state?: string; at?: number }>(await fs.readFile(path.join(dir, f), "utf8").catch(() => null), {}),
       hasFrame: files.includes(f.replace(".json", ".jpg")),
     })));
-    return { status: run.status, live: run.status === "RUNNING" && run.executionType === "AUTOMATED", slots: slots.sort((a, b) => a.slot - b.slot) };
+    return { status: run.status, live: run.status === "RUNNING" && ["AUTOMATED", "DISCOVERY"].includes(run.executionType), slots: slots.sort((a, b) => a.slot - b.slot) };
   });
 
   // MJPEG stream of one worker slot; usable directly as <img src>. Ends when the run's workspace is removed.
@@ -308,6 +295,8 @@ export async function testingRoutes(app: FastifyInstance) {
     if (!["QUEUED", "RUNNING", "IN_PROGRESS"].includes(run.status)) throw badRequest("Run is already finished");
     cancel(id);
     await prisma.testRun.update({ where: { id }, data: { status: "CANCELLED", completedAt: new Date() } });
+    // A scan that never left the queue won't run, so it is closed here; a running scan stops itself.
+    await prisma.discovery.updateMany({ where: { testRunId: id, status: "QUEUED" }, data: { status: "CANCELLED", completedAt: new Date() } });
     return { ok: true };
   });
 

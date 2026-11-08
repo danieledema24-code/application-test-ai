@@ -161,7 +161,7 @@ export function GenerateCasesModal({
           {!fixedProjectId && <ProjectSelect value={projectId} onChange={setProjectId} required />}
           <SelectField label="Source" value={source} onChange={(e) => setSource(e.target.value as Source)} options={SOURCES.map((s) => ({ value: s.value, label: s.label }))} />
           {source === "DISCOVERY" && projectId && !discoveryId && (
-            <p className="rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">No completed discovery for this project yet. Start one from the Discovery tab.</p>
+            <p className="rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">This project hasn’t been scanned yet. Start a scan from the Site scan tab.</p>
           )}
           <TextArea
             label={source === "DISCOVERY" ? "Anything specific to focus on? (optional)" : "Describe what to test"}

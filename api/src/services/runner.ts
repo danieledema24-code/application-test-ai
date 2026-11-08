@@ -301,7 +301,7 @@ export async function recoverInterruptedRuns(requeue: (type: "automated-run" | "
     await prisma.testResult.updateMany({ where: { testRunId: r.id, status: "NOT_EXECUTED" }, data: { status: "ERROR", errorMessage: "Worker stopped unexpectedly; the test did not complete" } });
     if (r.executionType === "DISCOVERY") {
       await prisma.testRun.update({ where: { id: r.id }, data: { status: "ERROR", completedAt: new Date() } });
-      await prisma.discovery.updateMany({ where: { testRunId: r.id, status: { in: ["RUNNING", "QUEUED"] } }, data: { status: "FAILED", summary: "Discovery interrupted by a worker restart." } });
+      await prisma.discovery.updateMany({ where: { testRunId: r.id, status: { in: ["RUNNING", "QUEUED"] } }, data: { status: "FAILED", summary: "The scan was interrupted because the server restarted." } });
     } else await complete(r.id);
   }
   const queued = await prisma.testRun.findMany({ where: { status: "QUEUED", executionType: { in: ["AUTOMATED", "API"] } } });

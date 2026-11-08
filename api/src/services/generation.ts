@@ -128,7 +128,7 @@ function fromPages(pages: DiscoveredPage[]): GeneratedCase[] {
       [`Open ${path}`, "The page responds without an error page, blank screen or browser warning"],
       [`Verify the page title contains "${p.title}"`, `The browser tab shows the title ${p.title}`],
       ...(heading ? [[`Verify the heading "${heading}" is displayed`, "The main heading is visible near the top of the page"] as Step] : []),
-    ], `The ${name} page opens with the correct title and its main content visible, and no errors are shown`,
+    ], `${name.replace(/^the /, "The ")} opens with the correct title and its main content visible, and no errors are shown`,
     [reachable], `Confirms that ${path} can be opened directly and renders its main content.`));
 
     if (heading) out.push(c("UI", "MEDIUM", `Main heading is visible on ${name}`, [

@@ -44,9 +44,26 @@ check("SSRF: metadata endpoint blocked", (await call("POST", "/projects", { name
 // AC-004
 r = await call("POST", `/projects/${project.id}/discovery`, { environmentId: env.id, maxPages: 10, useCredentials: true });
 check("start discovery", r.status === 200, r.data.error);
+const startedScan = r;
+check("second scan refused while one is running", (await call("POST", `/projects/${project.id}/discovery`, { environmentId: env.id })).status === 409);
+r = startedScan;
 const disc = await until(() => call("GET", `/discovery/${r.data.discoveryId}`).then((x) => x.data), (d) => ["COMPLETED", "FAILED"].includes(d.status));
 check("discovery completed", disc.status === "COMPLETED", `${disc.pages?.length} pages, ${disc.inaccessible?.length} inaccessible, authRequired=${disc.authRequired}`);
 check("discovery states limitations", disc.limitations.length > 0 && /not a complete/.test(disc.coverageNote));
+
+// SCAN-1: checks are written automatically once the scan completes, linked to the scan
+const gen = await until(() => call("GET", `/discovery/${disc.id}`).then((x) => x.data), (d) => ["DONE", "FAILED"].includes(d.generation?.status));
+check("checks written automatically after the scan", gen.status === "COMPLETED" && gen.generation.status === "DONE" && gen.generation.total > 0, JSON.stringify(gen.generation));
+const fromScan = (await call("GET", `/projects/${project.id}/test-cases?scan=${disc.id}`)).data;
+check("scan filter lists this scan's checks", fromScan.length === gen.generation.total && fromScan.every((c) => c.discoveryId === disc.id && c.status === "DRAFT"));
+check("automated scripts attached to drafts", fromScan.filter((c) => c.hasScript).length === gen.generation.withScript && gen.generation.withScript > 0, `${gen.generation.withScript} with script`);
+const retries = await Promise.all([1, 2].map(() => call("POST", `/discovery/${disc.id}/generate`)));
+r = retries.find((x) => x.status === 200);
+// A second click gets 409 while the first is still pending; if the first already finished it is accepted again.
+// Either way no duplicates are written (checked below).
+check("retry endpoint accepted (a click during writing gets 409)", r?.data.generation.status === "PENDING" && retries.every((x) => [200, 409].includes(x.status)), retries.map((x) => x.status).join());
+const regen = await until(() => call("GET", `/discovery/${disc.id}`).then((x) => x.data), (d) => ["DONE", "FAILED"].includes(d.generation?.status));
+check("retry adds no duplicates", regen.generation.status === "DONE" && (await call("GET", `/projects/${project.id}/test-cases?scan=${disc.id}`)).data.length === fromScan.length);
 
 // AC-005
 r = await call("POST", `/projects/${project.id}/test-cases/generate`, { source: "DISCOVERY", count: 15 });

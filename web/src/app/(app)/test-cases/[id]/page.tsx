@@ -91,7 +91,8 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
   const [busy, setBusy] = useState<null | "gen" | "save">(null);
   const [error, setError] = useState<unknown>(null);
   const latestId = scripts[0]?.id;
-  const canGenerate = tc.status === "APPROVED" || tc.status === "READY";
+  // Drafts can have a script (site scans attach them automatically); only running one needs approval.
+  const runnable = tc.status === "APPROVED" || tc.status === "READY";
 
   useEffect(() => {
     const latest = (tc.scripts || []).reduce<Script | null>((m, s) => (!m || s.version > m.version ? s : m), null);
@@ -152,7 +153,7 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
             >
               Download .spec.ts
             </Button>
-            <Button size="sm" variant="secondary" icon={<Sparkles className="h-4 w-4" aria-hidden />} loading={busy === "gen"} disabled={!canGenerate} onClick={generate} title={canGenerate ? undefined : "Approve the test case first"}>
+            <Button size="sm" variant="secondary" icon={<Sparkles className="h-4 w-4" aria-hidden />} loading={busy === "gen"} onClick={generate}>
               {scripts.length ? "Regenerate script" : "Generate script"}
             </Button>
             <Button size="sm" icon={<Save className="h-4 w-4" aria-hidden />} loading={busy === "save"} disabled={!dirty} onClick={save}>
@@ -162,7 +163,7 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
         }
       />
       <CardBody className="space-y-3">
-        {!canGenerate && <p className="text-sm text-fg-muted">Scripts can be generated once the test case is approved or ready.</p>}
+        {!runnable && <p className="text-sm text-fg-muted">Approve this check to run its automated test.</p>}
         {outdated && (
           <p className="rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">
             This script was written for test case v{viewing!.testCaseVersion}; the case is now v{tc.version}. Review or regenerate it.
@@ -196,7 +197,7 @@ function ScriptPanel({ tc, onChanged }: { tc: TestCaseDetail; onChanged: () => v
           spellCheck={false}
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder={canGenerate ? `Generate a script or paste a Playwright Test spec, e.g.\n\n${SCRIPT_PLACEHOLDER}` : ""}
+          placeholder={`Generate a script or paste a Playwright Test spec, e.g.\n\n${SCRIPT_PLACEHOLDER}`}
           className="bg-canvas text-fg placeholder:text-fg-subtle"
         />
         <p className="text-xs text-fg-muted">

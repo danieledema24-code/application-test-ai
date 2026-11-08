@@ -100,15 +100,22 @@ type Activity = { id; type: string /* RUN_PASSED, RUN_FAILED, DEFECT_CREATED, CA
 - `POST /projects/:id/discovery` `{ environmentId, maxPages?: number (default 15), useCredentials?: boolean }` → `{ discoveryId, runId }` (async; environment must be `authorised`, URL must pass SSRF guard)
 - `GET /projects/:id/discovery` → latest `DiscoverySummary | null`
 - `GET /discovery/:id` → `DiscoverySummary`
+- `POST /discovery/:id/generate` → `DiscoverySummary` with `generation.status = "PENDING"`: writes checks for a COMPLETED scan again (the "Try again" button). 409 while generation is already running; titles that already exist in the project are skipped.
+- When a scan COMPLETES with at least one page, the server writes up to 20 DRAFT checks from it (linked to the scan via `TestCase.discoveryId`) and attaches a Playwright script to each one it can fully automate. Nothing is approved or run. Failure leaves the scan COMPLETED with `generation.status = "FAILED"`.
+- While a scan runs, its browser streams frames like an automated run: `GET /test-runs/:runId/live` (`live: true`, slot 0) and `GET /test-runs/:runId/live/0`.
 ```ts
 type DiscoverySummary = { id; projectId; environmentId; status: "QUEUED"|"RUNNING"|"COMPLETED"|"FAILED"; startedAt; completedAt;
   pages: { url; title; status: number|null; depth; links: string[]; buttons: string[]; forms: { action; method; fields: { name; type; label; required }[] }[]; navItems: string[]; screenshotEvidenceId: string|null }[];
   inaccessible: { url; reason }[]; authRequired: boolean; limitations: string[];
-  workflows: { name; steps: string[] }[]; summary: string /* AI or heuristic; never claims full coverage */; coverageNote: string };
+  workflows: { name; steps: string[] }[]; summary: string /* AI or heuristic; never claims full coverage */; coverageNote: string;
+  testRunId: string|null; maxPages: number; current: { url; title } | null /* page being visited, RUNNING only */;
+  stoppedEarly: boolean /* FAILED because of an error (true) or because no page could be opened (false) */;
+  generation: null | { status: "PENDING"|"RUNNING"|"DONE"|"FAILED"; total: number /* checks linked to this scan */; withScript: number;
+    skippedDuplicates: number; done?: number /* checks written so far */; error?: string /* plain-English reason */ } };
 ```
 
 ## Test cases
-- `GET /projects/:id/test-cases?search=&category=&priority=&status=` → `TestCase[]`
+- `GET /projects/:id/test-cases?search=&category=&priority=&status=&scan=` → `TestCase[]` (`scan=<discoveryId>`: only checks written by that scan; `TestCase.discoveryId` links them). The CSV export takes the same filters.
 - `POST /projects/:id/test-cases` (manual create) `{ title, description, preconditions, steps, expectedResult, category, priority }` → `TestCase`
 - `POST /projects/:id/test-cases/generate` `{ source: "DISCOVERY" | "USER_STORY" | "REQUIREMENTS" | "DESCRIPTION" | "OPENAPI", text?: string, discoveryId?: string, categories?: Category[], count?: number }` → `{ generated: TestCase[], generatedBy: "claude"|"heuristic", notes: string }` (all created as DRAFT)
 - `GET /test-cases/:id` → `TestCase & { scripts: Script[], history: TestResult[] }`
@@ -117,7 +124,7 @@ type DiscoverySummary = { id; projectId; environmentId; status: "QUEUED"|"RUNNIN
 - `POST /test-cases/bulk-status` `{ ids: string[], status }`
 - `DELETE /test-cases/:id`
 - `POST /test-cases/:id/regenerate` → `TestCase` (AI rewrite of this case, back to DRAFT)
-- `POST /test-cases/:id/scripts/generate` `{ language?: "typescript" }` → `Script` (case must be APPROVED or READY)
+- `POST /test-cases/:id/scripts/generate` `{ language?: "typescript" }` → `Script` (drafts allowed; running still requires APPROVED or READY)
 - `PUT /test-cases/:id/scripts` `{ code }` → new `Script` version
 
 ## Test runs
