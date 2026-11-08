@@ -91,7 +91,7 @@ export type TestCase = {
   category: Category;
   priority: Priority;
   status: CaseStatus;
-  source: "AI" | "MANUAL" | "IMPORT";
+  source: "AI" | "RULE_BASED" | "MANUAL" | "IMPORT";
   aiGenerated: boolean;
   version: number;
   lastResult: ResultStatus | null;

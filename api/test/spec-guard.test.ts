@@ -121,10 +121,11 @@ test("rule-based scripts turn verify steps into real checks", () => {
     { action: "Verify the vibe is immaculate" },
   ]);
   assert.deepEqual(checkSpec(normaliseSpec(code)), { ok: true });
-  assert.match(code, /getByLabel\("Message", \{ exact: false \}\)\.first\(\)\.fill\(""\)/);
+  assert.match(code, /\(await field\("Message"\)\)\.fill\(""\)/);
+  assert.match(code, /const field = async \(name: string\)/, "label-or-placeholder helper is included");
   assert.match(code, /page\.locator\("form"\)\.or\(.*\)\.first\(\), "A message asks for Message"\)\.toBeVisible\(\)/);
   assert.match(code, /input\[type="password"\]:visible'\), .*\)\.toHaveCount\(0\)/);
-  assert.match(code, /for \(let i = 0; i < 5; i\+\+\) await page\.keyboard\.press\("Tab"\)/);
+  assert.match(code, /for \(let i = 0; i < 5; i\+\+\) \{ await page\.keyboard\.press\("Tab"\);/);
   assert.match(code, /framenavigated/);
   assert.match(code, /TODO: automate check — wording not recognised: Verify the vibe is immaculate/);
   assert.doesNotMatch(code, /getByRole\("button", \{ name: "Tab/);
@@ -152,13 +153,15 @@ test("rule-based generation turns a feature description into concrete cases", as
     "Submit Contact with valid data", '"Name" is required on Contact', '"Email" is required on Contact', '"Message" is required on Contact', "Invalid email address is rejected on Contact",
   ]);
   const msg = r.cases[3];
-  assert.deepEqual(msg.steps.map((s) => s.action), ["Open /contact", 'Enter "Jane Doe" in the "Name" field', 'Enter "jane.doe@example.com" in the "Email" field', 'Leave the "Message" field empty', "Submit the form", "Verify the form is not accepted"]);
+  assert.deepEqual(msg.steps.map((s) => s.action), ["Open http://x/contact in a new tab of the private window", "Open DevTools > Network and clear the log",
+    'Type "Jane Doe" into "Name"', 'Type "jane.doe@example.com" into "Email"', 'Leave "Message" empty', "Submit the form", "Check the Network panel and the address bar"]);
   for (const c of r.cases) assert.deepEqual(checkSpec(normaliseSpec(heuristicScript({ key: "TC-1", title: c.title, expectedResult: c.expectedResult }, c.steps))), { ok: true }, c.title);
 
   const login = await generateCases({ source: "USER_STORY", applicationUrl: "http://x", categories: all, pages: [],
     text: "As a registered customer I want to sign in with my email and password so that I can see my account. A wrong password shows an error." });
   assert.deepEqual(login.cases.map((c) => c.title), ["Sign in on the sign-in page with valid credentials", "Sign-in with a wrong password is refused on the sign-in page"]);
-  assert.equal(login.cases[0].steps[0].action, "Open /login");
+  assert.equal(login.cases[0].steps[0].action, "Open http://x/login in a new tab of the private window");
+  assert.match(login.cases[0].preconditions, /test account/);
 
   const vague = await generateCases({ source: "REQUIREMENTS", applicationUrl: "http://x", categories: all, pages: [], text: "Reports are exported every night to the archive." });
   assert.match(vague.cases[0].title, /^Manual check: /);
@@ -173,8 +176,8 @@ test("discovery cases name pages by path when the site reuses one title, and spo
   const r = await generateCases({ source: "DISCOVERY", applicationUrl: "https://x.example", categories: ["FUNCTIONAL", "POSITIVE", "NEGATIVE", "AUTHENTICATION", "FORM_VALIDATION"],
     pages: [page("/"), page("/auth/signin", [email, pwd]), page("/auth/signup", [{ name: "name", label: "Full Name", type: "text", required: true }, email, pwd])] });
   const titles = r.cases.map((c) => c.title);
-  assert.ok(titles.includes("The home page loads successfully"));
-  assert.ok(titles.includes("Submit login on the Sign-in page (/auth/signin) with valid data"));
-  assert.ok(titles.includes("Create an account on the Sign-up page (/auth/signup) with valid data"));
-  assert.ok(!titles.some((t) => /login.*Sign-up|invalid password.*Sign-up/i.test(t)), "sign-up is not treated as a login");
+  assert.ok(titles.includes("Home page loads successfully with its title"));
+  assert.ok(titles.includes("Registered user can sign in on the Sign-in page with a valid email and password"));
+  assert.ok(titles.includes("New visitor can create an account on the Sign-up page with valid details"));
+  assert.ok(!titles.some((t) => /sign in on the Sign-up|wrong password.*Sign-up/i.test(t)), "sign-up is not treated as a login");
 });

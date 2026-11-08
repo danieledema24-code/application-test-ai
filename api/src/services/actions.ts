@@ -6,7 +6,7 @@ import { parse, str } from "../lib/json.js";
 import { nextKey } from "../lib/keys.js";
 import { assertSafeTarget } from "../lib/ssrf.js";
 import { emitWebhook, recordActivity } from "./activity.js";
-import { generateCases, type GenerationSource } from "./generation.js";
+import { caseOrigin, generateCases, type GenerationSource } from "./generation.js";
 import { enqueue } from "./queue.js";
 import { generateReport } from "./reports.js";
 import type { DiscoveryResult } from "./discovery.js";
@@ -79,7 +79,7 @@ export async function generateCasesForProject(user: AuthUser, projectId: string,
   const created = [];
   for (const [i, c] of cases.entries())
     created.push(await prisma.testCase.create({
-      data: { key: keys[i], projectId, title: c.title, description: c.description, preconditions: c.preconditions, steps: str(c.steps), expectedResult: c.expectedResult, category: c.category, priority: c.priority, status: "DRAFT", source: "AI", aiGenerated: true },
+      data: { key: keys[i], projectId, title: c.title, description: c.description, preconditions: c.preconditions, steps: str(c.steps), expectedResult: c.expectedResult, category: c.category, priority: c.priority, status: "DRAFT", ...caseOrigin(generatedBy) },
     }));
   await recordActivity({ organisationId: user.organisationId, projectId, userId: user.id, viaAI, actionType: "CASES_GENERATED", message: `${created.length} draft test case(s) generated from ${input.source.toLowerCase().replace("_", " ")}`, link: `/projects/${projectId}?tab=cases` });
   return { created, generatedBy, notes };

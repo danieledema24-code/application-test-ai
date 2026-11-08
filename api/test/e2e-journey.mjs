@@ -69,15 +69,18 @@ check("retry adds no duplicates", regen.generation.status === "DONE" && (await c
 r = await call("POST", `/projects/${project.id}/test-cases/generate`, { source: "DISCOVERY", count: 15 });
 check("generate cases from discovery", r.status === 200 && r.data.generated.length > 0, `${r.data.generated?.length} cases via ${r.data.generatedBy}`);
 const cases = r.data.generated;
+const origin = r.data.generatedBy === "claude" ? "AI" : "RULE_BASED";
 check("generated cases are DRAFT", cases.every((c) => c.status === "DRAFT"));
+check("scan checks open absolute URLs", fromScan.every((c) => c.steps.filter((s) => /^Open (?!DevTools)/.test(s.action)).every((s) => s.action.startsWith(`Open ${TARGET}/`))));
 r = await call("POST", `/projects/${project.id}/test-cases/generate`, { source: "USER_STORY", text: "As a shopper I can send a message through the contact page so that support can reply to me." });
 check("generate cases from user story", r.status === 200 && r.data.generated.length > 0);
 const edited = await call("PATCH", `/test-cases/${cases[0].id}`, { title: `${cases[0].title} (reviewed)` });
 check("edit case bumps version", edited.data.version === 2);
 check("partial edit keeps other fields", edited.data.steps.length === cases[0].steps.length && edited.data.category === cases[0].category);
+check("edit keeps the original source label", edited.data.source === origin && edited.data.aiGenerated === (origin === "AI"), `${edited.data.source}, aiGenerated=${edited.data.aiGenerated}`);
 
 // Pick concrete cases for automation: page load + required-field validation on contact
-const pick = cases.filter((c) => /loads successfully|Required field validation on Contact|Main heading/i.test(c.title)).slice(0, 4);
+const pick = cases.filter((c) => /loads successfully|is not sent while|main heading/i.test(c.title)).slice(0, 4);
 r = await call("POST", `/projects/${project.id}/test-runs`, { executionType: "AUTOMATED", environmentId: env.id, testCaseIds: pick.map((c) => c.id) });
 check("unapproved cases cannot run", r.status === 400);
 await call("POST", "/test-cases/bulk-status", { ids: pick.map((c) => c.id), status: "APPROVED" });
@@ -107,7 +110,7 @@ const csv = await csvRes.text();
 check("test case CSV export", csvRes.status === 200 && csv.includes("Expected result") && csv.includes(cases[0].key));
 
 // AC-006 manual
-const manualCase = cases.find((c) => /Required field/i.test(c.title)) ?? cases[1];
+const manualCase = cases.find((c) => /is not sent while/i.test(c.title)) ?? cases[1];
 await call("POST", `/test-cases/${manualCase.id}/status`, { status: "READY" });
 r = await call("POST", `/projects/${project.id}/test-runs`, { executionType: "MANUAL", environmentId: env.id, testCaseIds: [manualCase.id] });
 check("start manual run", r.status === 200 && r.data.status === "IN_PROGRESS");

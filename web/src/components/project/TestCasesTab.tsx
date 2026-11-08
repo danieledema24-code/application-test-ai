@@ -340,7 +340,7 @@ export function TestCasesTab({ project, onChanged }: { project: ProjectDetail; o
                         </Link>
                         {c.hasScript && <Code2 className="h-3.5 w-3.5 text-fg-muted" aria-label="Has automation script" />}
                       </div>
-                      {c.aiGenerated && c.status === "DRAFT" && <AiDraftBadge className="mt-1" ruleBased={aiStatus?.enabled === false} />}
+                      {(c.aiGenerated || c.source === "RULE_BASED") && c.status === "DRAFT" && <AiDraftBadge className="mt-1" ruleBased={!c.aiGenerated || aiStatus?.enabled === false} />}
                     </Td>
                     <Td className="whitespace-nowrap text-fg">{humanize(c.category)}</Td>
                     <Td>
