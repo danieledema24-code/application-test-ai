@@ -5,7 +5,7 @@ import { withLock } from "../lib/lock.js";
 import { plural } from "../lib/text.js";
 import { recordActivity } from "./activity.js";
 import type { DiscoveryResult } from "./discovery.js";
-import { generateCases, type GeneratedCase } from "./generation.js";
+import { caseOrigin, generateCases, type GeneratedCase } from "./generation.js";
 import { isAutomatable, pageStructureHint, saveScript, writeScriptCode } from "./scriptgen.js";
 
 // Checks written automatically once a site scan completes (SCAN-1): draft test cases from the pages found,
@@ -93,7 +93,7 @@ async function writeChecks(discoveryId: string) {
       const tc = await prisma.testCase.create({
         data: {
           key: keys[i], projectId: d.projectId, discoveryId: d.id, title: c.title, description: c.description, preconditions: c.preconditions,
-          steps: str(c.steps), expectedResult: c.expectedResult, category: c.category, priority: c.priority, status: "DRAFT", source: "AI", aiGenerated: true,
+          steps: str(c.steps), expectedResult: c.expectedResult, category: c.category, priority: c.priority, status: "DRAFT", ...caseOrigin(generatedBy),
         },
       });
       // Only scripts that can run unaided are attached; the rest stay manual checks a person follows.

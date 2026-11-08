@@ -17,7 +17,7 @@ import { analyseFailure } from "../services/analysis.js";
 import { compareRuns, generateCasesForProject, startRun } from "../services/actions.js";
 import { DESTRUCTIVE, endpointToSpec, envCredentials, executeApi, requestSchema, secretValues } from "../services/api-runner.js";
 import { aiJSON } from "../services/ai.js";
-import { CATEGORIES, PRIORITIES } from "../services/generation.js";
+import { CATEGORIES, caseOrigin, PRIORITIES } from "../services/generation.js";
 import { heuristicApiCases, parseOpenApi } from "../services/openapi.js";
 import { cancel } from "../services/queue.js";
 import { complete, liveDir } from "../services/runner.js";
@@ -480,7 +480,7 @@ export async function testingRoutes(app: FastifyInstance) {
           key: keys[i], projectId: id, title: p.title, description: `Automated API check for ${p.endpoint.method} ${p.endpoint.path}`,
           preconditions: destructive ? "Run only against an environment where write requests are authorised." : "",
           steps: str([{ action: `Send ${p.endpoint.method} ${p.endpoint.path}${p.spec.omitAuth ? " without authentication" : p.spec.invalidAuth ? " with invalid credentials" : p.spec.body !== undefined ? " with the modified body" : ""}`, expected: p.expectedResult }]),
-          expectedResult: p.expectedResult, category: p.category, priority: p.priority, status: "DRAFT", source: "AI", aiGenerated: true,
+          expectedResult: p.expectedResult, category: p.category, priority: p.priority, status: "DRAFT", ...caseOrigin("heuristic"),
           apiEndpointId: p.endpoint.id, apiSpec: str(p.spec),
         },
       }));

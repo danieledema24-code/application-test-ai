@@ -17,10 +17,16 @@ import { isCancelled } from "./queue.js";
 import { liveDir } from "./runner.js";
 import { generateChecksForScan, generationDto } from "./scan-checks.js";
 
+// Optional members were added later; scans saved before then don't have them.
 export type DiscoveredPage = {
   url: string; title: string; status: number | null; depth: number; links: string[]; buttons: string[];
-  forms: { action: string; method: string; fields: { name: string; type: string; label: string; required: boolean }[] }[];
+  forms: {
+    action: string; method: string; submit?: string;
+    fields: { name: string; type: string; label: string; required: boolean; placeholder?: string; options?: string[] }[];
+  }[];
   navItems: string[]; headings: string[]; screenshotEvidenceId: string | null;
+  /** Header / navigation links with their targets (absolute URLs), and the page's h1 texts. */
+  navLinks?: { text: string; href: string }[]; h1?: string[];
 };
 
 export type DiscoveryResult = {
@@ -31,7 +37,10 @@ export type DiscoveryResult = {
 
 const SKIP_LINK = /logout|log-out|signout|sign-out|delete|remove|unsubscribe|\.(pdf|zip|png|jpe?g|gif|svg|mp4|docx?)$/i;
 
-type PageInfo = { title: string; links: string[]; buttons: string[]; navItems: string[]; headings: string[]; forms: DiscoveredPage["forms"]; hasPassword: boolean };
+type PageInfo = {
+  title: string; links: string[]; buttons: string[]; navItems: string[]; navLinks: { text: string; href: string }[]; headings: string[]; h1: string[];
+  forms: DiscoveredPage["forms"]; hasPassword: boolean;
+};
 
 // Passed to the browser as source text: tsx/esbuild would otherwise inject helpers (e.g. __name)
 // into a compiled function that do not exist inside the page.
@@ -49,14 +58,25 @@ const EXTRACT_SCRIPT = `(() => {
     buttons: uniq([...document.querySelectorAll("button, [role=button], input[type=submit], input[type=button]")]
       .map((b) => text(b) || b.value || b.getAttribute("aria-label") || "").filter(Boolean)).slice(0, 50),
     navItems: uniq([...document.querySelectorAll("nav a, header a, [role=navigation] a")].map(text).filter(Boolean)).slice(0, 40),
+    navLinks: [...document.querySelectorAll("nav a[href], header a[href], [role=navigation] a[href]")]
+      .map((a) => ({ text: text(a), href: a.href })).filter((l, i, all) => l.text && all.findIndex((x) => x.text === l.text) === i).slice(0, 40),
     headings: uniq([...document.querySelectorAll("h1, h2")].map(text).filter(Boolean)).slice(0, 15),
-    forms: [...document.querySelectorAll("form")].slice(0, 10).map((f) => ({
-      action: f.action, method: (f.method || "get").toUpperCase(),
-      fields: [...f.querySelectorAll("input, select, textarea")]
-        .filter((i) => !["hidden", "submit", "button"].includes(i.type))
-        .slice(0, 25)
-        .map((i) => ({ name: i.getAttribute("name") || i.getAttribute("id") || "", type: i.type || i.tagName.toLowerCase(), label: labelFor(i), required: Boolean(i.required) })),
-    })),
+    h1: uniq([...document.querySelectorAll("h1")].map(text).filter(Boolean)).slice(0, 5),
+    forms: [...document.querySelectorAll("form")].slice(0, 10).map((f) => {
+      const submit = f.querySelector("button[type=submit], input[type=submit], button:not([type])");
+      return {
+        action: f.action, method: (f.method || "get").toUpperCase(),
+        submit: submit ? (text(submit) || submit.value || submit.getAttribute("aria-label") || "") : "",
+        fields: [...f.querySelectorAll("input, select, textarea")]
+          .filter((i) => !["hidden", "submit", "button"].includes(i.type))
+          .slice(0, 25)
+          .map((i) => ({
+            name: i.getAttribute("name") || i.getAttribute("id") || "", type: i.type || i.tagName.toLowerCase(), label: labelFor(i), required: Boolean(i.required),
+            placeholder: (i.getAttribute("placeholder") || "").slice(0, 60),
+            ...(i.tagName === "SELECT" ? { options: [...i.options].map((o) => text(o)).filter(Boolean).slice(0, 10) } : {}),
+          })),
+      };
+    }),
     hasPassword: Boolean(document.querySelector("input[type=password]")),
   };
 })()`;
@@ -227,7 +247,7 @@ async function scanSite(d: Prisma.DiscoveryGetPayload<{ include: { project: true
         });
         result.pages.push({
           url: page.url(), title: info.title, status, depth, links: sameOrigin.slice(0, 60), buttons: info.buttons,
-          forms: info.forms, navItems: info.navItems, headings: info.headings, screenshotEvidenceId: ev?.id ?? null,
+          forms: info.forms, navItems: info.navItems, navLinks: info.navLinks, headings: info.headings, h1: info.h1, screenshotEvidenceId: ev?.id ?? null,
         });
         await progress({ url: page.url(), title: info.title });
         await live?.visiting(info.title || page.url());

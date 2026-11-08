@@ -7,7 +7,7 @@ import { Check, CheckCheck, Code2, Download, Eye, Pencil, RefreshCw, Save, Spark
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { fmtDateTime, fmtDuration, humanize, personName } from "@/lib/format";
-import type { Category, Priority, Script, TestCaseDetail, TestStep } from "@/lib/types";
+import type { AiStatus, Category, Priority, Script, TestCaseDetail, TestStep } from "@/lib/types";
 import { CATEGORIES, PRIORITIES } from "@/lib/types";
 import {
   Badge,
@@ -222,6 +222,7 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
   const router = useRouter();
   const toast = useToast();
   const { data: tc, error, isLoading, mutate } = useApi<TestCaseDetail>(`/test-cases/${id}`);
+  const { data: aiStatus } = useApi<AiStatus>("/ai/status");
   const [form, setForm] = useState<Form | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<unknown>(null);
@@ -324,7 +325,8 @@ export default function TestCasePage({ params }: { params: Promise<{ id: string 
             <Badge>{humanize(tc.category)}</Badge>
             <Badge>v{tc.version}</Badge>
             <span className="text-xs">Source: {humanize(tc.source)}</span>
-            {tc.aiGenerated && tc.status === "DRAFT" && <AiDraftBadge />}
+            {/* Rule-based drafts get the plain draft badge; older ones were stored as AI, so AI being off also counts. */}
+            {(tc.aiGenerated || tc.source === "RULE_BASED") && tc.status === "DRAFT" && <AiDraftBadge ruleBased={!tc.aiGenerated || aiStatus?.enabled === false} />}
             {tc.lastResult && (
               <span className="inline-flex items-center gap-1 text-xs">
                 Last result <StatusPill status={tc.lastResult} />

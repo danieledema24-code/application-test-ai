@@ -83,6 +83,9 @@ test("writes draft checks linked to the scan, with scripts for the automatable o
   assert.equal(g.done, linked.length);
   assert.equal(g.skippedDuplicates, 0);
   assert.ok(linked.every((c) => c.status === "DRAFT" && JSON.parse(c.steps).length > 0 && c.expectedResult));
+  // Rule-based checks are labelled as such (not as AI drafts) and open pages by their absolute URL.
+  assert.ok(linked.every((c) => c.source === "RULE_BASED" && !c.aiGenerated), "stored as rule-based");
+  assert.ok(linked.every((c) => JSON.parse(c.steps)[0].action.startsWith("Open https://shop.example.com/")), "absolute URLs");
   const scripted = linked.filter((c) => c.scripts.length);
   assert.equal(g.withScript, scripted.length);
   assert.ok(scripted.length > 0, "at least one automated script");
@@ -185,6 +188,16 @@ test("a finished scan writes its checks automatically and streams live frames wh
   assert.ok(g.total > 0);
   assert.equal(await prisma.testCase.count({ where: { discoveryId: scan.id } }), g.total);
   assert.equal(discoveryDto(d).current, null);
+  // The scan keeps what detailed checks need: h1, navigation targets, the submit button and field details.
+  const contact = discoveryDto(d).pages.find((p) => p.url.endsWith("/contact"))!;
+  const home = discoveryDto(d).pages.find((p) => !p.url.endsWith("/contact"))!;
+  assert.deepEqual(contact.h1, ["Contact us"]);
+  assert.equal(contact.forms[0].submit, "Send");
+  assert.equal(contact.forms[0].fields[0].placeholder, "");
+  assert.deepEqual(home.navLinks, [{ text: "Contact", href: `${base}/contact` }]);
+  const written = await prisma.testCase.findMany({ where: { discoveryId: scan.id }, include: { scripts: true } });
+  assert.ok(written.some((c) => c.steps.includes('Click \\"Send\\"')), "real submit button text is used");
+  assert.ok(written.filter((c) => c.scripts.length).length >= written.length - 1, "almost every check has a script");
 });
 
 test("a cancelled scan stays CANCELLED, keeps its pages and writes no checks", { timeout: 120_000 }, async (t) => {
