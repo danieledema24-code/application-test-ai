@@ -115,9 +115,13 @@ model Discovery {
   useCredentials Boolean  @default(false)
   result        String    @default("{}") // pages, inaccessible, workflows, limitations…
   summary       String    @default("")
+  // Checks written automatically once the scan completes: status, counts, error (see services/scan-checks.ts)
+  generation    String    @default("{}")
   startedAt     DateTime?
   completedAt   DateTime?
   createdAt     DateTime  @default(now())
+
+  testCases TestCase[]
 }
 
 model TestCase {
@@ -138,6 +142,8 @@ model TestCase {
   version        Int      @default(1)
   apiEndpointId  String?
   apiSpec        String? // request definition for API test cases (overrides the linked endpoint)
+  discoveryId    String? // the site scan that wrote this case, if any
+  discovery      Discovery? @relation(fields: [discoveryId], references: [id], onDelete: SetNull)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -145,6 +151,7 @@ model TestCase {
   results TestResult[]
 
   @@index([projectId])
+  @@index([discoveryId])
 }
 
 model Script {

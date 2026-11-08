@@ -8,8 +8,8 @@ const SECTIONS = [
     body: "Add the application URL, then confirm in Environments that you are authorised to test it. Production environments are read-only unless you explicitly allow destructive actions.",
   },
   {
-    title: "2. Discover the application",
-    body: "Discovery crawls pages, forms and navigation without submitting anything. Check the “Limitations / not covered” panel — discovery never guarantees full coverage.",
+    title: "2. Scan your site",
+    body: "The site scan opens your pages, forms and menus like a visitor would, without submitting anything, and then writes draft checks for what it found. Check the “Limitations / not covered” panel: a scan can miss pages, so it never covers everything.",
   },
   {
     title: "3. Generate and review test cases",

@@ -113,11 +113,11 @@ export function OverviewTab({ project, onNavigate }: { project: ProjectDetail; o
       </div>
       {project.discovery && (
         <Card>
-          <CardHeader title="Latest discovery" actions={<StatusPill status={project.discovery.status} />} />
+          <CardHeader title="Latest site scan" actions={<StatusPill status={project.discovery.status} />} />
           <CardBody>
-            <p className="text-sm text-fg">{project.discovery.summary || "Discovery in progress."}</p>
+            <p className="text-sm text-fg">{project.discovery.summary || "The scan is still running."}</p>
             <Button size="sm" variant="secondary" className="mt-3" onClick={() => onNavigate("discovery")}>
-              Open app map
+              Open the site scan
             </Button>
           </CardBody>
         </Card>

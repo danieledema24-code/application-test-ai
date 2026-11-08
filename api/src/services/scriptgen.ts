@@ -18,7 +18,12 @@ export const SPEC_CONTRACT = `Standard Playwright Test spec (TypeScript):
 
 const Schema = z.object({ code: z.string().describe("Complete TypeScript spec file source") });
 
-export async function generateScript(tc: TestCase, userName: string, discoveryHint?: unknown) {
+/** The page structure passed to the AI script writer: the first pages of a scan, trimmed. */
+export const pageStructureHint = (pages: { url: string; title: string; forms: unknown; buttons: string[] }[] | undefined) =>
+  pages?.slice(0, 6).map((p) => ({ url: p.url, title: p.title, forms: p.forms, buttons: p.buttons.slice(0, 15) }));
+
+/** Writes a spec for the case without saving it: AI when configured and its output passes the safety check, otherwise rule-based. */
+export async function writeScriptCode(tc: TestCase, discoveryHint?: unknown) {
   const steps = parse<{ action: string; expected?: string }[]>(tc.steps, []);
   const ai = await aiJSON({
     schema: Schema,
@@ -33,14 +38,27 @@ export async function generateScript(tc: TestCase, userName: string, discoveryHi
   });
   // AI output is checked like a hand-edited script; anything rejected falls back to the rule-based spec.
   const useAi = ai?.code && checkSpec(normaliseSpec(ai.code)).ok;
-  const code = useAi ? ai!.code : heuristicScript(tc, steps);
+  return { code: useAi ? ai!.code : heuristicScript(tc, steps), byAi: Boolean(useAi) };
+}
+
+/**
+ * True when a written script can run on its own: it passes the safety check and has no step the generator
+ * could not translate (those become "TODO: automate" errors that would always fail).
+ */
+export const isAutomatable = (code: string) => !/TODO: automate/.test(code) && checkSpec(normaliseSpec(code)).ok;
+
+export async function saveScript(tc: TestCase, code: string, createdBy: string) {
   const last = await prisma.script.findFirst({ where: { testCaseId: tc.id }, orderBy: { version: "desc" } });
   return prisma.script.create({
     data: {
-      testCaseId: tc.id, testCaseVersion: tc.version, version: (last?.version ?? 0) + 1, language: "playwright-test", code,
-      createdBy: useAi ? `AI (Claude) for ${userName}` : `Rule-based generator for ${userName}`,
+      testCaseId: tc.id, testCaseVersion: tc.version, version: (last?.version ?? 0) + 1, language: "playwright-test", code, createdBy,
     },
   });
+}
+
+export async function generateScript(tc: TestCase, userName: string, discoveryHint?: unknown) {
+  const { code, byAi } = await writeScriptCode(tc, discoveryHint);
+  return saveScript(tc, code, byAi ? `AI (Claude) for ${userName}` : `Rule-based generator for ${userName}`);
 }
 
 const q = (s: string) => JSON.stringify(s);

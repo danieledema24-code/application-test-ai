@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import { plural } from "@/lib/format";
 import type { ProjectDetail, TestCase, TestRun } from "@/lib/types";
 import { Button, Checkbox, InlineError, Modal, SelectField, StatusPill, TextField, useToast, inputClass } from "@/components/ui";
 import { ProjectSelect } from "./ProjectSelect";
@@ -71,6 +72,8 @@ export function NewRunModal({
   }, [open, cases]);
 
   const env = project?.environments.find((e) => e.id === envId);
+  // Checks without an automated test get a rule-based one at run time, which may not cover every step.
+  const withoutScript = type === "AUTOMATED" ? eligible.filter((c) => selected.has(c.id) && !c.hasScript).length : 0;
   const allSelected = eligible.length > 0 && eligible.every((c) => selected.has(c.id));
 
   function toggle(id: string) {
@@ -192,6 +195,11 @@ export function NewRunModal({
                 </ul>
               )}
               <p className="mt-1 text-xs text-fg-muted">{eligible.filter((c) => selected.has(c.id)).length} selected</p>
+              {withoutScript > 0 && (
+                <p className="mt-1 text-xs text-fg-muted">
+                  {plural(withoutScript, "selected check")} {withoutScript === 1 ? "has" : "have"} no automated test yet. We’ll try to write one when the run starts; if a step can’t be automated, that check shows as an error and a person can follow its steps in a manual run instead.
+                </p>
+              )}
             </>
           )}
         </fieldset>

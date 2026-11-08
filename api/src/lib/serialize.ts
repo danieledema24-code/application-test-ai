@@ -54,7 +54,7 @@ export const caseDto = (c: TestCase, extra: { lastResult?: string | null; hasScr
   id: c.id, key: c.key, projectId: c.projectId, title: c.title, description: c.description,
   preconditions: c.preconditions, steps: parse(c.steps, []), expectedResult: c.expectedResult,
   category: c.category, priority: c.priority, status: c.status, source: c.source, aiGenerated: c.aiGenerated,
-  version: c.version, apiEndpointId: c.apiEndpointId, lastResult: extra.lastResult ?? null,
+  version: c.version, apiEndpointId: c.apiEndpointId, discoveryId: c.discoveryId, lastResult: extra.lastResult ?? null,
   hasScript: extra.hasScript ?? false, createdAt: c.createdAt, updatedAt: c.updatedAt,
 });
 

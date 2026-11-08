@@ -11,7 +11,12 @@ import { deletePrefix } from "../lib/storage.js";
 import { environmentDto, projectDto, projectStats, runDtos, runInclude } from "../lib/serialize.js";
 import { audit, recordActivity } from "../services/activity.js";
 import { discoveryDto } from "../services/discovery.js";
-import { enqueue } from "../services/queue.js";
+import { withLock } from "../lib/lock.js";
+import { generationDto } from "../services/scan-checks.js";
+
+/** Generation JSON that is still waiting or being written (stored as text, see services/scan-checks.ts). */
+const GENERATION_BUSY = [{ generation: { contains: '"status":"PENDING"' } }, { generation: { contains: '"status":"RUNNING"' } }];
+import { enqueue, isQueued } from "../services/queue.js";
 
 const ENV_NAMES = ["DEVELOPMENT", "STAGING", "PRODUCTION"] as const;
 const url = z.string().trim().pipe(z.url({ protocol: /^https?$/, error: "Enter a full http(s) URL" }));
@@ -34,6 +39,33 @@ function mergeCredentials(stored: string | null, update: Record<string, string |
 /** The remote browser endpoint is network-reachable infrastructure, so it gets the same SSRF guard as targets. */
 async function checkCredentials(c: z.infer<typeof credentials> | undefined) {
   if (c?.playwrightWsEndpoint) await assertSafeTarget(c.playwrightWsEndpoint.replace(/^ws/, "http"));
+}
+
+/**
+ * Whether a scan (or the check writing after it) is really in progress for the project. Scans the worker no
+ * longer knows about (lost in a crash, or their site was deleted) are closed out here instead of blocking
+ * every future scan.
+ */
+export async function scanInProgress(projectId: string) {
+  const open = await prisma.discovery.findMany({ where: { projectId, OR: [{ status: { in: ["QUEUED", "RUNNING"] } }, { status: "COMPLETED", OR: GENERATION_BUSY }] } });
+  let busy = false;
+  for (const d of open) {
+    const envExists = (await prisma.environment.count({ where: { id: d.environmentId } })) > 0;
+    if (envExists && isQueued(d.id)) {
+      busy = true;
+      continue;
+    }
+    const reason = envExists ? "The scan was interrupted before it finished." : "The site was removed before the scan could finish.";
+    if (d.status === "COMPLETED") {
+      const g = generationDto(d.generation);
+      await prisma.discovery.update({ where: { id: d.id }, data: { generation: str({ ...g, status: "FAILED", error: "Writing the checks was interrupted" }) } });
+    } else {
+      const r = parse<{ limitations?: string[] }>(d.result, {});
+      await prisma.discovery.update({ where: { id: d.id }, data: { status: "FAILED", summary: reason, completedAt: new Date(), result: str({ ...r, current: undefined, limitations: [...(r.limitations ?? []), reason], stoppedEarly: true }) } });
+      if (d.testRunId) await prisma.testRun.updateMany({ where: { id: d.testRunId, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "ERROR", completedAt: new Date() } });
+    }
+  }
+  return busy;
 }
 
 export async function projectRoutes(app: FastifyInstance) {
@@ -189,10 +221,17 @@ export async function projectRoutes(app: FastifyInstance) {
     if (!env) throw notFound("Environment");
     if (!env.authorised) throw new HttpError(409, `Confirm that you are authorised to test ${env.baseUrl} before running discovery (Environments tab).`);
     await assertSafeTarget(env.baseUrl);
-    const [key] = await nextKey(req.user.organisationId, "run");
-    const run = await prisma.testRun.create({ data: { key, projectId: id, name: `Discovery of ${env.baseUrl}`, executionType: "DISCOVERY", environmentId: env.id, initiatedById: req.user.id } });
-    const d = await prisma.discovery.create({ data: { projectId: id, environmentId: env.id, maxPages: body.maxPages, useCredentials: body.useCredentials, testRunId: run.id } });
-    enqueue({ type: "discovery", id: d.id });
+    // One scan per project at a time, including the check writing that follows it. The check and the create
+    // happen under one lock so two clicks can't both start a scan.
+    const { run, d } = await withLock(`scan-start:${id}`, async () => {
+      if (await scanInProgress(id)) throw new HttpError(409, "A scan of this site is already in progress. Wait for it to finish, then scan again.");
+      const [key] = await nextKey(req.user.organisationId, "run");
+      const run = await prisma.testRun.create({ data: { key, projectId: id, name: `Discovery of ${env.baseUrl}`, executionType: "DISCOVERY", environmentId: env.id, initiatedById: req.user.id } });
+      const d = await prisma.discovery.create({ data: { projectId: id, environmentId: env.id, maxPages: body.maxPages, useCredentials: body.useCredentials, testRunId: run.id } });
+      // Enqueued inside the lock so the next request sees this scan as in progress, not stale.
+      enqueue({ type: "discovery", id: d.id });
+      return { run, d };
+    });
     await audit(req.user.organisationId, req.user.id, "discovery.started", env.baseUrl);
     return { discoveryId: d.id, runId: run.id };
   });
@@ -209,5 +248,24 @@ export async function projectRoutes(app: FastifyInstance) {
     const d = await prisma.discovery.findFirst({ where: { id, project: { organisationId: req.user.organisationId } } });
     if (!d) throw notFound("Discovery");
     return discoveryDto(d);
+  });
+
+  // "Try again" after automatic check writing failed (or to write checks for an older scan). Duplicates are skipped.
+  app.post("/discovery/:id/generate", async (req) => {
+    const { id } = req.params as { id: string };
+    const d = await prisma.discovery.findFirst({ where: { id, project: { organisationId: req.user.organisationId } } });
+    if (!d) throw notFound("Discovery");
+    if (d.status !== "COMPLETED") throw badRequest("The scan has to finish before checks can be written");
+    if (!parse<{ pages?: unknown[] }>(d.result, {}).pages?.length) throw badRequest("The scan found no pages to write checks for");
+    // Claimed atomically: of two clicks at once, only one moves the scan to PENDING; the other gets 409.
+    const claimed = await prisma.discovery.updateMany({
+      where: { id, status: "COMPLETED", NOT: GENERATION_BUSY },
+      data: { generation: str({ status: "PENDING", total: 0, withScript: 0, skippedDuplicates: 0 }) },
+    });
+    if (!claimed.count) throw new HttpError(409, "Checks for this scan are already being written");
+    const updated = await prisma.discovery.findUniqueOrThrow({ where: { id } });
+    enqueue({ type: "scan-checks", id });
+    await audit(req.user.organisationId, req.user.id, "discovery.generate", id);
+    return discoveryDto(updated);
   });
 }

@@ -96,6 +96,8 @@ export type TestCase = {
   version: number;
   lastResult: ResultStatus | null;
   hasScript: boolean;
+  /** The site scan that wrote this check, if any. */
+  discoveryId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -331,13 +333,30 @@ export type DiscoveryPage = {
   screenshotEvidenceId: string | null;
 };
 
+/** Checks written automatically after a scan completes (null until a scan with pages completes). */
+export type ScanGeneration = {
+  status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+  total: number;
+  withScript: number;
+  skippedDuplicates: number;
+  done?: number;
+  error?: string;
+};
+
 export type DiscoverySummary = {
   id: string;
   projectId: string;
   environmentId: string;
-  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
   startedAt: string | null;
   completedAt: string | null;
+  testRunId: string | null;
+  maxPages: number;
+  /** The page the scan is on right now (only while RUNNING). */
+  current: { url: string; title: string } | null;
+  /** FAILED because something broke (true) or because no page could be opened (false). */
+  stoppedEarly: boolean;
+  generation: ScanGeneration | null;
   pages: DiscoveryPage[];
   inaccessible: { url: string; reason: string }[];
   authRequired: boolean;

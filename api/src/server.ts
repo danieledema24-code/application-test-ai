@@ -15,6 +15,7 @@ import { assistantRoutes } from "./routes/assistant.js";
 import { enqueue, registerHandler } from "./services/queue.js";
 import { executeApiRun, executeAutomatedRun, recoverInterruptedRuns } from "./services/runner.js";
 import { runDiscovery } from "./services/discovery.js";
+import { generateChecksForScan, recoverInterruptedGeneration } from "./services/scan-checks.js";
 import { aiStatus } from "./services/ai.js";
 
 export async function buildApp() {
@@ -64,11 +65,13 @@ export async function buildApp() {
 registerHandler("automated-run", (job) => executeAutomatedRun(job.id));
 registerHandler("api-run", (job) => executeApiRun(job.id));
 registerHandler("discovery", (job) => runDiscovery(job.id));
+registerHandler("scan-checks", (job) => generateChecksForScan(job.id));
 
 const isMain = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("server.ts");
 if (isMain) {
   const app = await buildApp();
   await recoverInterruptedRuns((type, id) => enqueue({ type, id }));
+  await recoverInterruptedGeneration();
   for (const d of await prisma.discovery.findMany({ where: { status: "QUEUED" } })) enqueue({ type: "discovery", id: d.id });
   await app.listen({ port: config.port, host: "127.0.0.1" });
   app.log.info(`AI: ${aiStatus().enabled ? `enabled (${aiStatus().model})` : "not configured — using labelled heuristic fallbacks"}`);
