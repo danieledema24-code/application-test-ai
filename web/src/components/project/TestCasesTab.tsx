@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { CheckCheck, Code2, Download, FileSpreadsheet, Plus, Search, Sparkles, PlayCircle } from "lucide-react";
 import { api, buildQuery, downloadFile } from "@/lib/api";
@@ -93,16 +94,17 @@ function NewCaseModal({ projectId, open, onClose, onCreated }: { projectId: stri
   );
 }
 
-export function TestCasesTab({ project }: { project: ProjectDetail }) {
+export function TestCasesTab({ project, onChanged }: { project: ProjectDetail; onChanged?: () => void }) {
   const toast = useToast();
   const { data: aiStatus } = useApi<AiStatus>("/ai/status");
-  const generateLabel = aiStatus?.enabled === false ? "Generate test cases" : "Generate with AI";
+  const generateLabel = aiStatus?.enabled === false ? "Suggest checks" : "Suggest checks with AI";
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [priority, setPriority] = useState("");
   const [status, setStatus] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [modal, setModal] = useState<null | "generate" | "new" | "run">(null);
+  // ?generate=1 (from the discovery map) opens the generator straight away.
+  const [modal, setModal] = useState<null | "generate" | "new" | "run">(useSearchParams().get("generate") ? "generate" : null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const { data, error, isLoading, mutate } = useApi<TestCase[]>(
     `/projects/${project.id}/test-cases`,
@@ -114,17 +116,33 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
   const selectedVisible = visibleIds.filter((id) => selected.has(id));
   const allSelected = visibleIds.length > 0 && selectedVisible.length === visibleIds.length;
 
+  // The selection is kept so "Approve" can be followed straight away by "Run selected".
   async function bulk(newStatus: "APPROVED" | "READY") {
     setBulkBusy(true);
     try {
       await api("/test-cases/bulk-status", { body: { ids: selectedVisible, status: newStatus } });
       toast(`${selectedVisible.length} test case${selectedVisible.length === 1 ? "" : "s"} ${newStatus === "APPROVED" ? "approved" : "marked ready"}`);
-      setSelected(new Set());
       await mutate();
+      onChanged?.();
+      return true;
     } catch (e) {
       toast(e instanceof Error ? e.message : "Bulk update failed", "error");
+      return false;
     } finally {
       setBulkBusy(false);
+    }
+  }
+
+  async function approveAndRun(ids: string[]) {
+    try {
+      await api("/test-cases/bulk-status", { body: { ids, status: "APPROVED" } });
+      toast(`${ids.length} checks approved`);
+      setSelected(new Set(ids));
+      await mutate();
+      onChanged?.();
+      setModal("run");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Approve failed", "error");
     }
   }
 
@@ -158,7 +176,7 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-fg-muted">AI-generated cases start as drafts. Approve them before they can be run.</p>
+        <p className="text-sm text-fg-muted">Suggested checks start as drafts. Tick the ones that make sense, then click <span className="text-fg">Approve and run</span>.</p>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" icon={<Plus className="h-4 w-4" aria-hidden />} onClick={() => setModal("new")}>
             New test case
@@ -202,13 +220,16 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
         {selectedVisible.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 border-b border-accent/30 bg-accent-soft/70 px-4 py-2.5" role="region" aria-label="Bulk actions">
             <span className="text-sm font-medium text-fg-strong">{selectedVisible.length} selected</span>
+            <Button size="sm" icon={<PlayCircle className="h-4 w-4" aria-hidden />} loading={bulkBusy} onClick={async () => (await bulk("APPROVED")) && setModal("run")}>
+              Approve and run
+            </Button>
             <Button size="sm" variant="success" icon={<CheckCheck className="h-4 w-4" aria-hidden />} loading={bulkBusy} onClick={() => bulk("APPROVED")}>
               Approve
             </Button>
             <Button size="sm" variant="secondary" loading={bulkBusy} onClick={() => bulk("READY")}>
               Mark ready
             </Button>
-            <Button size="sm" variant="secondary" icon={<PlayCircle className="h-4 w-4" aria-hidden />} onClick={() => setModal("run")}>
+            <Button size="sm" variant="secondary" onClick={() => setModal("run")}>
               Run selected
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
@@ -265,7 +286,7 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
                         </Link>
                         {c.hasScript && <Code2 className="h-3.5 w-3.5 text-fg-muted" aria-label="Has automation script" />}
                       </div>
-                      {c.aiGenerated && c.status === "DRAFT" && <AiDraftBadge className="mt-1" />}
+                      {c.aiGenerated && c.status === "DRAFT" && <AiDraftBadge className="mt-1" ruleBased={aiStatus?.enabled === false} />}
                     </Td>
                     <Td className="whitespace-nowrap text-fg">{humanize(c.category)}</Td>
                     <Td>
@@ -283,7 +304,7 @@ export function TestCasesTab({ project }: { project: ProjectDetail }) {
           )}
         </DataState>
       </Card>
-      <GenerateCasesModal open={modal === "generate"} onClose={() => setModal(null)} projectId={project.id} onGenerated={() => mutate()} />
+      <GenerateCasesModal open={modal === "generate"} onClose={() => setModal(null)} projectId={project.id} onGenerated={() => { mutate(); onChanged?.(); }} onApproveAndRun={approveAndRun} />
       <NewCaseModal open={modal === "new"} onClose={() => setModal(null)} projectId={project.id} onCreated={() => mutate()} />
       <NewRunModal open={modal === "run"} onClose={() => setModal(null)} projectId={project.id} preselectedCaseIds={selectedVisible} />
     </div>

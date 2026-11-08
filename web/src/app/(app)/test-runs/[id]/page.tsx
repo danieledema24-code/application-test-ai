@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { Bot, ChevronDown, ChevronRight, FileText, GitCompare, Square, CheckCircle2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
@@ -30,6 +30,10 @@ const ACTIVE = ["QUEUED", "RUNNING"];
 
 function ResultRow({ result, run, onChanged, defaultOpen }: { result: TestResult; run: TestRunDetail; onChanged: () => void; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
+  // Rows appear while the run is still going, so open them once a result says they should be.
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
   const panelId = `result-${result.id}`;
   return (
     <li className="border-b border-line last:border-0">
@@ -78,8 +82,12 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
   const active = ACTIVE.includes(run.status);
   const manualInProgress = run.executionType === "MANUAL" && run.status === "IN_PROGRESS";
   const results = run.results || [];
-  const shown = filter === "ALL" ? results : results.filter((r) => r.status === filter);
+  // Problems first: they are what the reader came for.
+  const isProblem = (st: string) => st === "FAILED" || st === "ERROR";
+  const shown = (filter === "ALL" ? results : results.filter((r) => r.status === filter)).slice().sort((a, b) => Number(isProblem(b.status)) - Number(isProblem(a.status)));
   const counts = results.reduce<Record<string, number>>((m, r) => ({ ...m, [r.status]: (m[r.status] || 0) + 1 }), {});
+  const problems = (counts.FAILED || 0) + (counts.ERROR || 0);
+  const finished = !active && run.status !== "CANCELLED" && results.length > 0;
 
   async function action(kind: "cancel" | "complete") {
     setBusy(true);
@@ -116,7 +124,7 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
         }
         description={
           <span className="flex flex-wrap items-center gap-2">
-            <StatusPill status={run.status} />
+            <StatusPill status={run.status} label={finished && problems ? `Finished · ${problems} problem${problems === 1 ? "" : "s"}` : undefined} />
             <Badge>{humanize(run.executionType)}</Badge>
             {run.environmentName && <StatusPill status={run.environmentName} dot={false} />}
             <span className="inline-flex items-center gap-1.5 text-xs">
@@ -156,6 +164,21 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
       <Card>
         <CardBody className="grid gap-6 lg:grid-cols-[1fr_auto]">
           <div>
+            {finished && (
+              <div className="mb-4">
+                <p className={`text-lg font-semibold ${problems ? "text-red-300" : "text-emerald-300"}`}>
+                  {problems
+                    ? `${problems} problem${problems === 1 ? "" : "s"} found in ${results.length} check${results.length === 1 ? "" : "s"}`
+                    : `All ${results.length} check${results.length === 1 ? "" : "s"} passed`}
+                </p>
+                <p className="text-sm text-fg-muted">
+                  {counts.BLOCKED ? `${counts.BLOCKED} check${counts.BLOCKED === 1 ? "" : "s"} couldn’t run (see Blocked). ` : ""}
+                  {problems
+                    ? "Each problem below shows what we expected and what actually happened, with screenshots."
+                    : "Nothing broke. Run these again after your next change to make sure it stays that way."}
+                </p>
+              </div>
+            )}
             <SummaryBar s={run.summary} />
             {active && (
               <p className="mt-3 text-xs text-fg-muted" role="status">
@@ -220,7 +243,7 @@ export default function TestRunPage({ params }: { params: Promise<{ id: string }
         ) : (
           <ul>
             {shown.map((r) => (
-              <ResultRow key={r.id} result={r} run={run} onChanged={() => mutate()} defaultOpen={results.length === 1} />
+              <ResultRow key={r.id} result={r} run={run} onChanged={() => mutate()} defaultOpen={results.length === 1 || (isProblem(r.status) && problems <= 3)} />
             ))}
           </ul>
         )}

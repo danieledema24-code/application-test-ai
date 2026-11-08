@@ -146,6 +146,12 @@ export async function executeAutomatedRun(runId: string) {
         await finishResult(run, result, { status: "ERROR", errorMessage: `Script not run: ${problem}`, actualResult: `Script not run: ${problem}`, scriptVersion: script.version });
         continue;
       }
+      // A sign-in check without a saved login can only fail; say what is missing instead of reporting a problem.
+      if (!creds.username && /process\.env\.TEST_(USERNAME|PASSWORD)/.test(code)) {
+        const message = "Needs a test login: add a username and password for this site under Sites & logins, then run it again.";
+        await finishResult(run, result, { status: "BLOCKED", errorMessage: message, actualResult: message, scriptVersion: script.version });
+        continue;
+      }
       const file = `${tc.key}.spec.ts`;
       await fs.writeFile(path.join(workDir, "tests", file), code);
       byFile.set(file, { result, script });

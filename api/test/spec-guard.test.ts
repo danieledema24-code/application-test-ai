@@ -163,3 +163,18 @@ test("rule-based generation turns a feature description into concrete cases", as
   const vague = await generateCases({ source: "REQUIREMENTS", applicationUrl: "http://x", categories: all, pages: [], text: "Reports are exported every night to the archive." });
   assert.match(vague.cases[0].title, /^Manual check: /);
 });
+
+test("discovery cases name pages by path when the site reuses one title, and spot sign-up forms", async () => {
+  const { generateCases } = await import("../src/services/generation.js");
+  const page = (path: string, fields: { name: string; label: string; type: string; required: boolean }[] = []) => ({
+    url: `https://x.example${path}`, title: "Acme – Land Interviews Faster", status: 200, depth: 1, links: [], buttons: [], navItems: [], headings: [], screenshotEvidenceId: null,
+    forms: fields.length ? [{ action: path, method: "post", fields }] : [] });
+  const email = { name: "email", label: "Email Address", type: "email", required: true }, pwd = { name: "password", label: "Password", type: "password", required: true };
+  const r = await generateCases({ source: "DISCOVERY", applicationUrl: "https://x.example", categories: ["FUNCTIONAL", "POSITIVE", "NEGATIVE", "AUTHENTICATION", "FORM_VALIDATION"],
+    pages: [page("/"), page("/auth/signin", [email, pwd]), page("/auth/signup", [{ name: "name", label: "Full Name", type: "text", required: true }, email, pwd])] });
+  const titles = r.cases.map((c) => c.title);
+  assert.ok(titles.includes("The home page loads successfully"));
+  assert.ok(titles.includes("Submit login on the Sign-in page (/auth/signin) with valid data"));
+  assert.ok(titles.includes("Create an account on the Sign-up page (/auth/signup) with valid data"));
+  assert.ok(!titles.some((t) => /login.*Sign-up|invalid password.*Sign-up/i.test(t)), "sign-up is not treated as a login");
+});

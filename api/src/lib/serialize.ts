@@ -33,8 +33,9 @@ export const projectDto = (p: Project & { environments?: Environment[] }) => ({
 });
 
 export async function projectStats(projectId: string) {
-  const [testCases, openDefects, lastRun, counts] = await Promise.all([
+  const [testCases, runnableCases, openDefects, lastRun, counts] = await Promise.all([
     prisma.testCase.count({ where: { projectId } }),
+    prisma.testCase.count({ where: { projectId, status: { in: ["APPROVED", "READY"] } } }),
     prisma.defect.count({ where: { projectId, status: { notIn: ["CLOSED", "FIXED"] } } }),
     prisma.testRun.findFirst({ where: { projectId, executionType: { not: "DISCOVERY" } }, orderBy: { createdAt: "desc" } }),
     prisma.testResult.groupBy({ by: ["status"], where: { testRun: { projectId } }, _count: true }),
@@ -42,7 +43,7 @@ export async function projectStats(projectId: string) {
   const by = Object.fromEntries(counts.map((c) => [c.status, c._count]));
   const decided = (by.PASSED ?? 0) + (by.FAILED ?? 0) + (by.ERROR ?? 0);
   return {
-    testCases, openDefects,
+    testCases, runnableCases, openDefects,
     lastRunAt: lastRun?.completedAt ?? lastRun?.createdAt ?? null,
     lastRunStatus: lastRun?.status ?? null,
     passRate: decided ? Math.round(((by.PASSED ?? 0) / decided) * 1000) / 10 : null,

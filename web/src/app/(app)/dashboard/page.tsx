@@ -55,6 +55,32 @@ export default function DashboardPage() {
   const activity = useApi<Activity[]>("/activity", { limit: 20 });
   const d = dash.data;
 
+  // A brand-new workspace gets one clear thing to do instead of empty charts and five quick actions.
+  if (d && d.totals.projects === 0)
+    return (
+      <>
+        <PageHeader title={`Welcome${user?.fullName ? `, ${user.fullName.split(" ")[0]}` : ""}`} description="Let’s check your first site." />
+        <Card className="mx-auto max-w-2xl p-8 text-center">
+          <h2 className="text-xl font-semibold text-fg-strong">Test your website in a few minutes</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-fg-muted">
+            Paste your site’s address. We scan its pages and forms, suggest checks, and run them in a real browser. No testing experience needed.
+          </p>
+          <ol className="mx-auto mt-6 grid max-w-lg gap-3 text-left text-sm text-fg sm:grid-cols-3">
+            {["Paste your site’s address", "Approve the checks we suggest", "Get plain pass / fail results"].map((t, i) => (
+              <li key={t} className="flex gap-2 rounded-lg border border-line p-3">
+                <span className="font-semibold text-accent">{i + 1}</span>
+                {t}
+              </li>
+            ))}
+          </ol>
+          <Button className="mt-6" icon={<FolderPlus className="h-4 w-4" aria-hidden />} onClick={() => setModal("project")}>
+            Test a site
+          </Button>
+        </Card>
+        <NewProjectModal open={modal === "project"} onClose={() => setModal(null)} />
+      </>
+    );
+
   return (
     <>
       <PageHeader
@@ -62,7 +88,7 @@ export default function DashboardPage() {
         description="Overview of quality across your workspace."
         actions={
           <Button icon={<FolderPlus className="h-4 w-4" aria-hidden />} onClick={() => setModal("project")}>
-            Create project
+            Test a new site
           </Button>
         }
       />
@@ -78,7 +104,7 @@ export default function DashboardPage() {
               <Kpi label="Projects" value={d.totals.projects} icon={<FolderKanban className="h-5 w-5" aria-hidden />} />
               <Kpi label="Tests executed" value={d.totals.testsExecuted} icon={<PlayCircle className="h-5 w-5" aria-hidden />} />
               <Kpi label="Pass rate" value={fmtPct(d.totals.passRate)} icon={<CheckCircle2 className="h-5 w-5" aria-hidden />} hint="Recorded results" />
-              <Kpi label="Open defects" value={d.totals.openDefects} icon={<Bug className="h-5 w-5" aria-hidden />} />
+              <Kpi label="Open bugs" value={d.totals.openDefects} icon={<Bug className="h-5 w-5" aria-hidden />} />
             </>
           ) : (
             [0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-[118px] rounded-xl" />)
@@ -196,7 +222,7 @@ export default function DashboardPage() {
                   <Th>Type</Th>
                   <Th>Last run</Th>
                   <Th>Latest status</Th>
-                  <Th className="text-right">Open defects</Th>
+                  <Th className="text-right">Open bugs</Th>
                 </tr>
               </THead>
               <TBody>

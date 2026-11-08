@@ -8,6 +8,7 @@ import { useApi } from "@/lib/hooks";
 import type { ProjectDetail, TestCase, TestRun } from "@/lib/types";
 import { Button, Checkbox, InlineError, Modal, SelectField, StatusPill, TextField, useToast, inputClass } from "@/components/ui";
 import { ProjectSelect } from "./ProjectSelect";
+import { ConfirmPermission } from "./ConfirmPermission";
 
 type RunType = "MANUAL" | "AUTOMATED" | "API";
 
@@ -44,7 +45,7 @@ export function NewRunModal({
     }
   }, [open, fixedProjectId]);
 
-  const { data: project } = useApi<ProjectDetail>(open && projectId ? `/projects/${projectId}` : null);
+  const { data: project, mutate: reloadProject } = useApi<ProjectDetail>(open && projectId ? `/projects/${projectId}` : null);
   const { data: cases, isLoading: casesLoading } = useApi<TestCase[]>(open && projectId ? `/projects/${projectId}/test-cases` : null);
 
   useEffect(() => {
@@ -58,6 +59,16 @@ export function NewRunModal({
     const q = filter.toLowerCase();
     return q ? list.filter((c) => `${c.key} ${c.title} ${c.category}`.toLowerCase().includes(q)) : list;
   }, [cases, filter]);
+
+  // With nothing preselected, tick every runnable case: running everything is what most people want.
+  const autoSelected = useRef(false);
+  useEffect(() => {
+    if (!open) autoSelected.current = false;
+    else if (!autoSelected.current && cases && !preselectedRef.current?.length) {
+      autoSelected.current = true;
+      setSelected(new Set(cases.filter((c) => c.status === "APPROVED" || c.status === "READY").map((c) => c.id)));
+    }
+  }, [open, cases]);
 
   const env = project?.environments.find((e) => e.id === envId);
   const allSelected = eligible.length > 0 && eligible.every((c) => selected.has(c.id));
@@ -96,15 +107,15 @@ export function NewRunModal({
       open={open}
       onClose={onClose}
       size="lg"
-      title="New test run"
-      description="Only approved or ready test cases can be run."
+      title="Run tests"
+      description="Runs the checks you’ve approved against your site."
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
           <Button type="submit" form="new-run-form" loading={saving} disabled={!projectId || !envId}>
-            {type === "MANUAL" ? "Start manual run" : "Queue run"}
+            {type === "MANUAL" ? "Start manual run" : `Run ${eligible.filter((c) => selected.has(c.id)).length || ""} checks`.replace("  ", " ")}
           </Button>
         </>
       }
@@ -134,12 +145,7 @@ export function NewRunModal({
             }))}
           />
         </div>
-        {env && !env.authorised && (
-          <p className="flex gap-2 rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">
-            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> This environment hasn’t been confirmed as authorised for testing. Confirm it in the
-            project’s Environments tab first.
-          </p>
-        )}
+        {env && !env.authorised && <ConfirmPermission env={env} onConfirmed={() => reloadProject()} />}
         {env?.name === "PRODUCTION" && !env.allowDestructive && (
           <p className="flex gap-2 rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> Production is read-only: destructive steps will be blocked.
@@ -173,7 +179,7 @@ export function NewRunModal({
               </div>
               {eligible.length === 0 ? (
                 <p className="rounded-md bg-elevated p-3 text-sm text-fg-muted">
-                  No approved or ready test cases. Approve cases in the Test Cases tab first.
+                  Nothing to run yet. In Test Cases, tick the suggested checks you want and click Approve.
                 </p>
               ) : (
                 <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded-md border border-line">

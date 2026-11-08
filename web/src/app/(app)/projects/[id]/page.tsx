@@ -20,12 +20,12 @@ import { Suspense } from "react";
 
 const TABS = [
   { id: "overview", label: "Overview" },
-  { id: "environments", label: "Environments" },
-  { id: "discovery", label: "Discovery" },
+  { id: "environments", label: "Sites & logins" },
+  { id: "discovery", label: "Site scan" },
   { id: "test-cases", label: "Test Cases" },
   { id: "api", label: "API" },
   { id: "runs", label: "Runs" },
-  { id: "defects", label: "Defects" },
+  { id: "defects", label: "Bugs" },
   { id: "reports", label: "Reports" },
   { id: "settings", label: "Settings" },
 ];
@@ -56,7 +56,8 @@ function ProjectView({ id }: { id: string }) {
     );
   if (isLoading || !project) return <LoadingBlock label="Loading project…" />;
 
-  const tabs = TABS.map((t) =>
+  // The API tab only matters for API projects (or once someone has opened it directly).
+  const tabs = TABS.filter((t) => t.id !== "api" || project.applicationType === "API" || tab === "api").map((t) =>
     t.id === "environments" ? { ...t, count: project.environments.length } : t.id === "test-cases" ? { ...t, count: project.stats?.testCases } : t,
   );
 
@@ -90,7 +91,7 @@ function ProjectView({ id }: { id: string }) {
         {tab === "overview" && <OverviewTab project={project} onNavigate={changeTab} />}
         {tab === "environments" && <EnvironmentsTab project={project} onChanged={() => mutate()} />}
         {tab === "discovery" && <DiscoveryTab project={project} onChanged={() => mutate()} />}
-        {tab === "test-cases" && <TestCasesTab project={project} />}
+        {tab === "test-cases" && <TestCasesTab project={project} onChanged={() => mutate()} />}
         {tab === "api" && <ApiTab project={project} />}
         {tab === "runs" && <RunsTab project={project} />}
         {tab === "defects" && <DefectsTab project={project} />}

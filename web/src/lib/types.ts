@@ -24,6 +24,8 @@ export type Environment = {
 
 export type ProjectStats = {
   testCases: number;
+  /** Approved or ready cases: the ones a run can include. */
+  runnableCases?: number;
   openDefects: number;
   lastRunAt: string | null;
   lastRunStatus: RunStatus | null;

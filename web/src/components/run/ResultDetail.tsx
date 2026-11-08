@@ -236,7 +236,7 @@ function RecordedSteps({ steps: caseSteps, stepResults }: { steps: TestStep[]; s
               <p className="text-fg-strong">{step?.action || sr?.label || `Step ${i + 1}`}</p>
               {step?.expected && <p className="text-xs text-fg-muted">Expected: {step.expected}</p>}
               {sr?.actual && <p className="text-xs text-fg">Actual: {sr.actual}</p>}
-              {sr?.note && <p className="text-xs text-fg">Note: {sr.note}</p>}
+              {sr?.note && <p className="text-xs text-fg">Note: {readableNote(sr.note)}</p>}
             </div>
             <StatusPill status={sr?.status || "NOT_EXECUTED"} />
           </li>
@@ -327,13 +327,29 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
         )
       ) : (
         <>
+          {failed && (testCase?.expectedResult || result.actualResult) && (
+            <section className="grid gap-3 sm:grid-cols-2">
+              {testCase?.expectedResult && (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+                  <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-emerald-300">What we expected</h4>
+                  <p className="text-sm text-fg">{testCase.expectedResult}</p>
+                </div>
+              )}
+              {result.actualResult && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3">
+                  <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-300">What happened</h4>
+                  <p className="whitespace-pre-wrap text-sm text-fg">{result.actualResult}</p>
+                </div>
+              )}
+            </section>
+          )}
           {(steps.length > 0 || result.stepResults?.length > 0) && (
             <section>
               <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">Steps</h4>
               <RecordedSteps steps={steps} stepResults={result.stepResults || []} />
             </section>
           )}
-          {result.actualResult && (
+          {result.actualResult && !failed && (
             <section>
               <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">Actual result</h4>
               <p className="whitespace-pre-wrap text-sm text-fg">{result.actualResult}</p>
@@ -343,10 +359,10 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
       )}
 
       {result.errorMessage && !isManualEditable && (
-        <section>
-          <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">Error</h4>
-          <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-red-500/10 p-3 font-mono text-xs text-red-200 ring-1 ring-inset ring-red-500/30">{result.errorMessage}</pre>
-        </section>
+        <details className="rounded-lg border border-line px-3 py-2">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-fg-muted">Technical details (for developers)</summary>
+          <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap rounded-md bg-red-500/10 p-3 font-mono text-xs text-red-200 ring-1 ring-inset ring-red-500/30">{result.errorMessage}</pre>
+        </details>
       )}
 
       {result.apiExchange && (
@@ -365,15 +381,15 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
         <section className="space-y-3">
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" size="sm" icon={<Lightbulb className="h-4 w-4" aria-hidden />} loading={analysing} onClick={analyse}>
-              {analysis ? "Re-analyse failure" : "Analyse failure"}
+              {analysis ? "Explain again" : "Explain this failure"}
             </Button>
             {result.defectId ? (
               <Link href={`/defects/${result.defectId}`} className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-red-300 ring-1 ring-inset ring-red-500/30 hover:bg-red-500/10">
-                <Bug className="h-4 w-4" aria-hidden /> View linked defect
+                <Bug className="h-4 w-4" aria-hidden /> View linked bug
               </Link>
             ) : (
               <Button variant="danger" size="sm" icon={<Bug className="h-4 w-4" aria-hidden />} onClick={openDefect}>
-                Create defect
+                Report as bug
               </Button>
             )}
           </div>
@@ -394,4 +410,10 @@ export function ResultDetail({ result, run, onChanged }: { result: TestResult; r
       />
     </div>
   );
+}
+
+/** Automated step notes carry the raw Playwright error; keep its readable first part (the check's own message). */
+function readableNote(note: string) {
+  const cut = note.split(/\s+expect\(|\n\s*(?:Call log|Locator):/)[0];
+  return cut.replace(/^Error:\s*/, "").trim() || note;
 }

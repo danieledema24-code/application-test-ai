@@ -25,7 +25,7 @@ const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/test-runs", label: "Test Runs", icon: PlayCircle },
-  { href: "/defects", label: "Defects", icon: Bug },
+  { href: "/defects", label: "Bugs", icon: Bug },
   { href: "/reports", label: "Reports", icon: FileText },
   { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/settings", label: "Settings", icon: Settings },

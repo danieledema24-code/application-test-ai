@@ -8,16 +8,16 @@ import { useApi } from "@/lib/hooks";
 import { humanize } from "@/lib/format";
 import type { AiStatus, Category, ProjectDetail, TestCase } from "@/lib/types";
 import { CATEGORIES } from "@/lib/types";
-import { Badge, Button, Checkbox, InlineError, Modal, SelectField, StatusPill, TextArea, TextField, useToast } from "@/components/ui";
+import { Button, Checkbox, InlineError, Modal, SelectField, StatusPill, TextArea, TextField, useToast } from "@/components/ui";
 import { AiDraftBadge } from "./AiBits";
 import { ProjectSelect } from "./ProjectSelect";
 
 type Source = "DISCOVERY" | "USER_STORY" | "REQUIREMENTS" | "DESCRIPTION" | "OPENAPI";
 const SOURCES: { value: Source; label: string; placeholder: string }[] = [
-  { value: "DISCOVERY", label: "Discovery results (app map)", placeholder: "Optional: focus on specific pages or flows…" },
+  { value: "DISCOVERY", label: "Pages found by the site scan", placeholder: "e.g. focus on the contact form" },
   { value: "USER_STORY", label: "User story", placeholder: "As a customer, I want to reset my password so that…" },
   { value: "REQUIREMENTS", label: "Requirements", placeholder: "Paste requirements or acceptance criteria…" },
-  { value: "DESCRIPTION", label: "Feature description", placeholder: "Describe the feature or page to test…" },
+  { value: "DESCRIPTION", label: "A description I write", placeholder: "e.g. The contact page at /contact lets visitors send a message. Name and Email are required…" },
 ];
 
 type GenerateResponse = { generated: TestCase[]; generatedBy: "claude" | "heuristic"; notes: string };
@@ -27,11 +27,14 @@ export function GenerateCasesModal({
   onClose,
   projectId: fixedProjectId,
   onGenerated,
+  onApproveAndRun,
 }: {
   open: boolean;
   onClose: () => void;
   projectId?: string;
   onGenerated?: () => void;
+  /** Approve the new cases and go straight to running them. */
+  onApproveAndRun?: (ids: string[]) => void;
 }) {
   const toast = useToast();
   const [projectId, setProjectId] = useState(fixedProjectId || "");
@@ -39,7 +42,7 @@ export function GenerateCasesModal({
   const [text, setText] = useState("");
   // Form validation, boundary and sign-in cases are where most bugs are found, so they are on by default.
   const [cats, setCats] = useState<Set<Category>>(new Set(["FUNCTIONAL", "POSITIVE", "NEGATIVE", "FORM_VALIDATION", "BOUNDARY", "AUTHENTICATION"]));
-  const [count, setCount] = useState(8);
+  const [count, setCount] = useState(20);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
@@ -56,12 +59,16 @@ export function GenerateCasesModal({
   const { data: ai } = useApi<AiStatus>(open ? "/ai/status" : null);
   const aiOff = ai?.enabled === false;
   const discoveryId = project?.discovery?.status === "COMPLETED" ? project.discovery.id : undefined;
+  // Once the app has been scanned, the map is the easiest starting point: no writing needed.
+  useEffect(() => {
+    if (open && discoveryId) setSource("DISCOVERY");
+  }, [open, discoveryId]);
   const src = SOURCES.find((s) => s.value === source)!;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (source === "DISCOVERY" && !discoveryId) return setError("Run a discovery on this project first, or choose another source.");
-    if (source !== "DISCOVERY" && !text.trim()) return setError("Provide some input text for the generator.");
+    if (source === "DISCOVERY" && !discoveryId) return setError("Scan your site first, or describe what to test instead.");
+    if (source !== "DISCOVERY" && !text.trim()) return setError("Describe what you’d like to test.");
     setLoading(true);
     setError(null);
     try {
@@ -75,7 +82,7 @@ export function GenerateCasesModal({
         },
       });
       setResult(res);
-      toast(`${res.generated.length} draft test cases generated`);
+      toast(`${res.generated.length} checks suggested`);
       onGenerated?.();
     } catch (err) {
       setError(err);
@@ -91,24 +98,33 @@ export function GenerateCasesModal({
       size="lg"
       title={
         <span className="inline-flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-violet-300" aria-hidden /> {aiOff ? "Generate test cases" : "Generate test cases with AI"}
+          <Sparkles className="h-4 w-4 text-violet-300" aria-hidden /> {aiOff ? "Suggest checks" : "Suggest checks with AI"}
         </span>
       }
       description={
         aiOff
-          ? "AI isn't configured, so the rule-based generator is used. It turns required fields, email rules, length limits, success messages and sign-in into concrete cases, using field names from the latest discovery. Cases are saved as drafts to review."
-          : "Generated cases are saved as drafts. Review and approve them before use."
+          ? "We suggest checks from the pages and forms your scan found, or from a description you write. Nothing runs until you approve it."
+          : "AI suggests checks for you. Nothing runs until you approve them."
       }
       footer={
         result ? (
-          <Button onClick={onClose}>Done</Button>
+          onApproveAndRun && result.generated.length > 0 ? (
+            <>
+              <Button variant="secondary" onClick={onClose}>
+                Review them first
+              </Button>
+              <Button onClick={() => onApproveAndRun(result.generated.map((c) => c.id))}>Approve all and run</Button>
+            </>
+          ) : (
+            <Button onClick={onClose}>Done</Button>
+          )
         ) : (
           <>
             <Button variant="secondary" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" form="gen-cases-form" loading={loading} disabled={!projectId}>
-              Generate drafts
+              Suggest checks
             </Button>
           </>
         )
@@ -116,17 +132,16 @@ export function GenerateCasesModal({
     >
       {result ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {result.generatedBy === "claude" ? (
-              <AiDraftBadge />
-            ) : (
-              <Badge tone="grey" title="Generated by rules from page structure and text. A person must review it before it is used.">
-                Rule-based draft — review before use
-              </Badge>
-            )}
-            <span className="text-xs text-fg-muted">Generated by {result.generatedBy === "claude" ? "AI (Claude)" : "rule-based heuristic"}</span>
-          </div>
-          {result.notes && <p className="rounded-md bg-elevated p-3 text-sm text-fg">{result.notes}</p>}
+          {result.generatedBy === "claude" && <AiDraftBadge />}
+          <p className="text-sm text-fg">
+            {result.generated.length} checks suggested. Skim the list: delete any that don’t apply to your site, or approve them all and run.
+          </p>
+          {result.notes && (
+            <details className="text-sm text-fg-muted">
+              <summary className="cursor-pointer">How these were made</summary>
+              <p className="mt-1">{result.notes}</p>
+            </details>
+          )}
           <ul className="divide-y divide-line rounded-md border border-line">
             {result.generated.map((c) => (
               <li key={c.id} className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -149,15 +164,17 @@ export function GenerateCasesModal({
             <p className="rounded-md bg-amber-500/10 p-2.5 text-sm text-amber-200">No completed discovery for this project yet. Start one from the Discovery tab.</p>
           )}
           <TextArea
-            label={source === "DISCOVERY" ? "Additional guidance (optional)" : "Input"}
+            label={source === "DISCOVERY" ? "Anything specific to focus on? (optional)" : "Describe what to test"}
             rows={source === "OPENAPI" ? 10 : 6}
             mono={source === "OPENAPI"}
             placeholder={src.placeholder}
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
-          <fieldset>
-            <legend className="mb-1.5 text-sm font-medium text-fg">Categories</legend>
+          <details className="rounded-lg border border-line px-3 py-2 [&[open]]:pb-3">
+            <summary className="cursor-pointer text-sm font-medium text-fg">Advanced options</summary>
+          <fieldset className="mt-3">
+            <legend className="mb-1.5 text-sm font-medium text-fg">Kinds of checks</legend>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {CATEGORIES.map((c) => (
                 <Checkbox
@@ -176,7 +193,8 @@ export function GenerateCasesModal({
               ))}
             </div>
           </fieldset>
-          <TextField label="How many cases (max)" type="number" min={1} max={50} value={count} onChange={(e) => setCount(Number(e.target.value) || 1)} wrapClassName="max-w-[10rem]" />
+          <TextField label="How many checks (max)" type="number" min={1} max={40} value={count} onChange={(e) => setCount(Number(e.target.value) || 1)} wrapClassName="mt-3 max-w-[10rem]" />
+          </details>
           <InlineError error={error} />
         </form>
       )}

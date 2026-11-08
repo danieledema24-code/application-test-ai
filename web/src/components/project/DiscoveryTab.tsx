@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ChevronDown, Compass, Lock, Radar, Route } from "lucide-react";
 import { api, fileUrl } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { fmtDateTime } from "@/lib/format";
 import type { DiscoveryPage, DiscoverySummary, ProjectDetail } from "@/lib/types";
+import { ConfirmPermission } from "@/components/domain/ConfirmPermission";
 import { Badge, Button, Card, CardBody, CardHeader, Checkbox, EmptyState, ErrorState, InlineError, LoadingBlock, SelectField, StatusPill, TextField, useToast } from "@/components/ui";
 
 function PageCard({ page }: { page: DiscoveryPage }) {
@@ -218,6 +219,9 @@ export function DiscoveryTab({ project, onChanged }: { project: ProjectDetail; o
   const d = detail.data;
   const running = d?.status === "QUEUED" || d?.status === "RUNNING";
   const env = project.environments.find((e) => e.id === envId);
+  useEffect(() => {
+    if (!envId && authorisedEnvs[0]) setEnvId(authorisedEnvs[0].id);
+  }, [envId, authorisedEnvs]);
 
   async function start(e: React.FormEvent) {
     e.preventDefault();
@@ -228,7 +232,7 @@ export function DiscoveryTab({ project, onChanged }: { project: ProjectDetail; o
         body: { environmentId: envId, maxPages, useCredentials: useCreds },
       });
       setCurrentId(res.discoveryId);
-      toast("Discovery started");
+      toast("Scan started");
     } catch (err) {
       setStartError(err);
     } finally {
@@ -242,34 +246,38 @@ export function DiscoveryTab({ project, onChanged }: { project: ProjectDetail; o
         <CardHeader
           title={
             <span className="flex items-center gap-2">
-              <Radar className="h-4 w-4 text-fg-muted" aria-hidden /> Application discovery
+              <Radar className="h-4 w-4 text-fg-muted" aria-hidden /> Scan your site
             </span>
           }
-          description="Crawls the application to map pages, forms and navigation. Read-only: no forms are submitted."
+          description="We open your site like a visitor would and list its pages and forms. Nothing is submitted or changed."
         />
         <CardBody>
           {authorisedEnvs.length === 0 ? (
-            <p className="text-sm text-amber-200">No authorised environments. Confirm authorisation for an environment in the Environments tab first.</p>
+            project.environments[0] ? (
+              <ConfirmPermission env={project.environments[0]} onConfirmed={onChanged} />
+            ) : (
+              <p className="text-sm text-amber-200">Add the site’s address in Site settings first.</p>
+            )
           ) : (
             <form onSubmit={start} className="flex flex-wrap items-end gap-4">
               <SelectField
-                label="Environment"
+                label="Site"
                 wrapClassName="min-w-[16rem]"
                 value={envId}
                 onChange={(e) => setEnvId(e.target.value)}
                 options={authorisedEnvs.map((e) => ({ value: e.id, label: `${e.name} — ${e.baseUrl}` }))}
               />
-              <TextField label="Max pages" type="number" min={1} max={100} wrapClassName="w-28" value={maxPages} onChange={(e) => setMaxPages(Number(e.target.value) || 1)} />
+              <TextField label="Pages (max)" type="number" min={1} max={100} wrapClassName="w-28" value={maxPages} onChange={(e) => setMaxPages(Number(e.target.value) || 1)} />
               <Checkbox
                 className="pb-2"
-                label="Use stored credentials"
+                label="Sign in first"
                 disabled={!env?.hasCredentials}
-                description={env?.hasCredentials ? undefined : "No credentials stored"}
+                description={env?.hasCredentials ? "Uses the saved test login" : "Add a test login in Sites & logins"}
                 checked={useCreds}
                 onChange={(e) => setUseCreds(e.target.checked)}
               />
               <Button type="submit" loading={starting} disabled={running || !envId}>
-                {running ? "Discovery running…" : "Start discovery"}
+                {running ? "Scanning…" : "Scan my site"}
               </Button>
             </form>
           )}
@@ -299,8 +307,8 @@ export function DiscoveryTab({ project, onChanged }: { project: ProjectDetail; o
             {d.completedAt && <span>· Completed {fmtDateTime(d.completedAt)}</span>}
             {running && <span className="text-fg-muted">· {d.pages.length} pages so far — refreshing every 2s</span>}
             {d.status === "COMPLETED" && (
-              <Link href={`/projects/${project.id}?tab=test-cases`} className="ml-auto font-medium text-fg-strong hover:underline">
-                Generate test cases from this map →
+              <Link href={`/projects/${project.id}?tab=test-cases&generate=1`} className="ml-auto font-medium text-fg-strong hover:underline">
+                Suggest checks for these pages →
               </Link>
             )}
           </div>

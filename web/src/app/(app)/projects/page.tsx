@@ -59,7 +59,7 @@ export default function ProjectsPage() {
                   <Th>Last run</Th>
                   <Th>Latest status</Th>
                   <Th className="text-right">Pass rate</Th>
-                  <Th className="text-right">Open defects</Th>
+                  <Th className="text-right">Open bugs</Th>
                 </tr>
               </THead>
               <TBody>

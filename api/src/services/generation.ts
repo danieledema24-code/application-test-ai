@@ -97,16 +97,34 @@ function sample(f: Field): string {
   return "Sample text";
 }
 
+/** Readable page names: the browser title when only one page uses it, otherwise the path (many sites reuse one title everywhere). */
+function pageNamer(pages: DiscoveredPage[]) {
+  const uses = new Map<string, number>();
+  for (const p of pages) uses.set(p.title, (uses.get(p.title) ?? 0) + 1);
+  return (p: DiscoveredPage) => {
+    const path = pathOf(p.url);
+    if (p.title && uses.get(p.title) === 1) return p.title;
+    const slug = titleFromPath(path).replace(/^sign ?in$/i, "Sign-in").replace(/^sign ?up$/i, "Sign-up").replace(/^log ?in$/i, "Login");
+    return path === "/" ? "the home page" : `the ${slug} page (${path})`;
+  };
+}
+
+/** A password form that creates an account rather than signing in. */
+const isSignUp = (path: string, fields: Field[]) =>
+  /sign-?up|register|join|create-account/i.test(path) || fields.filter((x) => x.type === "password").length > 1
+  || fields.some((x) => x.type !== "password" && /\bname\b/i.test(label(x)));
+
 function fromPages(pages: DiscoveredPage[]): GeneratedCase[] {
   const out: GeneratedCase[] = [];
+  const nameOf = pageNamer(pages);
   for (const p of pages.slice(0, 8)) {
     const path = pathOf(p.url);
-    const name = p.title || path;
+    const name = nameOf(p);
     const heading = p.headings[0];
     const reachable = `The application is reachable and ${path} is publicly accessible`;
     const open: Step = [`Open ${path}`, heading ? `The page loads and the heading "${heading}" is displayed` : "The page loads without an error page or blank screen"];
 
-    out.push(c("FUNCTIONAL", "HIGH", `Page "${name}" loads successfully`, [
+    out.push(c("FUNCTIONAL", "HIGH", `${name.replace(/^the /, "The ")} loads successfully`, [
       [`Open ${path}`, "The page responds without an error page, blank screen or browser warning"],
       [`Verify the page title contains "${p.title}"`, `The browser tab shows the title ${p.title}`],
       ...(heading ? [[`Verify the heading "${heading}" is displayed`, "The main heading is visible near the top of the page"] as Step] : []),
@@ -120,14 +138,27 @@ function fromPages(pages: DiscoveredPage[]): GeneratedCase[] {
 
     for (const f of p.forms.slice(0, 2)) {
       const required = f.fields.filter((x) => x.required);
-      const pwd = f.fields.some((x) => x.type === "password");
+      const signup = f.fields.some((x) => x.type === "password") && isSignUp(path, f.fields);
+      const pwd = f.fields.some((x) => x.type === "password") && !signup;
       const kind = pwd ? "login" : "form";
+      if (signup) {
+        out.push(c("POSITIVE", "HIGH", `Create an account on ${name} with valid data`, [
+          open,
+          ...f.fields.map((x): Step => x.type === "password"
+            ? [`Enter "Str0ng-Passw0rd!" in the "${label(x)}" field`, "The password is accepted and shown masked as dots", "Str0ng-Passw0rd!"]
+            : [`Enter "${sample(x)}" in the "${label(x)}" field`, "The value appears in the field with no error message", sample(x)]),
+          ["Submit the form", "The account is created without validation errors"],
+          ["Verify no error message is shown", "The user is signed in or told to confirm their email; no error is displayed"],
+        ], "A new account is created and the user is signed in or asked to confirm their email",
+        [reachable, "Creates a real account: run only on a test environment, and use an email address that has not signed up before"],
+        `Verifies that a new visitor can create an account on ${name}.`));
+      }
       const fill = f.fields.map((x): Step => x.type === "password"
         ? [`Enter a valid password in the "${label(x)}" field`, "The password is accepted and shown masked as dots", "Password of the test user (from the environment credentials)"]
         : pwd ? [`Enter a valid username in the "${label(x)}" field`, "The value appears in the field with no error message", "Username of the test user (from the environment credentials)"]
         : [`Enter "${sample(x)}" in the "${label(x)}" field`, "The value appears in the field with no error message", sample(x)]);
 
-      out.push(c(pwd ? "AUTHENTICATION" : "POSITIVE", "HIGH", `Submit ${kind} on ${name} with valid data`,
+      if (!signup) out.push(c(pwd ? "AUTHENTICATION" : "POSITIVE", "HIGH", `Submit ${kind} on ${name} with valid data`,
         [open, ...fill, ["Submit the form", pwd ? "The sign-in request is sent and a loading state or redirect follows" : "The form is submitted without validation errors"],
           pwd ? ["Verify the user is signed in", "The sign-in form is no longer shown and no error message appears"] : ["Verify a confirmation message is shown", "A success or thank-you message appears and no error message is shown"]],
         pwd ? "The user is signed in, redirected to an authenticated page and sees their account area" : "The submission succeeds and a confirmation message is shown; no error is displayed",

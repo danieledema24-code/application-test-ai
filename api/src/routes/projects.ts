@@ -53,18 +53,21 @@ export async function projectRoutes(app: FastifyInstance) {
       name: z.string().trim().min(1).max(120), description: z.string().max(2000).default(""), applicationUrl: url,
       applicationType: z.enum(["WEB", "API"]).default("WEB"),
       environments: z.array(z.object({ name: z.enum(ENV_NAMES), baseUrl: url })).optional(),
+      // "I own this site or have permission to test it", ticked when the project is created.
+      authorised: z.boolean().optional(),
     }).parse(req.body);
     const envs = body.environments?.length ? body.environments : [{ name: "STAGING" as const, baseUrl: body.applicationUrl }];
+    if (body.authorised) for (const e of envs) requireAdminForProduction(req, e.name, { authorised: true });
     for (const u of new Set([body.applicationUrl, ...envs.map((e) => e.baseUrl)])) await assertSafeTarget(u);
     const project = await prisma.project.create({
       data: {
         organisationId: req.user.organisationId, name: body.name, description: body.description, applicationUrl: body.applicationUrl, applicationType: body.applicationType,
-        environments: { create: envs.map((e) => ({ name: e.name, baseUrl: e.baseUrl, allowDestructive: e.name !== "PRODUCTION" })) },
+        environments: { create: envs.map((e) => ({ name: e.name, baseUrl: e.baseUrl, allowDestructive: e.name !== "PRODUCTION", ...authorisation(body.authorised ?? false, req.user.id) })) },
       },
       include: { environments: true },
     });
     await recordActivity({ organisationId: req.user.organisationId, projectId: project.id, userId: req.user.id, actionType: "PROJECT_CREATED", message: `Project ${project.name} created`, link: `/projects/${project.id}` });
-    await audit(req.user.organisationId, req.user.id, "project.created", project.name);
+    await audit(req.user.organisationId, req.user.id, "project.created", project.name, { authorised: body.authorised ?? false });
     return { ...projectDto(project), stats: await projectStats(project.id) };
   });
 
