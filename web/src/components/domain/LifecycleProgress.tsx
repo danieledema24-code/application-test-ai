@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { Circle, CircleCheck, CircleDashed, CircleDot, CirclePause, CircleSlash, CircleX, Diamond, Loader2, UserRoundCheck } from "lucide-react";
+import { Circle, CircleCheck, CircleDashed, CircleDot, CirclePause, CircleSlash, CircleX, Diamond, Loader2, MessageSquareWarning, RefreshCw, UserRoundCheck } from "lucide-react";
 import type { ProjectSummary, Workflow } from "@/lib/contract";
-import { GATE_1, LIFECYCLE, STATUS_LABEL, buildLifecycle, gateReview, stageStatusText, type LifecycleStage, type LifecycleStatus } from "@/lib/lifecycle";
+import { GATE_1, LIFECYCLE, STATUS_LABEL, buildLifecycle, gateReview, stageStatusText, upstreamGateHint, type LifecycleStage, type LifecycleStatus } from "@/lib/lifecycle";
 import { fmtDateTime } from "@/lib/format";
 import { Button, Disclosure, Tooltip } from "@/components/ui";
 
@@ -11,7 +11,9 @@ const STATUS_TONE: Record<LifecycleStatus, string> = {
   done: "text-success-fg",
   running: "text-info-fg",
   waiting: "text-warning-fg",
+  changes_requested: "text-warning-fg",
   paused: "text-warning-fg",
+  out_of_date: "text-warning-fg",
   failed: "text-danger-fg",
   cancelled: "text-fg-muted",
   not_started: "text-fg-muted",
@@ -22,7 +24,9 @@ const MINI_BAR: Record<LifecycleStatus, string> = {
   done: "bg-navy-800",
   running: "bg-info-solid",
   waiting: "bg-warning-solid",
+  changes_requested: "bg-warning-solid",
   paused: "bg-warning-solid",
+  out_of_date: "bg-warning-solid",
   failed: "bg-danger-solid",
   cancelled: "bg-line-strong",
   not_started: "bg-line-strong",
@@ -46,6 +50,10 @@ export function StageStatusIcon({ status, className = "h-4 w-4" }: { status: Lif
       return <UserRoundCheck className={`${className} ${tone}`} aria-hidden />;
     case "paused":
       return <CirclePause className={`${className} ${tone}`} aria-hidden />;
+    case "changes_requested":
+      return <MessageSquareWarning className={`${className} ${tone}`} aria-hidden />;
+    case "out_of_date":
+      return <RefreshCw className={`${className} ${tone}`} aria-hidden />;
     case "failed":
       return <CircleX className={`${className} ${tone}`} aria-hidden />;
     case "cancelled":
@@ -94,9 +102,9 @@ export function LifecycleProgress({
   workflow: Workflow | null | undefined;
   projectId: string;
   variant: "full" | "compact";
-  /** Re-run the Discovery stage (only stage re-runnable in Phase 1). */
-  onRerun?: () => void;
-  onReviewGate?: () => void;
+  /** Re-run a stage: Discovery opens the re-scan dialog; Requirements/Strategy open their regenerate dialog. */
+  onRerun?: (stageId: string) => void;
+  onReviewGate?: (stageId: string) => void;
 }) {
   const stages = buildLifecycle(workflow);
   if (variant === "compact") return <Compact stages={stages} projectId={projectId} />;
@@ -107,7 +115,7 @@ function Compact({ stages, projectId }: { stages: LifecycleStage[]; projectId: s
   return (
     <ol aria-label="QA lifecycle" className="grid grid-cols-8 gap-1">
       {stages.map((s) => {
-        const current = s.status === "running" || s.status === "waiting" || s.status === "paused";
+        const current = s.status === "running" || s.status === "waiting" || s.status === "paused" || s.status === "changes_requested";
         return (
           <li key={s.id} className="min-w-0">
             <Tooltip content={`${s.label}: ${stageStatusText(s)}`} className="w-full">
@@ -132,7 +140,7 @@ function Compact({ stages, projectId }: { stages: LifecycleStage[]; projectId: s
 
 function stepStatus(stage: LifecycleStage, n: number): LifecycleStatus {
   if (stage.status === "later") return "later";
-  if (stage.status === "done" || stage.status === "waiting") return "done";
+  if (stage.status === "done" || stage.status === "waiting" || stage.status === "changes_requested" || stage.status === "out_of_date") return "done";
   const idx = n - stage.steps[0].n + 1;
   const cur = stage.currentStep;
   if (stage.status === "running" && cur) return idx < cur ? "done" : idx === cur ? "running" : "not_started";
@@ -154,8 +162,8 @@ function Full({
 }: {
   stages: LifecycleStage[];
   projectId: string;
-  onRerun?: () => void;
-  onReviewGate?: () => void;
+  onRerun?: (stageId: string) => void;
+  onReviewGate?: (stageId: string) => void;
 }) {
   return (
     <div>
@@ -190,6 +198,7 @@ function Full({
               >
                 <span className={`block text-small font-semibold ${s.status === "later" ? "text-fg-muted" : "text-fg-strong"}`}>{s.label}</span>
                 <span className={`block text-caption ${STATUS_TONE[s.status]}`}>{stageStatusText(s)}</span>
+                {upstreamGateHint(s, stages) && <span className="block text-caption text-fg-muted">{upstreamGateHint(s, stages)}</span>}
                 <span className="sr-only">{s.gate && s.gateStatus === "waiting" ? `. ${gateText(s)}` : ""}</span>
               </Link>
             </li>
@@ -203,12 +212,13 @@ function Full({
   );
 }
 
-function AllSteps({ stages, onRerun, onReviewGate }: { stages: LifecycleStage[]; onRerun?: () => void; onReviewGate?: () => void }) {
+function AllSteps({ stages, onRerun, onReviewGate }: { stages: LifecycleStage[]; onRerun?: (stageId: string) => void; onReviewGate?: (stageId: string) => void }) {
   return (
     <div className="mt-3 space-y-5">
       {stages.map((s) => {
         const run = s.stages.find((x) => x.key === "discovery") ?? s.stages[0];
-        const canRerun = s.id === "discovery" && (s.status === "done" || s.status === "failed" || s.status === "cancelled" || s.status === "waiting");
+        const finished = ["done", "failed", "cancelled", "waiting", "changes_requested", "out_of_date"].includes(s.status);
+        const canRerun = (s.id === "discovery" || s.id === "requirements" || s.id === "strategy") && finished && s.stages.some((x) => x.current_version);
         return (
           <section key={s.id} aria-labelledby={`stage-${s.id}`}>
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-1.5">
@@ -225,12 +235,12 @@ function AllSteps({ stages, onRerun, onReviewGate }: { stages: LifecycleStage[];
                   </span>
                 )}
                 {s.gateStatus === "waiting" && onReviewGate && (
-                  <Button size="sm" variant="secondary" onClick={onReviewGate}>
-                    Review gate
+                  <Button size="sm" variant="secondary" onClick={() => onReviewGate(s.id)}>
+                    {s.gate ? `Review Gate ${s.gate.key.slice(1)}` : "Review gate"}
                   </Button>
                 )}
                 {canRerun && onRerun && (
-                  <Button size="sm" variant="secondary" onClick={onRerun}>
+                  <Button size="sm" variant="secondary" onClick={() => onRerun(s.id)}>
                     Re-run stage
                   </Button>
                 )}

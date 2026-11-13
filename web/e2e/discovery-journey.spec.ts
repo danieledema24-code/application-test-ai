@@ -49,12 +49,15 @@ test("discovery journey: start, watch live, approve G2, download PDF", async ({ 
 
   // P1-14: when discovery finishes, Gate 2 is highlighted with an action to review. Under the default
   // policy ("recommended") it is ready for review; under "required" it waits for approval.
-  await expect(page.getByRole("link", { name: "Review gate" })).toBeVisible({ timeout: 4 * 60_000 });
+  // Phase 2: with G2 "recommended", requirements generate straight away, so a "Review Gate 3" link can
+  // appear next to it. Target the Gate 2 one.
+  const reviewG2 = page.locator('a[href*="/discovery"]').filter({ hasText: /^Review Gate 2$/ });
+  await expect(reviewG2).toBeVisible({ timeout: 4 * 60_000 });
   await expect(page.getByText(/is ready for your review|is waiting for your approval/).first()).toBeVisible();
   expect(await seriousA11yViolations(page, ["color-contrast"])).toEqual([]);
 
   // P1-15: approve G2 with a comment.
-  await page.getByRole("link", { name: "Review gate" }).click();
+  await reviewG2.click();
   await expect(page.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Not reached")).toHaveCount(0);
   expect(await seriousA11yViolations(page, ["color-contrast"])).toEqual([]);

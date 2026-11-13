@@ -124,10 +124,13 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   danger,
   loading,
+  onCancel,
 }: {
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  /** The cancel button's action when it differs from closing (e.g. [Review drafts]). */
+  onCancel?: () => void;
   title: string;
   children: React.ReactNode;
   confirmLabel?: string;
@@ -143,7 +146,7 @@ export function ConfirmDialog({
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={onCancel ?? onClose}>
             {cancelLabel}
           </Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading}>

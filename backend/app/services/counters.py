@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ProjectCounter
 
 PREFIXES = {"scan": "SCAN", "evidence": "EV", "feature": "FEAT", "journey": "JRN", "report": "RPT"}
+# Key widths per api-contracts.md (REQ-0001, AC-0001, DOR-01, RISK-001, TS-001, TP-001, DOC-001, PROP-0001).
+WIDTHS = {"DOR": 2, "DOD": 2, "RISK": 3, "TS": 3, "TP": 3, "DOC": 3}
 
 
 async def next_number(session: AsyncSession, org_id: uuid.UUID, project_id: uuid.UUID, kind: str) -> int:
@@ -34,7 +36,8 @@ async def next_number(session: AsyncSession, org_id: uuid.UUID, project_id: uuid
 
 
 def format_key(kind: str, n: int) -> str:
-    return f"{PREFIXES.get(kind, kind.upper())}-{n:04d}"
+    prefix = PREFIXES.get(kind, kind.upper())
+    return f"{prefix}-{n:0{WIDTHS.get(prefix, 4)}d}"
 
 
 async def next_key(session: AsyncSession, org_id: uuid.UUID, project_id: uuid.UUID, kind: str) -> tuple[int, str]:

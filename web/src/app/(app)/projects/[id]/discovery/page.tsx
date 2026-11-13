@@ -5,13 +5,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { CircleX, FileText } from "lucide-react";
 import { ApiError, buildQuery } from "@/lib/api";
 import type { ScanDetail, StageState } from "@/lib/contract";
-import { accessGapRows, scanActive } from "@/lib/discovery";
+import { accessGapRows, scanActive, scanSignIn } from "@/lib/discovery";
 import { fmtDate } from "@/lib/format";
 import { activeStage } from "@/lib/lifecycle";
 import { scanNumber } from "@/lib/url";
 import { Button, Callout, Card, EmptyState, ErrorState, LinkButton, SelectField, Skeleton, Spinner, TabPanel, Tabs } from "@/components/ui";
 import { AgentActivityFeed } from "@/components/domain/AgentActivityFeed";
-import { GateBanner, GateReviewPanel } from "@/components/domain/GateReviewPanel";
+import { DiscoveryGateReview, GateBanner } from "@/components/domain/GateReviewPanel";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { useAllPages, useFeatures, useJourneys, useScan, useScans, useSitemap } from "@/components/discovery/hooks";
 import { LiveDiscovery } from "@/components/discovery/LiveDiscovery";
@@ -68,6 +68,7 @@ function Discovery() {
   const thisN = scan ? scanNumber(scan.key) : null;
   const isOlder = !!(thisN && latestN && thisN < latestN);
   const active = !!scan && scanActive(scan.status) && !isOlder;
+  const signIn = scan ? scanSignIn(scan) : null;
   const pages = useAllPages(scan?.id, active);
   const sitemap = useSitemap(scan?.id, active);
   const features = useFeatures(scan && !active ? scan.id : null);
@@ -203,6 +204,18 @@ function Discovery() {
       )}
       {!isOlder && gateStage && view !== "summary" && <GateBanner stage={gateStage} reviewHref={reviewHref} />}
       {!active && <ScanStateBanner scan={scan} onRescan={p.openRescan} />}
+      {signIn?.state === "failed" && (
+        <Callout
+          tone="warning"
+          actions={
+            <LinkButton href={`/projects/${p.id}/settings?view=credentials`} variant="secondary">
+              Replace credentials
+            </LinkButton>
+          }
+        >
+          Couldn’t sign in with the credentials provided: {signIn.reason}. Discovery continued on public pages only. We tried once, to avoid locking the account.
+        </Callout>
+      )}
 
       {failedEmpty ? (
         <Card>
@@ -251,7 +264,7 @@ function Discovery() {
             {view === "summary" && (
               <div className="space-y-6">
                 {gateStage && !isOlder && (
-                  <GateReviewPanel
+                  <DiscoveryGateReview
                     projectId={p.id}
                     stage={gateStage}
                     scan={scan}
@@ -293,7 +306,7 @@ function Discovery() {
                 </div>
               ))}
             {view === "responsive" && <ResponsiveCompare pages={pageList} includeMobile={scan.limits?.include_mobile ?? true} onRescan={p.openRescan} />}
-            {view === "gaps" && <AccessGaps scan={scan} onRescan={p.openRescan} />}
+            {view === "gaps" && <AccessGaps scan={scan} projectId={p.id} onRescan={p.openRescan} />}
           </TabPanel>
         </div>
       )}

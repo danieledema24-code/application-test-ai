@@ -510,7 +510,10 @@ def access_gaps(
     robots_skipped: list[str],
     skipped_links: list[dict[str, str]],
     bot_protection: bool,
+    signin_attempted: bool = False,
 ) -> list[dict[str, Any]]:
+    """`signin_attempted`: the scan used the saved credentials, so the sign-in form isn't listed as "not
+    performed"; the attempt's outcome is reported by the sign-in result (and its gap when it failed)."""
     gaps: list[dict[str, Any]] = []
     boundaries = auth_boundaries(pages)
     for b in boundaries:
@@ -527,7 +530,7 @@ def access_gaps(
                 "area": path,
                 "reason": "Needs credentials",
                 "description": desc,
-                "suggestion": "Add credentials and re-scan",
+                "suggestion": "Add test credentials in Project settings and re-scan",
                 "evidence_refs": b["evidence_refs"],
             }
         )
@@ -541,7 +544,7 @@ def access_gaps(
                 "reason": "Needs credentials",
                 "description": f"A sign-in form was found on {path_of(login_forms[0]['url'])}; the pages behind it "
                 "could not be observed without signing in.",
-                "suggestion": "Add test credentials and re-scan (authenticated discovery arrives in Phase 2)",
+                "suggestion": "Add test credentials in Project settings and re-scan",
                 "evidence_refs": login_forms[0]["evidence_refs"],
             }
         )
@@ -576,7 +579,7 @@ def access_gaps(
             continue
         for f in p.forms:
             purpose = form_purpose(f)
-            if purpose in ("search", "filter"):
+            if purpose in ("search", "filter") or (purpose == "login" and signin_attempted):
                 continue
             key = f"{purpose}:{p.path}"
             if key in seen_forms:

@@ -2,13 +2,14 @@
 
 import { CircleCheck } from "lucide-react";
 import type { ScanDetail } from "@/lib/contract";
-import { accessGapRows } from "@/lib/discovery";
+import Link from "next/link";
+import { accessGapRows, isSignInGap } from "@/lib/discovery";
 import { Button, EmptyState, TBody, THead, Table, Td, Th, Tr } from "@/components/ui";
 import { ObservationLabel } from "@/components/domain/ObservationLabel";
 import { EvidenceLinks, refsToItems } from "@/components/domain/EvidenceDrawer";
 
 /** Access gaps (design spec §8.2): what discovery could not observe, why, and what to do next. */
-export function AccessGaps({ scan, onRescan }: { scan: ScanDetail; onRescan: () => void }) {
+export function AccessGaps({ scan, projectId, onRescan }: { scan: ScanDetail; projectId: string; onRescan: () => void }) {
   const rows = accessGapRows(scan);
   if (rows.length === 0)
     return (
@@ -21,7 +22,13 @@ export function AccessGaps({ scan, onRescan }: { scan: ScanDetail; onRescan: () 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-body text-fg-muted">Areas discovery couldn’t observe in this scan. Signed-in areas need test credentials, which arrive in Phase 2.</p>
+        <p className="text-body text-fg-muted">
+          Areas discovery couldn’t observe in this scan. Signed-in areas need test credentials, which owners and admins can add in{" "}
+          <Link href={`/projects/${projectId}/settings?view=credentials`} className="font-medium text-navy-700 underline underline-offset-2">
+            Project settings
+          </Link>
+          .
+        </p>
         <Button variant="secondary" onClick={onRescan}>
           Re-scan…
         </Button>
@@ -45,6 +52,7 @@ export function AccessGaps({ scan, onRescan }: { scan: ScanDetail; onRescan: () 
               <Td>
                 {r.reason}
                 {r.description && <span className="block text-small text-fg-muted">{r.description}</span>}
+                {isSignInGap(r.reason) && <span className="block text-small text-fg-muted">We tried once, to avoid locking the account.</span>}
               </Td>
               <Td>
                 <ObservationLabel provenance="observed" />

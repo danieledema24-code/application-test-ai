@@ -15,6 +15,9 @@ const AGENTS: Record<string, { long: string; short: string }> = {
   orchestrator: { long: "Lead QA Orchestrator", short: "Orchestrator" },
   discovery: { long: "Application Discovery Agent", short: "Discovery Agent" },
   reporting: { long: "Reporting Agent", short: "Reporting" },
+  requirements: { long: "Requirements Engineering Agent", short: "Requirements Agent" },
+  test_strategy: { long: "Test Strategy Agent", short: "Strategy Agent" },
+  assistant: { long: "AI QA Analyst", short: "AI QA Analyst" },
 };
 
 export function agentName(key: string | null | undefined) {

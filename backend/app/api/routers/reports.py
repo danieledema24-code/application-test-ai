@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.reporting import phase2_reports
 from app.agents.reporting.discovery_report import approval_for_run, next_report_version, refresh_links
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, ScopedSession
 from app.api.errors import Conflict, GateBlocked, NotFound, ValidationFailed
@@ -26,7 +27,17 @@ async def _summary(ctx: AppContext, s: AsyncSession, r: QaReport, latest_scan: u
         if r.scan_session_id
         else None
     )
-    approval = await approval_for_run(s, r.stage_run_id) if r.stage_run_id else {"status": "draft"}
+    p2: dict[str, object] = {}
+    if r.report_type != ReportType.discovery:
+        p2approval = await phase2_reports.approval(s, r)
+        approval = {"status": p2approval["status"]}
+        p2 = {
+            "approval": p2approval,
+            "is_latest_source": await phase2_reports.is_latest_source(s, r),
+            "frozen": bool((r.content or {}).get("frozen")),
+        }
+    else:
+        approval = await approval_for_run(s, r.stage_run_id) if r.stage_run_id else {"status": "draft"}
     return api.ReportSummary(
         id=r.id,
         report_type=r.report_type.value,
@@ -42,6 +53,7 @@ async def _summary(ctx: AppContext, s: AsyncSession, r: QaReport, latest_scan: u
         approval_status=approval["status"],
         partial=bool((r.content or {}).get("partial")),
         error=r.error,
+        **p2,
     )
 
 
@@ -76,13 +88,35 @@ async def list_reports(
 async def create_report(
     project_id: uuid.UUID, body: dict[str, object], ctx: Ctx, s: ScopedSession, p: MemberPrincipal
 ) -> api.ReportSummary:
-    if body.get("report_type") != "discovery":
+    if body.get("report_type") not in api.ReportCreate.allowed_types():
         raise ValidationFailed(
-            "Phase 1 supports the discovery report only",
-            details=[{"field": "report_type", "message": "Only 'discovery' is available in Phase 1."}],
+            "Unknown report type",
+            details=[
+                {"field": "report_type", "message": "Use discovery, requirements_spec, test_strategy or test_plan."}
+            ],
         )
     req = api.ReportCreate.model_validate(body)
     project = await load_project(s, project_id)
+    if req.report_type != "discovery":
+        rtype = ReportType(req.report_type)
+        if not await phase2_reports.has_source(s, project_id, rtype):
+            raise GateBlocked(f"Generate the {phase2_reports.TITLES[rtype].lower()} first")
+        if req.stage_run_version is not None:
+            current = (await phase2_reports.stamp(s, project_id, rtype)).get(
+                "requirements" if rtype == ReportType.requirements_spec else "test_strategy"
+            )
+            if current is not None and current != req.stage_run_version:
+                raise Conflict("Reports are generated from the current version; reload and try again")
+        p2report = await phase2_reports.create(s, project, rtype, user_id=p.user.id)
+        await s.commit()
+        await ctx.queue.enqueue(
+            "report_render",
+            {"report_id": str(p2report.id)},
+            org_id=project.organisation_id,
+            project_id=project_id,
+            dedupe_key=f"report:{p2report.id}",
+        )
+        return await _summary(ctx, s, p2report, await ser.latest_scan_id(s, project_id))
     if req.scan_id is not None:
         scan = (
             await s.execute(
@@ -143,7 +177,9 @@ async def get_report(report_id: uuid.UUID, ctx: Ctx, s: ScopedSession, _p: Curre
         for f in r.files or []
     ]
     content = refresh_links(ctx, r.content or {}, r.organisation_id)
-    if content:
+    if content and r.report_type != ReportType.discovery:
+        content["approval"] = summary.approval
+    elif content:
         approval = await approval_for_run(s, r.stage_run_id) if r.stage_run_id else None
         if approval:
             content["approval"] = approval

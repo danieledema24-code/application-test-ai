@@ -12,6 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, CreatedMixin, IdMixin, TenantMixin, TimestampMixin
 from app.db.types import json_default_dict, json_default_list, str_enum
 from app.domain.enums import (
+    AuthContext,
     EvidenceKind,
     FeatureCategory,
     GeneratedBy,
@@ -58,6 +59,8 @@ class ScanSession(IdMixin, TenantMixin, TimestampMixin, Base):
     summary_generated_by: Mapped[GeneratedBy | None] = mapped_column(
         str_enum(GeneratedBy, "scan_summary_generated_by"), default=None
     )
+    # Phase 2 (P2-01): {attempted, result, reason_code, login_url, authenticated_pages, started_at, finished_at}.
+    auth: Mapped[dict[str, Any] | None] = mapped_column(default=None)
     started_at: Mapped[datetime | None] = mapped_column(default=None)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
@@ -68,6 +71,7 @@ class DiscoveredPage(IdMixin, TenantMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("scan_session_id", "url_hash"),
         Index("ix_discovered_pages_project_url_hash", "project_id", "url_hash"),
+        Index("ix_discovered_pages_scan_auth_context", "scan_session_id", "auth_context"),
     )
 
     scan_session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("scan_sessions.id", ondelete="CASCADE"), index=True)
@@ -102,6 +106,9 @@ class DiscoveredPage(IdMixin, TenantMixin, TimestampMixin, Base):
     screenshot_evidence_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     load_ms: Mapped[int | None] = mapped_column(Integer, default=None)
     structure_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    auth_context: Mapped[AuthContext] = mapped_column(
+        str_enum(AuthContext, "page_auth_context"), default=AuthContext.anonymous, server_default="anonymous"
+    )
 
 
 feature_pages = Table(
@@ -173,6 +180,8 @@ class Evidence(IdMixin, TenantMixin, CreatedMixin, Base):
     )
     execution_result_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     performance_run_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    # Phase 2 (P2-08). No FK: source_documents references evidence.
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     captured_at: Mapped[datetime]
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", default=json_default_dict)
 
@@ -194,6 +203,8 @@ class KnowledgeItem(IdMixin, TenantMixin, TimestampMixin, Base):
     scan_session_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("scan_sessions.id", ondelete="RESTRICT"), default=None
     )
+    # Phase 2: decisions about artefacts ({entity_type, lineage_id, match_key, key}) so regeneration respects them.
+    meta: Mapped[dict[str, Any] | None] = mapped_column("metadata", default=None)
 
 
 class QaReport(IdMixin, TenantMixin, TimestampMixin, Base):

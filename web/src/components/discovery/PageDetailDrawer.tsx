@@ -57,11 +57,18 @@ export function PageDetailDrawer({ pageId, onClose }: { pageId: string | null; o
             <span>Depth {page.depth}</span>
             <span aria-hidden>·</span>
             <span>Type: {page.page_type.replace(/_/g, " ")}</span>
-            {page.requires_auth && (
+            {page.auth_context === "authenticated" ? (
               <>
                 <span aria-hidden>·</span>
-                <span className="font-medium text-warning-fg">Needs credentials</span>
+                <span className="font-medium text-success-fg">Visited while signed in as the test account</span>
               </>
+            ) : (
+              page.requires_auth && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="font-medium text-warning-fg">Needs credentials</span>
+                </>
+              )
             )}
           </p>
           <Shots page={page} />

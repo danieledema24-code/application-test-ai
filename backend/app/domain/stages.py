@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from app.domain.enums import GateKey, GatePolicy, StageKey, StageStatus
 
-CURRENT_PHASE = 1
+CURRENT_PHASE = 2
 
 
 @dataclass(frozen=True)
@@ -97,6 +97,21 @@ OUTPUT_STATUSES = frozenset(
     {StageStatus.completed, StageStatus.awaiting_approval, StageStatus.approved, StageStatus.cancelled}
 )
 ACTIVE_STATUSES = frozenset({StageStatus.queued, StageStatus.running})
+
+# Phase 2 stages whose re-runs produce a candidate version that is reviewed before it is applied (P2-00).
+REGENERABLE_STAGES = frozenset({StageKey.requirements, StageKey.readiness_criteria, StageKey.test_strategy})
+# Stages queued again automatically when their upstream produces a new version ("auto_rerun").
+AUTO_RERUN_STAGES = frozenset({StageKey.discovery_report})
+# Stages a user can start with POST /stages/{stage}/run in the current phase.
+RUNNABLE_IN_PHASE = frozenset(
+    {
+        StageKey.discovery,
+        StageKey.discovery_report,
+        StageKey.requirements,
+        StageKey.readiness_criteria,
+        StageKey.test_strategy,
+    }
+)
 
 
 def downstream_of(stage: StageKey) -> list[StageKey]:

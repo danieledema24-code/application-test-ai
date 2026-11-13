@@ -178,6 +178,7 @@ class ProjectSummary(BaseModel):
     id: UUID; name: str; primary_url: str; status: Literal["active", "paused", "archived"]
     current_stage: StageKey | None; current_stage_status: StageStatus | None
     pages_discovered: int; awaiting_approval: bool; updated_at: datetime
+    requirements: {"total": int, "approved": int, "draft": int} | None   # Phase 2, additive: current requirement set
 
 class ProjectDetail(ProjectSummary):
     description: str; version: int
@@ -422,12 +423,606 @@ These fields were added by the Phase 1 backend. All are optional for clients and
 - Journey steps add `label: observed|inferred` (a step that was navigated is observed; filling or submitting a form is inferred, never performed).
 - `DiscoveryReportContent` adds `site, organisation, project, scan, gate1, approval, counts, key_observations, partial, partial_notice, mobile_included, generated_at, glossary, recommendation`.
 
+## Phase 2 endpoints (full detail)
+
+All Phase 1 conventions apply: bearer auth, the session's organisation as tenant (other organisations get 404), the error envelope, `?limit&cursor` pagination returning `{items, next_cursor}`, `version` on mutable resources (a mismatch is 409 `conflict`), snake_case, ISO 8601 UTC, and signed content URLs for files. Role rules: `viewer` read only; `member` runs, edits, approves or rejects individual items, uploads and accepts proposals; gate decisions and test-credential management need `can_approve` (owners/admins by default). Writes by a viewer return 403 `forbidden`. Every write is audited (action names below).
+
+### Shared Phase 2 schemas
+
+```python
+Classification = Literal["observed", "inferred", "assumed", "unverified"]
+BehaviourScope = Literal["ui", "backend", "mixed"]          # backend/mixed can never be "observed"
+ItemStatus = Literal["draft", "approved", "rejected"]
+RequirementStatus = Literal["draft", "approved", "rejected", "needs_info"]
+RequirementCategory = Literal["navigation", "content", "form_input", "validation", "authentication", "session",
+                              "search", "commerce", "account", "data_processing", "notification", "integration",
+                              "accessibility", "usability", "compatibility", "performance", "security", "privacy", "other"]
+
+class ArtefactRef(BaseModel):            # used for links and assistant citations
+    type: Literal["requirement", "acceptance_criterion", "readiness_criterion", "feature", "journey", "page",
+                  "evidence", "risk", "strategy_section", "plan_section", "document", "gate", "stage", "scan"]
+    id: UUID | None                       # None for gates/stages
+    key: str                              # REQ-0003, AC-0012, FEAT-0002, EV-0040, RISK-004, G3, test_strategy
+    label: str
+    path: str                             # web route, e.g. "/projects/{pid}/requirements/REQ-0003"
+
+class Editable(BaseModel):
+    version: int
+    locked: bool
+    human_edited: bool
+    updated_at: datetime
+    updated_by: UserRef | None
+
+class ChangeReviewItem(BaseModel):         # one row of the regeneration review (design P2 §5.7)
+    lineage_id: UUID; key: str
+    type: Literal["requirement", "acceptance_criterion", "readiness_criterion", "risk", "strategy_section", "plan_section"]
+    change: Literal["added", "changed", "protected_with_proposal", "no_longer_found", "unchanged"]
+    protected_reason: Literal["locked", "human_edited", "approved", "user_created"] | None
+    current: dict | None                   # current content (None for added)
+    proposed: dict | None                  # candidate content (None for no_longer_found)
+    field_diff: list[{"field": str, "from": Any, "to": Any}]
+    default_action: Literal["accept", "keep", "skip", "mark_rejected"]
+    allowed_actions: list[Literal["accept", "keep", "skip", "mark_rejected"]]
+    note: str | None                       # e.g. "Not found in Scan 3; evidence from Scan 2 is kept"
+
+class ChangeReview(BaseModel):
+    stage_key: StageKey
+    artefact: Literal["requirements", "readiness_criteria", "test_strategy", "test_plan"]
+    current_version: int | None; candidate_version: int
+    review_status: Literal["pending_review", "applied", "discarded"]
+    guidance: str | None                   # user's optional regeneration guidance
+    summary: dict[str, int]                # added, changed, protected_with_proposal, no_longer_found, unchanged, suppressed_rejected
+    items: list[ChangeReviewItem]          # unchanged items omitted unless ?include_unchanged=true
+    gate_effect: str | None                # "Gate 3 will need approval again."
+
+class ChangeReviewApply(BaseModel, extra="forbid"):
+    decisions: dict[UUID, Literal["accept", "keep", "skip", "mark_rejected"]] = {}   # lineage_id -> action; omitted = default
+    comment: str | None = None
+
+class RegenerationDiff(BaseModel):         # what an applied review changed between two current versions
+    from_version: int | None; to_version: int
+    added: list[str]                       # keys
+    changed: list[str]
+    rejected_as_no_longer_found: list[str] # kept with status rejected, evidence kept
+    kept_current: list[str]                # protected items whose proposal was not accepted
+    suppressed_rejected: list[str]         # generator re-proposed a rejected lineage; not offered
+
+class Revision(BaseModel):
+    version: int; changed_by: UserRef | None; change_reason: str | None
+    source: Literal["user", "assistant_proposal", "regeneration_review", "system"]
+    created_at: datetime
+    changes: dict[str, {"from": Any, "to": Any}]   # field diff against the previous version
+    snapshot: dict                                  # full state at this version
+
+class ValidationIssue(BaseModel):          # also used in StageRunDetail.validation_issues
+    severity: Literal["info", "warning", "error"]
+    code: str      # provenance_downgraded, evidence_unresolved, requirement_without_ac, risk_unmitigated,
+                   # unknown_feature, duplicate_dropped, schema_repair, ai_fallback, injection_flag
+    message: str; path: str | None; item_key: str | None
+```
+
+New error usages (no new codes): 409 `gate_blocked` for unmet gate preconditions, with `details: [{field: "gate", message}]` listing each blocker; 409 `conflict` when the target belongs to a superseded stage run ("The requirement set was regenerated; reload to continue") or a proposal is stale; 422 `validation_error` for provenance violations (`field: "classification"`).
+
+### Workflow additions
+
+- `POST /projects/{id}/stages/{stage}/run` now accepts `requirements`, `readiness_criteria` and `test_strategy`. Parameters: `requirements`: `{include_documents: bool = True, guidance: str | None (≤ 1000; passed to the AI path as user guidance, ignored by rules)}`; `test_strategy`: `{guidance?}`. Errors: 409 `gate_blocked` if an upstream isn't gate-satisfied (an upstream with a `required` gate must be `approved`); 409 `conflict` if a candidate run of this stage is still pending review.
+- Regeneration review (generic for `requirements` (incl. ACs), `readiness_criteria`, `test_strategy` (incl. risks)): when a stage that already has a current version runs again, the new run is a **candidate** (`review_status=pending_review`). It does not change the current version.
+
+  | Method | Path | Request | Response | Notes |
+  |---|---|---|---|---|
+  | GET | `/projects/{id}/stages/{stage}/runs/{version}/review` | `?include_unchanged=bool` | `ChangeReview` | |
+  | POST | `/projects/{id}/stages/{stage}/runs/{version}/review/apply` | `ChangeReviewApply` | `StageState` | member+. Makes the candidate current with the chosen actions; writes revisions; reopens the gate if approved. 409 if not pending or a newer candidate exists. Audit `stage.review_applied`. |
+  | POST | `/projects/{id}/stages/{stage}/runs/{version}/review/discard` | `{comment?}` | `StageState` | member+. Candidate kept in history as `discarded`. |
+- `StageState` adds `pending_review: {"version": int, "created_at": datetime, "summary": dict[str, int]} | None` and `approved_input: {"stage_key": StageKey, "snapshot_hash": str, "version": int} | None` (which upstream approval this stage's current output used).
+- `GET /projects/{id}/stages/{stage}/runs/{version}`: `output` for `requirements` = `{counts: {...}, diff: RegenerationDiff}`; for `test_strategy` = `{strategy_version, plan_version, risks: {low, medium, high, very_high}}`.
+- `POST /projects/{id}/gates/{gate}/decision` for `G3`/`G4`: same body. Approve preconditions (else 409 `gate_blocked`):
+  - **G3** blockers: (1) a `readiness_criteria` output exists for the current requirements version; (2) at least one requirement is `approved`. Warnings (shown in `preconditions` with `met=false, blocking=false`; the UI confirms): drafts or `needs_info` remain (they are excluded from the approved snapshot and from strategy input); approved requirements without an approved AC; approved requirements that are `assumed`/`unverified`.
+  - **G4** blockers: (1) G3 approved (the strategy's `approved_input` names the snapshot used); (2) the strategy has at least one in-scope level and type, and entry and exit criteria are not empty; (3) every `high`/`very_high` open risk has at least one mitigation test type. Warnings: decisions without rationale; accepted risks without comment. Approving G4 queues the test plan job (P2-07).
+  - On re-approval with a different snapshot, downstream stages whose `approved_input` differs become `stale`. Until then they keep using the last approved snapshot.
+  - The decision stores `artefact_snapshot` (ids + versions), so reports and the UI can tell whether what is shown is exactly what was approved.
+- `GateDecision` adds `artefact_snapshot: {"items": int, "hash": str}` (summary; full list in the DB) and `stage_run_versions: dict[StageKey, int]`.
+- `StageState.gate.preconditions: list[{"code": str, "met": bool, "blocking": bool, "message": str, "link": str | None}]` (computed on read for G3/G4) lets the UI show blockers before the user clicks.
+- `StageState.gate.changes_since_approval: int` (G3/G4, additive): items in the current gate snapshot that are new or at another version than in the last approval, plus approved items that left it; `0` if never approved.
+- `StageRunSummary` (`GET /projects/{id}/stages/{stage}/runs`) adds `review_status: Literal["not_required", "pending_review", "applied", "discarded"]` (it already has `created_at`, `started_at`, `finished_at`, `generated_by`, `partial`).
+
+### Project secrets (P2-01)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/secrets` | – | `list[SecretMeta]` | Any role. Values never returned. |
+| PUT | `/projects/{id}/secrets/scan_credentials` | `ScanCredentialsInput` | `201 SecretMeta` (created) / `200` (rotated) | owner/admin (`can_approve`). Audit `secret.created` / `secret.rotated`. |
+| DELETE | `/projects/{id}/secrets/{secret_id}` | – | `204` | owner/admin. Deletes ciphertext; clears `project_urls.credentials_secret_id`. Audit `secret.deleted`. |
+| POST | `/projects/{id}/secrets/scan_credentials/test` | – | `202 {task_id}` | owner/admin. Sign-in check only, no crawl. Rate limit 5 / 10 min / project. Result via events and `SecretMeta.last_result`. 409 `gate_blocked` if the project URL is not attested. |
+
+```python
+class ScanCredentialsInput(BaseModel):
+    login_url: str = Field(max_length=2048)       # must be on an allowed host of the project (else 422)
+    username: str = Field(min_length=1, max_length=200)
+    password: SecretStr = Field(min_length=1, max_length=200)
+
+class SecretMeta(BaseModel):
+    id: UUID; name: str                           # "scan_credentials"
+    kind: Literal["login_credentials"]
+    login_url: str | None
+    username_hint: str | None                     # masked, e.g. "qa…@example.com"; never the full value
+    version: int
+    created_by: UserRef; created_at: datetime; rotated_at: datetime | None
+    last_used_at: datetime | None
+    last_result: Literal["succeeded", "failed", "not_attempted"] | None
+    last_reason_code: Literal["form_not_found", "rejected", "captcha", "mfa_required", "timeout", "blocked"] | None
+    last_used_scan_number: int | None             # additive: scan that last signed in (null for a sign-in test only)
+```
+
+Discovery additions: `ScanSettings.use_credentials: bool = True` (ignored when no credentials). `ScanDetail.auth: {"attempted": bool, "result": str, "reason_code": str | None, "login_url": str | None, "authenticated_pages": int}`. `PageSummary.auth_context: Literal["anonymous", "authenticated"]`. `AccessGap.reason` gains `Sign-in failed with the saved credentials`, `Sign-in needs a CAPTCHA or MFA (not attempted)`. `/scans/{id}/pages` adds filter `auth_context`.
+
+Events: `auth.signin_started {login_url}`, `auth.signin_succeeded {login_url, landing_path}`, `auth.signin_failed {login_url, reason_code}`. Their `data` never contains usernames or passwords. The password and username are registered with the redactor for the task's lifetime.
+
+### Requirements (P2-02, P2-04)
+
+| Method | Path | Request | Response | Errors / notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/requirements` | `?status=&classification=&category=&type=&source=&feature_id=&without_ac=bool&locked=bool&q=&stage_run_version=&limit&cursor` (default: current run) | `Page[RequirementSummary]` | |
+| GET | `/projects/{id}/requirements/stats` | `?stage_run_version=` | `RequirementStats` | Used by reports and assistant; computed. |
+| GET | `/projects/{id}/requirements/diff` | `?from=&to=` (default previous → current) | `RegenerationDiff` | 404 if no run. |
+| POST | `/projects/{id}/requirements` | `RequirementCreate` | `201 RequirementDetail` | member+. `source="user"`, `generated_by="human"`, `classification="assumed"`, added to the current version. Reopens G3 if approved. Audit `requirement.created`. |
+| GET | `/requirements/{id}` | – | `RequirementDetail` | |
+| GET | `/projects/{id}/requirements/by-key/{key}` | – | `RequirementDetail` | Additive. The requirement with this key in the current set (keys are stable across regenerations); 404 otherwise. |
+| PATCH | `/requirements/{id}` | `RequirementPatch` | `RequirementDetail` | member+. 409 `conflict` on version mismatch, superseded run, or locked item ("Unlock to edit"). Classification is re-derived by code. Approved → back to `draft`, G3 reopens. Audit `requirement.updated`. |
+| POST | `/requirements/{id}/status` | `{version, status: RequirementStatus, comment: str \| None, reason?: "not_applicable"\|"duplicate"\|"incorrect"\|"out_of_scope"\|"other", duplicate_of?: UUID}` (comment required for `rejected`, `needs_info` unless a `reason` is given; `reason` only with `rejected`; `duplicate_of` required with, and only with, `duplicate`, and must be another requirement of the same set, else 422) | `RequirementDetail` | member+. Rejection writes a `knowledge_items(kind=decision)` so regeneration respects it. With a reason, `status_comment` becomes e.g. "Duplicate of REQ-0003: <comment>". **Approving a requirement also approves its `draft` acceptance criteria in the same transaction** (revision reason "Approved with REQ-…"); the returned `RequirementDetail.acceptance_criteria` shows them, so no separate AC calls are needed. Audit `requirement.status_changed`. |
+| POST | `/projects/{id}/requirements/bulk-status` | `{ids: list[UUID] (1..200), status, comment?}` | `{updated: list[RequirementSummary], skipped: list[{id, key, reason}], approved_acceptance_criteria: list[AcceptanceCriterion]}` | member+. Uses current versions; skips superseded rows. Approval cascades as for the single endpoint; the cascaded ACs are returned. |
+| POST | `/requirements/{id}/lock` | `{version, locked: bool}` | `RequirementDetail` | member+. Locked = no edits and preserved on regeneration; status changes still allowed. |
+| GET | `/requirements/{id}/revisions` | – | `list[Revision]` | By lineage, across stage runs. |
+| GET | `/requirements/{id}/readiness` | – | `list[ReadinessEvaluation]` | Per-requirement DoR (P2-05). |
+
+```python
+class RequirementSummary(Provenanced):     # provenance == classification (both returned; like gate == gate_key)
+    id: UUID; key: str; lineage_id: UUID
+    title: str
+    type: Literal["functional", "non_functional"]
+    category: RequirementCategory
+    behaviour_scope: BehaviourScope
+    classification: Classification
+    source: Literal["discovery", "document", "user", "assistant"]
+    status: RequirementStatus
+    ac_count: int; ac_approved: int
+    risk_level: Literal["low", "medium", "high", "very_high"] | None    # max of linked risks (P2-06), else None
+    stage_run_version: int
+    version: int; locked: bool; human_edited: bool; updated_at: datetime
+    # Additive:
+    conflict: bool                           # a validation issue with a "conflict" code (rules don't raise these yet)
+    changed_in_latest: bool                  # differs from (or is new vs) the run this generation replaced; false for v1
+    related_feature_names: list[str]
+
+class RequirementDetail(RequirementSummary):
+    classification_reason: str               # additive: plain-language reason for the classification
+    status_reason: str | None; duplicate_of: UUID | None    # additive: from the last rejection with a reason
+    description: str
+    assumptions: list[str]
+    rule_id: str | None                      # e.g. "form.required_field" when generated_by="rules"
+    related_features: list[ArtefactRef]
+    source_refs: {"journey_ids": list[UUID], "page_ids": list[UUID], "document_ids": list[UUID]}
+    acceptance_criteria: list[AcceptanceCriterion]
+    linked_test_cases: list[ArtefactRef]     # always [] in Phase 2 (spec §6 field kept for Phase 3)
+    status_comment: str | None; status_changed_by: UserRef | None; status_changed_at: datetime | None
+    validation_issues: list[ValidationIssue]
+    evidence: list[EvidenceLink]             # resolved evidence_refs, signed URLs re-issued on every read
+    created_at: datetime; updated_by: UserRef | None
+
+class RequirementCreate(BaseModel, extra="forbid"):
+    title: str = Field(min_length=5, max_length=160)
+    description: str = Field(max_length=2000)
+    type: Literal["functional", "non_functional"]
+    category: RequirementCategory
+    behaviour_scope: BehaviourScope
+    evidence_refs: list[EvidenceRef] = []    # optional supporting evidence; classification is still "assumed"
+    assumptions: list[str] = Field(default_factory=list, max_length=20)
+    feature_ids: list[UUID] = []
+    # no classification / confidence: labels are code-owned (extra="forbid" -> 422 if sent)
+
+class RequirementPatch(BaseModel, extra="forbid"):
+    version: int
+    title: str | None = None; description: str | None = None
+    type: ... | None = None; category: ... | None = None; behaviour_scope: ... | None = None
+    evidence_refs: list[EvidenceRef] | None = None   # removing the last ref of an observed item downgrades it
+    assumptions: list[str] | None = None
+    feature_ids: list[UUID] | None = None
+    change_reason: str | None = Field(None, max_length=500)
+
+class RequirementStats(BaseModel):
+    stage_run_version: int | None; generated_by: str | None
+    total: int
+    by_classification: dict[Classification, int]
+    by_status: dict[RequirementStatus, int]
+    by_type: dict[str, int]; by_category: dict[str, int]; by_source: dict[str, int]
+    without_ac: int; locked: int
+    pending_review_version: int | None
+    features_without_requirement: list[ArtefactRef]
+    acceptance_criteria: {"total": int, "approved": int, "by_kind": dict[str, int]}
+```
+
+### Acceptance criteria (P2-03)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| POST | `/requirements/{id}/acceptance-criteria` | `AcceptanceCriterionCreate` | `201 AcceptanceCriterion` | member+. `generated_by="human"`. If the requirement was approved it goes back to `draft` and G3 reopens (also when the AC comes from an accepted assistant proposal; such revisions have `source: "assistant"` and `proposal_id`). Audit `ac.created`. |
+| PATCH | `/acceptance-criteria/{id}` | `{version, given?, when?, then?, kind?, evidence_refs?, change_reason?}` | `AcceptanceCriterion` | Same lock/version rules; classification re-derived by code. Audit `ac.updated`. |
+| POST | `/acceptance-criteria/{id}/status` | `{version, status: ItemStatus, comment?}` | `AcceptanceCriterion` | No DELETE: reject instead (traceability). |
+| POST | `/acceptance-criteria/{id}/lock` | `{version, locked}` | `AcceptanceCriterion` | |
+| GET | `/acceptance-criteria/{id}/revisions` | – | `list[Revision]` | |
+
+```python
+class AcceptanceCriterion(Provenanced, Editable):
+    id: UUID; key: str; lineage_id: UUID; requirement_id: UUID; requirement_key: str
+    kind: Literal["positive", "negative", "boundary"]
+    given: str = Field(max_length=500); when: str = Field(max_length=500); then: str = Field(max_length=500)
+    classification: Classification                    # never stronger than its requirement
+    status: ItemStatus
+    rule_id: str | None
+    test_values: list[{"field": str, "value": str, "note": str}] | None   # e.g. boundary values computed in code
+
+class AcceptanceCriterionCreate(BaseModel, extra="forbid"):
+    kind: Literal["positive", "negative", "boundary"]
+    given: str = Field(min_length=3, max_length=500); when: str = Field(min_length=3, max_length=500)
+    then: str = Field(min_length=3, max_length=500)
+    evidence_refs: list[EvidenceRef] = []     # human-created ACs are always classified 'assumed'
+```
+
+### Definition of Ready / Done (P2-05)
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/projects/{id}/readiness-criteria` | `?stage_run_version=` | `ReadinessCriteria` |
+| POST | `/projects/{id}/readiness-criteria` | `{kind: "dor"\|"dod", scope: "requirement"\|"project", text: str(5..300)}` | `201 ReadinessCriterion` (member+) |
+| PATCH | `/readiness-criteria/{id}` | `{version, text?, scope?, position?: int (0-based, within its kind), change_reason?}` | `ReadinessCriterion` (a position-only change reorders without a version bump and doesn't reopen G3; allowed on locked items) |
+| POST | `/readiness-criteria/{id}/status` | `{version, status: "active"\|"removed"}` | `ReadinessCriterion` |
+| POST | `/readiness-criteria/{id}/lock` | `{version, locked}` | `ReadinessCriterion` |
+
+```python
+class ReadinessCriterion(Editable):
+    id: UUID; key: str                          # DOR-01 / DOD-01
+    lineage_id: UUID
+    kind: Literal["dor", "dod"]; scope: Literal["requirement", "project"]
+    text: str
+    status: Literal["active", "removed"]
+    check: {"rule_id": str, "evaluable_from_phase": int} | None   # None = manual criterion
+    evaluation: ReadinessEvaluation | None
+    position: int                                # additive: order within DoR / DoD (lists are sorted by it)
+    generated_by: Literal["ai", "rules", "human"]
+
+class ReadinessEvaluation(BaseModel):
+    criterion_key: str
+    status: Literal["met", "not_met", "unknown", "not_applicable"]   # "unknown" when the data doesn't exist yet
+    detail: str                                  # e.g. "No test execution exists yet (Phase 4)"
+    evidence: list[ArtefactRef]
+    evaluated_at: datetime
+
+class ReadinessCriteria(BaseModel):
+    stage_run_version: int | None; requirements_version: int | None; generated_by: str | None
+    definition_of_ready: list[ReadinessCriterion]
+    definition_of_done: list[ReadinessCriterion]
+```
+
+### Test strategy and risk register (P2-06)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-strategy` | `?version=` | `TestStrategy` | 404 if none. |
+| GET | `/projects/{id}/test-strategy/versions` | – | `list[{version, stage_run_version, status, generated_by, created_at, approved: bool}]` | |
+| PATCH | `/projects/{id}/test-strategy` | `{version, sections: TestStrategySectionsPatch, change_reason?}` | `TestStrategy` | member+. Marks sections `human_edited`; plan becomes out of date; G4 reopens if approved. Audit `strategy.updated`. |
+| GET | `/projects/{id}/test-strategy/revisions` | – | `list[Revision]` | |
+| GET | `/projects/{id}/risks` | `?level=&status=&requirement_id=&limit&cursor` | `Page[Risk]` | |
+| GET | `/projects/{id}/risks/matrix` | – | `{cells: list[{likelihood, impact, count, risk_keys}], totals: dict[level, int]}` | Computed. |
+| POST | `/projects/{id}/risks` | `RiskCreate` | `201 Risk` | member+. Audit `risk.created`. |
+| GET | `/risks/{id}` | – | `Risk` | |
+| PATCH | `/risks/{id}` | `RiskPatch` | `Risk` | Score/level recomputed in code. `score`/`level`/`classification` in the body → 422. `status="accepted"` needs `comment`. Audit `risk.updated`. |
+| POST | `/risks/{id}/lock` | `{version, locked}` | `Risk` | |
+| GET | `/risks/{id}/revisions` | – | `list[Revision]` | |
+
+```python
+TestType = Literal["functional", "smoke", "sanity", "regression", "exploratory", "usability", "accessibility",
+                   "compatibility", "security", "performance", "load", "stress", "spike", "endurance"]
+TestLevel = Literal["component", "component_integration", "system", "system_integration", "acceptance"]
+Technique = Literal["equivalence_partitioning", "boundary_value_analysis", "decision_table", "state_transition",
+                    "use_case", "error_guessing", "exploratory"]
+
+class StrategyItem(BaseModel):            # base for list entries in sections
+    text: str; rationale: str | None
+    evidence_refs: list[EvidenceRef] = []; related: list[ArtefactRef] = []
+    generated_by: Literal["ai", "rules", "human"]
+
+class TestStrategy(BaseModel):
+    id: UUID; version: int; stage_run_version: int
+    status: Literal["draft", "awaiting_approval", "approved", "stale"]
+    generated_by: Literal["ai", "rules", "mixed", "human"]
+    sections: {
+        "scope_in": list[StrategyItem], "scope_out": list[StrategyItem],          # out items carry the reason
+        "test_levels": list[{"level": TestLevel, "in_scope": bool, "rationale": str}],
+        "test_types": list[{"type": TestType, "in_scope": bool, "rationale": str,
+                            "requires_approval": bool, "available_from_phase": int}],
+        "techniques_by_feature": list[{"feature": ArtefactRef, "techniques": list[{"technique": Technique,
+                                       "rationale": str, "evidence_refs": list[EvidenceRef]}]}],
+        "risk_based_approach": list[{"level": str, "depth": str}],
+        "entry_criteria": list[StrategyItem], "exit_criteria": list[StrategyItem],   # exit items measurable
+        "environments": list[{"name": str, "url": str, "browsers": list[str], "viewports": list[str],
+                              "auth": Literal["none", "credentials"], "notes": str | None}],
+        "test_data_approach": list[StrategyItem], "tools": list[StrategyItem],
+        "assumptions": list[StrategyItem], "constraints": list[StrategyItem], "limitations": list[StrategyItem],
+    }
+    human_edited_sections: list[str]; locked_sections: list[str]
+    approved_input: {"requirements_snapshot_hash": str, "requirements_version": int}
+    plan_status: Literal["current", "out_of_date", "not_started"]   # not_started until G4 is approved
+    validation_issues: list[ValidationIssue]
+    updated_at: datetime; updated_by: UserRef | None
+
+class Risk(Provenanced, Editable):
+    id: UUID; key: str; lineage_id: UUID              # RISK-001
+    title: str; description: str
+    category: Literal["product", "project"]
+    requirements: list[ArtefactRef]; features: list[ArtefactRef]
+    likelihood: int = Field(ge=1, le=5); impact: int = Field(ge=1, le=5)
+    score: int                                        # likelihood * impact, computed
+    level: Literal["low", "medium", "high", "very_high"]  # 1-4, 5-9, 10-16, 20-25 (design P2 §2)
+    factors: list[{"factor": str, "affects": Literal["likelihood", "impact"], "delta": int,
+                   "evidence_refs": list[EvidenceRef]}]
+    likelihood_rationale: str; impact_rationale: str
+    mitigation: {"test_types": list[TestType], "techniques": list[Technique], "notes": str | None}
+    requires_approval: bool                           # true if mitigation includes security/perf/load types
+    status: Literal["open", "mitigated", "accepted"]
+    status_comment: str | None                        # required for "accepted"
+
+class RiskCreate(BaseModel, extra="forbid"):
+    title: str = Field(min_length=5, max_length=160); description: str = Field(max_length=2000)
+    category: Literal["product", "project"] = "product"     # created as "assumed", source user
+    requirement_ids: list[UUID] = []; feature_ids: list[UUID] = []
+    likelihood: int = Field(ge=1, le=5); impact: int = Field(ge=1, le=5)
+    likelihood_rationale: str; impact_rationale: str
+    mitigation: {"test_types": list[TestType], "techniques": list[Technique], "notes": str | None}
+
+class RiskPatch(BaseModel, extra="forbid"):   # every field optional except version; no score/level
+    version: int
+    ...; status: Literal["open", "mitigated", "accepted"] | None = None
+    comment: str | None = None                        # required when status="accepted"
+    change_reason: str | None = None
+```
+
+### Test plan (P2-07)
+
+A job inside the `test_strategy` stage writes the plan **when G4 is approved**, from the approved strategy version. The plan has no separate sign-off; it inherits G4. Every save creates a new plan version.
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-plan` | `?version=` | `TestPlan` | 404 until G4 has been approved once. |
+| GET | `/projects/{id}/test-plan/versions` | – | `list[{version, strategy_version, source: "derived" \| "edited" \| "regenerated", note, created_by, created_at}]` | |
+| PATCH | `/projects/{id}/test-plan` | `{version, sections: partial (plan-owned only), note?: str(≤200)}` | `TestPlan` (new version) | member+. A strategy-derived section in the body returns 422 "Edit this in the Test Strategy". Audit `plan.updated`. Does not reopen G4. |
+| POST | `/projects/{id}/test-plan/regenerate` | `{guidance?}` | `202 {candidate_version}` | member+. Uses the latest **approved** strategy. Produces a candidate, reviewed with the same pattern: `GET /projects/{id}/test-plan/changes/{candidate_version}`, `POST …/apply`, `POST …/discard` (`ChangeReview` / `ChangeReviewApply`). Edited sections are protected. 409 `gate_blocked` if G4 was never approved. |
+| GET | `/projects/{id}/test-plan/compare` | `?from=&to=` | `{sections: list[{section, field_diff}]}` | |
+
+```python
+PlanOwnedSection = Literal["introduction", "test_items", "suspension_criteria", "resumption_requirements",
+                           "deliverables", "roles", "schedule", "risks_and_contingencies"]
+StrategyDerivedSection = Literal["scope", "approach", "environments_and_test_data", "entry_exit_criteria"]
+
+class TestPlan(BaseModel):
+    id: UUID; key: str                         # "TP-001"
+    version: int; strategy_version: int; stage_run_version: int
+    status: Literal["current", "out_of_date"]   # out_of_date when a newer strategy version has been approved
+    generated_by: Literal["ai", "rules", "mixed", "human"]
+    sections: {
+        "introduction": str,
+        "test_items": list[ArtefactRef],                       # approved requirements/features in scope
+        "scope": dict, "approach": dict, "environments_and_test_data": dict, "entry_exit_criteria": dict,  # read-only, from strategy
+        "suspension_criteria": list[str], "resumption_requirements": list[str],
+        "deliverables": list[{"name": str, "available_from_phase": int, "exists": bool}],
+        "roles": list[{"role": str, "responsibility": str, "assignee": str | None}],
+        "schedule": list[{"milestone": str, "after_stage": StageKey, "target_date": date | None}],  # the agent never sets dates
+        "risks_and_contingencies": list[{"risk": ArtefactRef, "contingency": str}],
+    }
+    approvals: list[{"gate": GateKey, "status": str, "decided_by": UserRef | None, "decided_at": datetime | None}]  # computed
+    human_edited_sections: list[PlanOwnedSection]
+    rules_template_sections: list[PlanOwnedSection]   # standard wording to edit for this project (AI off)
+    note: str | None
+    updated_at: datetime; updated_by: UserRef | None
+```
+
+### Source documents (P2-08)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| POST | `/projects/{id}/documents` | `multipart/form-data`: `file` (≤ 20 MB), `title?` (≤ 160) | `202 SourceDocument` (status `extracting`) | member+. Type by magic bytes: PDF, DOCX, Markdown, plain text; mismatch → 422. Max 10 active documents (409 `conflict`); both limits from `organisations.limits`. Rate limit 20 / hour / project. Marks `requirements` stale. Audit `document.uploaded`. |
+| GET | `/projects/{id}/documents` | `?status=&include_withdrawn=bool` | `list[SourceDocument]` | |
+| GET | `/documents/{id}` | – | `SourceDocumentDetail` | |
+| GET | `/documents/{id}/download` | – | `302` to signed content URL (`attachment`, `CSP: sandbox`) | Audit `document.downloaded`. |
+| POST | `/documents/{id}/withdraw` | `{reason?}` | `SourceDocument` | member+. Excluded from future generation; files kept. Marks `requirements` stale. |
+
+```python
+class SourceDocument(BaseModel):
+    id: UUID; key: str                            # DOC-001
+    title: str; filename: str
+    mime: Literal["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                  "text/markdown", "text/plain"]
+    size: int; sha256: str
+    status: Literal["extracting", "ready", "failed", "withdrawn"]
+    pages: int | None; chars: int | None; sections: int | None
+    statements_found: int | None                  # requirement-like statements detected by rules
+    injection_flags: int
+    error: str | None                             # e.g. "No extractable text (scanned documents need OCR, not supported yet)"
+    uploaded_by: UserRef; created_at: datetime; withdrawn_at: datetime | None
+    # Additive. Status stays one of the four above; a partial extraction is `ready` with `partial=true`.
+    partial: bool                                 # page cap (200) or character cap (500k) reached
+    pages_done: int | None; pages_total: int | None   # PDFs only; extraction is a single bounded step, so no live progress
+
+class SourceDocumentDetail(SourceDocument):
+    outline: list[{"anchor": str, "heading": str, "page": int | None}]    # anchors cited in EvidenceRef.note
+    injection_findings: list[{"anchor": str, "excerpt": str}]
+    file: EvidenceLink; text: EvidenceLink
+    cited_by: list[ArtefactRef]                   # requirements citing this document
+```
+
+Document citations use the normal `EvidenceRef`: `evidence_id` = the `document_text` evidence, `excerpt` ≤ 300 chars, `note` = `"DOC-001 §2.3 p.4"`.
+
+Events: `document.uploaded`, `document.extracted {document_id, key, chars, statements_found}`, `document.failed {document_id, key, reason}`.
+
+### Reports (P2-09)
+
+`POST /projects/{id}/reports` accepts `report_type ∈ {"discovery", "requirements_spec", "test_strategy", "test_plan"}`, with optional `stage_run_version` (only the current version can be rendered; another value → 409 `conflict`), and creates an on-demand version (shown as approved only if its source equals the last gate approval). 409 `gate_blocked` "Generate the … first" when the stage has no output. **Frozen approved versions** are created automatically: `requirements_spec` on each G3 approval, `test_strategy` on each G4 approval, `test_plan` when the plan is written or updated from an approved strategy. Reports are never regenerated on every edit. `download?format=pdf|html|json` is unchanged.
+
+```python
+class ReportSummary(...):                 # Phase 1 fields kept; added:
+    approval: {"gate": GateKey | None, "status": Literal["draft", "approved"], "decided_by": UserRef | None,
+               "decided_at": datetime | None}      # "approved" only if the gate snapshot equals the report's source versions
+    is_latest_source: bool                         # false once the requirements/strategy/plan changed after generation
+    frozen: bool                                   # true for the versions created automatically at approval / plan write
+
+class RequirementsSpecContent(BaseModel):
+    project: dict; generated_at: datetime; approval: dict
+    scope_and_method: list[str]; classification_legend: dict[Classification, str]
+    counts: RequirementStats                       # computed, identical to /requirements/stats
+    requirements_by_category: dict[str, list[{"requirement": RequirementDetail}]]
+    readiness: ReadinessCriteria
+    open_questions: list[ArtefactRef]               # needs_info + unverified
+    source_documents: list[SourceDocument]
+    limitations: list[str]
+    summary: str; summary_generated_by: Literal["ai", "rules"]
+    disclaimer: str   # "Provisional requirements derived from the observable user interface; backend behaviour not verified."
+
+class TestStrategyReportContent(BaseModel):
+    project: dict; generated_at: datetime; approval: dict
+    strategy: TestStrategy; risks: list[Risk]; risk_matrix: dict
+    summary: str; summary_generated_by: Literal["ai", "rules"]
+    approvals_note: str   # "Security, performance and load testing need separate approval; G4 does not authorise them."
+
+class TestPlanReportContent(BaseModel):
+    project: dict; generated_at: datetime; approval: dict
+    plan: TestPlan; strategy_version: int
+```
+
+### AI QA Analyst assistant (P2-10)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/assistant/capabilities` | – | `AssistantCapabilities` | Any role. |
+| GET | `/projects/{id}/assistant/threads` | `?limit&cursor` | `Page[ThreadSummary]` | Only the caller's threads. |
+| POST | `/projects/{id}/assistant/threads` | `{title?: str(≤120)}` | `201 Thread` | Any role (viewers get read-only intents). |
+| GET | `/assistant/threads/{thread_id}` | `?before=&limit=` | `Thread` (messages newest page) | Another user's thread → 404. |
+| POST | `/assistant/threads/{thread_id}/archive` | – | `204` | |
+| POST | `/assistant/threads/{thread_id}/messages` | `AssistantMessageCreate` | `200 AssistantTurn` (JSON) or `200 text/event-stream` when `Accept: text/event-stream` | Rate limit 20/min/user; AI turns 200/day/org → 429 with `Retry-After`. |
+| GET | `/projects/{id}/assistant/proposals` | `?status=&limit&cursor` | `Page[Proposal]` | Caller's proposals; members with `can_approve` also see others' pending proposals (read only). |
+| GET | `/assistant/proposals/{id}` | – | `Proposal` | |
+| POST | `/assistant/proposals/{id}/accept` | `{comment?: str}` | `Proposal` (status `accepted`, `result`) | member+, and only the proposal's creator (others with `can_approve` can read it: 403). Applies through the same service functions as REST, with the caller's permissions. Target version changed → 409 `conflict` and proposal `stale`. Audit `assistant.proposal_accepted`. |
+| POST | `/assistant/proposals/{id}/reject` | `{comment?: str}` | `Proposal` | Audit `assistant.proposal_rejected`. |
+
+```python
+AssistantIntent = Literal[
+    # deterministic, work with AI off
+    "help", "workflow_status", "needs_attention", "coverage_summary", "list_requirements", "explain_requirement",
+    "explain_gate", "list_access_gaps", "risk_summary", "execution_results",
+    "propose_negative_criteria", "propose_risk_reassessment", "propose_regenerate",
+    # need AI (answered with notice ai_unavailable when AI is off)
+    "propose_requirement_update", "propose_missing_requirements", "propose_risk_update"]
+    # Implementation note (P2-10): propose_missing_requirements and propose_risk_update are listed with
+    # available=false in capabilities (not implemented yet). Accepted proposal kinds today: add_acceptance_criteria,
+    # update_requirement, reassess_risks, regenerate_stage. SSE sends assistant.started, assistant.proposal* and
+    # assistant.done (no token deltas). Viewers get read-only intents; proposal intents answer "read-only access".
+
+class AssistantMessageCreate(BaseModel, extra="forbid"):
+    content: str | None = Field(None, min_length=1, max_length=4000)    # free text
+    intent: AssistantIntent | None = None                               # chip/button; skips routing
+    params: dict[str, Any] = {}                                         # validated per intent, e.g.
+        # list_requirements: {status?, classification?, category?, without_ac?, feature_key?}
+        # explain_requirement: {key}; explain_gate: {gate}; propose_negative_criteria: {requirement_key}
+        # propose_requirement_update (AI): {requirement_keys: list[str] (1..20), instruction: str (≤ 1000)}
+        # propose_missing_requirements (AI): {feature_keys: list[str], focus?: str}
+        # propose_regenerate: {stage: "requirements"|"readiness_criteria"|"test_strategy"|"test_plan", reason?}
+    context: ArtefactRef | None = None                                  # "Ask the analyst" from a workspace
+    # at least one of content / intent (else 422)
+
+class AssistantCapabilities(BaseModel):
+    ai_enabled: bool; model: str | None
+    free_form: bool                                   # == ai_enabled
+    intents: list[{"intent": AssistantIntent, "label": str, "example": str, "params_schema": dict,
+                   "creates_proposal": bool, "requires_ai": bool, "available": bool,
+                   "requires_role": Literal["viewer", "member"]}]
+    later_phase_tasks: list[{"label": str, "available_from_phase": int, "needs": str}]   # §16 requests not yet possible
+    notice: str | None    # AI off: "Free-form answers need AI, which isn't configured. Built-in questions still work."
+
+class AssistantMessage(BaseModel):
+    id: UUID; thread_id: UUID; role: Literal["user", "assistant"]
+    content: str                                      # plain text + minimal markdown (lists, bold, code); rendered escaped
+    intent: AssistantIntent | None
+    answered_by: Literal["intent", "ai"] | None       # assistant messages only
+    generated_by: Literal["ai", "rules"] | None
+    citations: list[ArtefactRef]                      # every ID token in content resolves to one of these
+    proposals: list[Proposal]
+    notices: list[{"code": Literal["ai_unavailable", "built_in_answer", "unresolved_citation", "no_execution_data",
+                                   "untrusted_content", "partial_answer"], "message": str}]
+    data_versions: dict[str, int]                     # additive: stage-run (and plan) versions the answer read; {} for user messages
+    follow_ups: list[{"intent": AssistantIntent, "label": str, "params": dict}]   # additive: suggested next questions
+    context: ArtefactRef | None                       # additive: echo of the "Ask the analyst" context (user messages)
+    created_at: datetime
+
+class ThreadSummary(BaseModel):
+    id: UUID; project_id: UUID; title: str; created_at: datetime; last_message_at: datetime
+    archived_at: datetime | None
+    pending_proposals: int                            # additive
+
+class Thread(ThreadSummary):
+    messages: list[AssistantMessage]                  # oldest first; `?before=<message id>&limit=` (≤ 50) pages back
+    has_more: bool
+
+class AssistantTurn(BaseModel):
+    user_message: AssistantMessage; reply: AssistantMessage
+
+class Proposal(BaseModel):
+    id: UUID; key: str                                # PROP-0001
+    thread_id: UUID                                   # additive
+    kind: Literal["add_acceptance_criteria", "update_requirement", "add_requirement", "reassess_risks",
+                  "update_risk", "regenerate_stage"]
+    target: ArtefactRef | None
+    summary: str
+    payload: dict                                     # kind-specific, validated by a Pydantic model per kind
+    preview: list[{"field": str, "from": Any, "to": Any}] | list[AcceptanceCriterionCreate] | None
+    base_versions: dict[str, int]                     # entity id -> version at proposal time
+    status: Literal["pending", "accepted", "rejected", "stale", "failed"]
+    generated_by: Literal["ai", "rules"]
+    created_by: UserRef; created_at: datetime
+    decided_by: UserRef | None; decided_at: datetime | None; decision_comment: str | None
+    result: {"applied": list[ArtefactRef], "error": str | None} | None
+```
+
+SSE reply stream (same framing as the project stream; one response per message, closes on `assistant.done` or `assistant.error`):
+
+```
+event: assistant.started   data: {"message_id": "…", "answered_by": "ai"}
+event: assistant.delta     data: {"message_id": "…", "text": "Three requirements are still in draft: "}
+event: assistant.tool      data: {"name": "list_requirements", "status": "done"}     # user-readable progress, no payloads
+event: assistant.proposal  data: {Proposal}
+event: assistant.done      data: {AssistantTurn}          # final, citation-checked message is authoritative
+event: assistant.error     data: {"code": "ai_error" | "rate_limited" | "internal", "message": "…"}
+```
+Deltas are display hints only. The `assistant.done` message has passed the citation guard and replaces the streamed text. Intent answers (AI off) are sent as a single `assistant.done`. Assistant traffic is **not** written to the project event stream (threads are private). Accepting a proposal emits the normal `artefact.updated` project event.
+
+AI tool set (P2-10, server-side only; not an HTTP API): read-only `get_workflow`, `list_requirements`, `get_requirement`, `get_requirement_stats`, `list_risks`, `get_strategy`, `get_plan`, `get_readiness`, `list_access_gaps`, `get_evidence_summary`; proposal tools `propose_acceptance_criteria`, `propose_requirement_update`, `propose_requirement`, `propose_risk_update`, `propose_regenerate`. There are no tools for gates, approval policy, secrets, deletion, discovery runs or execution.
+
+### Phase 2 project events (added to the SSE stream)
+
+`requirements.generated {stage_run_version, total, by_classification, generated_by}`, `requirements.review_ready {candidate_version, summary}`, `stage.review_applied {stage_key, version, changes}`, `readiness.generated {dor, dod, not_met}`, `strategy.generated {version, generated_by}`, `risks.updated {low, medium, high, very_high}`, `plan.generated {version, strategy_version}`, `gate.reopened {gate, reason}`, `artefact.updated {type, key, version, source: "user"|"assistant_proposal"|"regeneration_review"}`, `validation.issue {code, message, item_key}`, plus the `auth.*` and `document.*` events above. Every event keeps the Phase 1 `kind` field (`status`, `action`, `finding`, `warning`, `error`, `gate`). `data` never contains secrets, document text or page text.
+
+### Phase 2 rate limits
+
+| Scope | Limit |
+|---|---|
+| assistant messages per user | 20 / min |
+| assistant AI turns per organisation | 200 / day (configurable in `organisations.limits`) |
+| document uploads per project | 20 / hour |
+| sign-in tests per project | 5 / 10 min |
+| stage runs per project | 10 / hour (Phase 1 limit; also covers plan regenerate) |
+
 ## Later phases (outline)
 
 | Phase | Endpoints |
 |---|---|
-| 2 | `POST/GET/DELETE /projects/{id}/secrets` (write-only values), `GET /projects/{id}/requirements`, `GET/PATCH /requirements/{id}` (edit, approve, reject, lock), `POST /requirements/{id}/acceptance-criteria`, `PATCH /acceptance-criteria/{id}`, `GET /projects/{id}/readiness-criteria`, `GET/PATCH /projects/{id}/test-strategy`, `GET/PATCH /projects/{id}/test-plan`, `GET /requirements/{id}/revisions`, `POST /projects/{id}/documents` (upload source docs, untrusted) |
-| 3 | `GET /projects/{id}/test-conditions`, `GET/POST /projects/{id}/test-cases`, `GET/PATCH/DELETE /test-cases/{id}`, `POST /test-cases/bulk-status`, `GET /projects/{id}/traceability` (matrix + coverage stats + gap lists), `GET /projects/{id}/risk-register`, `GET /projects/{id}/test-data`, `POST /projects/{id}/assistant/messages` (SSE reply stream) |
+| 2 | Specified in full above ("Phase 2 endpoints"). |
+| 3 | `GET /projects/{id}/test-conditions`, `GET/POST /projects/{id}/test-cases`, `GET/PATCH/DELETE /test-cases/{id}`, `POST /test-cases/bulk-status`, `GET /projects/{id}/traceability` (matrix + coverage stats + gap lists), `GET /projects/{id}/test-data`; risk propagation fields on `/projects/{id}/risks` (register itself ships in Phase 2); assistant v2 adds test-design intents/proposals to the Phase 2 assistant endpoints |
 | 4 | `GET /projects/{id}/automation` (bundle tree), `GET/PUT /automation-scripts/{id}`, `POST /automation-scripts/{id}/validate`, `GET /projects/{id}/automation/export.zip`, `POST /projects/{id}/approvals`, `POST /approvals/{id}/decision`, `POST /projects/{id}/execution-runs` (requires G7 decision id), `GET /execution-runs/{id}`, `POST /execution-runs/{id}/cancel`, `GET /execution-results/{id}` (+analysis), `POST /execution-results/{id}/heal-suggestions/{n}/accept`, `GET/POST /projects/{id}/defects`, `PATCH /defects/{id}` (confirm needs G8 permission) |
 | 5 | `POST /projects/{id}/performance-profiles`, `POST /projects/{id}/performance-runs` (requires approval id), `GET /performance-runs/{id}`, `POST /projects/{id}/accessibility-scans`, `POST /projects/{id}/security-assessments` (passive, approved), report types extended + `format=docx|xlsx|csv`, `GET /audit-logs` (admin), `POST /admin/projects/{id}/purge` |
 | 6 | `POST /projects/{id}/rescans`, `GET /projects/{id}/changes?from=&to=` (diff), `GET /projects/{id}/impact` (affected cases/scripts, rerun recommendation), `POST /projects/{id}/exploratory-sessions` (approved budget), `GET /projects/{id}/release-readiness` |

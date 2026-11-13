@@ -133,3 +133,44 @@ def test_gate_advice_follows_stop_reason(reason: str, advice: str, forbidden: st
     rec = recommend(c, auth_gaps=False, stop_reason=reason)
     text = " ".join(rec.reasons)
     assert advice in text and forbidden not in text
+
+
+def _login_page() -> Any:
+    import uuid
+
+    from app.agents.discovery.heuristics import PageView
+    from app.agents.discovery.schemas import ExtractedForm, FormField
+
+    form = ExtractedForm(
+        method="POST",
+        action="/login",
+        submit_label="Sign in",
+        fields=[FormField(name="email", type="email"), FormField(name="password", type="password")],
+    )
+    return PageView(
+        id=uuid.uuid4(),
+        url="https://s.example/login",
+        title="Sign in",
+        status=200,
+        failed=False,
+        depth=1,
+        parent_id=None,
+        page_type="auth",
+        requires_auth=False,
+        forms=[form],
+    )
+
+
+def test_sign_in_gap_wording_and_attempted_form() -> None:
+    """R2-02: current wording for the credentials suggestion. R2-03: the sign-in form isn't "not submitted" when the
+    scan attempted sign-in."""
+    from app.agents.discovery.heuristics import access_gaps
+
+    common: dict[str, Any] = {"max_pages": 30, "robots_skipped": [], "skipped_links": [], "bot_protection": False}
+    plain = access_gaps([_login_page()], not_visited=0, stop_reason="exhausted", **common)
+    creds = next(g for g in plain if g["reason"] == "Needs credentials")
+    assert creds["suggestion"] == "Add test credentials in Project settings and re-scan"
+    assert "Phase 2" not in str(plain)
+    assert any("was not submitted" in g["description"] for g in plain)
+    attempted = access_gaps([_login_page()], not_visited=0, stop_reason="exhausted", signin_attempted=True, **common)
+    assert not any("was not submitted" in g["description"] for g in attempted)

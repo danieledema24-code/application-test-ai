@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_SCAN_SETTINGS } from "@/lib/contract";
+import { DEFAULT_SCAN_SETTINGS, type SecretMeta } from "@/lib/contract";
+import { useApi } from "@/lib/hooks";
 import { hostOf } from "@/lib/url";
-import { ConfirmDialog, Modal, Button } from "@/components/ui";
+import { Checkbox, ConfirmDialog, Modal, Button } from "@/components/ui";
 import { ScanSettingsFields, toForm, validateScanSettings, type ScanSettingsErrors, type ScanSettingsForm } from "@/components/domain/ScanSettingsFields";
 import { useProject } from "./ProjectContext";
 
@@ -16,11 +18,15 @@ export function RescanDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [busy, setBusy] = useState(false);
   const pagesRef = useRef<HTMLInputElement>(null);
   const depthRef = useRef<HTMLInputElement>(null);
+  const secrets = useApi<SecretMeta[]>(open ? `/projects/${p.id}/secrets` : null, undefined, { shouldRetryOnError: false });
+  const saved = !!secrets.data?.some((s) => s.name === "scan_credentials" || s.kind === "login_credentials");
+  const [signIn, setSignIn] = useState(true);
 
   useEffect(() => {
     if (open) {
       setForm(toForm(p.project?.settings ?? DEFAULT_SCAN_SETTINGS));
       setErrors({});
+      setSignIn(true);
     }
   }, [open, p.project?.settings]);
 
@@ -29,7 +35,7 @@ export function RescanDialog({ open, onClose }: { open: boolean; onClose: () => 
     setErrors(e);
     if (!settings) return (e.max_pages ? pagesRef : depthRef).current?.focus();
     setBusy(true);
-    const ok = await p.rescan(settings);
+    const ok = await p.rescan(saved ? { ...settings, use_credentials: signIn } : settings);
     setBusy(false);
     if (ok) onClose();
   }
@@ -53,7 +59,30 @@ export function RescanDialog({ open, onClose }: { open: boolean; onClose: () => 
         </>
       }
     >
-      <ScanSettingsFields value={form} onChange={setForm} errors={errors} showName={false} refs={{ max_pages: pagesRef, max_depth: depthRef }} />
+      <ScanSettingsFields
+        value={form}
+        onChange={setForm}
+        errors={errors}
+        showName={false}
+        refs={{ max_pages: pagesRef, max_depth: depthRef }}
+        signIn={
+          saved ? (
+            <Checkbox
+              label="Sign in with the saved test account"
+              checked={signIn}
+              onChange={(e) => setSignIn(e.target.checked)}
+              description="Discovery submits the sign-in form only, once, to avoid locking the account."
+            />
+          ) : (
+            <p className="text-small text-fg">
+              No test credentials saved. Discovery covers public pages only.{" "}
+              <Link href={`/projects/${p.id}/settings?view=credentials`} onClick={onClose} className="font-medium text-navy-700 underline underline-offset-2">
+                Add credentials in Project settings
+              </Link>
+            </p>
+          )
+        }
+      />
     </Modal>
   );
 }

@@ -4,20 +4,27 @@ import { CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 
 type ToastKind = "success" | "error" | "info";
-type ToastItem = { id: number; kind: ToastKind; message: string };
+export type ToastOptions = {
+  /** One action button, e.g. [Undo] (design P2 §13). Pressing it dismisses the toast. */
+  action?: { label: string; onClick: () => void };
+  /** Milliseconds before it disappears. Default 6 s (8 s for errors). */
+  duration?: number;
+};
+type ToastItem = { id: number; kind: ToastKind; message: string; action?: ToastOptions["action"] };
+type ToastFn = (message: string, kind?: ToastKind, opts?: ToastOptions) => void;
 
-const ToastContext = createContext<{ toast: (message: string, kind?: ToastKind) => void } | null>(null);
+const ToastContext = createContext<{ toast: ToastFn } | null>(null);
 
 let counter = 0;
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const dismiss = useCallback((id: number) => setItems((xs) => xs.filter((x) => x.id !== id)), []);
-  const toast = useCallback(
-    (message: string, kind: ToastKind = "success") => {
+  const toast = useCallback<ToastFn>(
+    (message, kind = "success", opts) => {
       const id = ++counter;
-      setItems((xs) => [...xs, { id, kind, message }]);
-      setTimeout(() => dismiss(id), kind === "error" ? 8000 : 6000);
+      setItems((xs) => [...xs, { id, kind, message, action: opts?.action }]);
+      setTimeout(() => dismiss(id), opts?.duration ?? (kind === "error" ? 8000 : 6000));
     },
     [dismiss],
   );
@@ -36,6 +43,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             {t.kind === "error" && <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger-fg" aria-hidden />}
             {t.kind === "info" && <Info className="mt-0.5 h-4 w-4 shrink-0 text-info-fg" aria-hidden />}
             <p className="flex-1">{t.message}</p>
+            {t.action && (
+              <button
+                type="button"
+                onClick={() => {
+                  t.action?.onClick();
+                  dismiss(t.id);
+                }}
+                className="rounded px-1 text-body font-semibold text-navy-700 underline underline-offset-2 hover:text-navy-900"
+              >
+                {t.action.label}
+              </button>
+            )}
             <button type="button" onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="rounded p-0.5 text-fg-muted hover:text-fg-strong">
               <X className="h-4 w-4" aria-hidden />
             </button>
@@ -46,7 +65,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function useToast() {
+export function useToast(): ToastFn {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error("useToast must be used inside ToastProvider");
   return ctx.toast;

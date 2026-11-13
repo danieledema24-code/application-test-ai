@@ -38,7 +38,10 @@ export function ScanSettingsFields({
   errors,
   showName,
   refs,
+  signIn,
 }: {
+  /** Phase 2 sign-in block (credential fields or "Sign in with the saved test account"). */
+  signIn?: React.ReactNode;
   value: ScanSettingsForm;
   onChange: (v: ScanSettingsForm) => void;
   errors: ScanSettingsErrors;
@@ -91,12 +94,10 @@ export function ScanSettingsFields({
         onChange={(e) => set("respect_robots", e.target.checked)}
         description="Skip pages the site asks automated tools not to visit."
       />
-      <div className="rounded-md bg-elevated px-3 py-2 text-small text-fg">
-        <p className="font-semibold text-fg-strong">Signed-in areas</p>
-        <p className="mt-0.5">
-          Discovery covers public pages only in this phase and lists sign-in areas as access gaps. Test-account credentials arrive in Phase 2.
-        </p>
-      </div>
+      <fieldset>
+        <legend className="mb-2 text-body font-medium text-fg-strong">Signed-in areas</legend>
+        {signIn ?? <p className="text-small text-fg">Without test credentials, discovery covers public pages only and lists sign-in areas as access gaps.</p>}
+      </fieldset>
     </div>
   );
 }

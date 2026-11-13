@@ -6,10 +6,17 @@ from app.domain.enums import GateKey, GatePolicy, StageKey
 from app.domain.stages import LOCKED_GATES, STAGES, downstream_of, merged_policy, policy_violations
 
 
-def test_fifteen_stages_phase_one_available() -> None:
+def test_fifteen_stages_phase_two_available() -> None:
     assert len(STAGES) == 15
     available = [s.key for s in STAGES if s.available]
-    assert available == [StageKey.intake, StageKey.discovery, StageKey.discovery_report]
+    assert available == [
+        StageKey.intake,
+        StageKey.discovery,
+        StageKey.discovery_report,
+        StageKey.requirements,
+        StageKey.readiness_criteria,
+        StageKey.test_strategy,
+    ]
 
 
 def test_locked_gates_cannot_be_relaxed() -> None:

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { PageSummary, SitemapNode } from "@/lib/contract";
-import { flattenSitemap, nodeStatus, type FlatNode } from "@/lib/discovery";
+import { flattenSitemap, matchesAccess, nodeStatus, type AccessFilter, type FlatNode } from "@/lib/discovery";
 import { pathOf } from "@/lib/url";
 import { Badge, EmptyState, Segmented, TBody, THead, Table, Td, TextField, Th, Tr } from "@/components/ui";
 import { ObservationLabel } from "@/components/domain/ObservationLabel";
@@ -16,7 +16,7 @@ export function treeFromPages(pages: PageSummary[]): SitemapNode {
   const byPath = new Map<string, SitemapNode>();
   for (const p of sorted) {
     const path = pathOf(p.url);
-    const node: SitemapNode = { url: p.url, path, title: p.title, page_id: p.id, http_status: p.http_status, requires_auth: p.requires_auth, visited: true, children: [] };
+    const node: SitemapNode = { url: p.url, path, title: p.title, page_id: p.id, http_status: p.http_status, requires_auth: p.requires_auth, auth_context: p.auth_context, visited: true, children: [] };
     byPath.set(path, node);
     if (path === "/") {
       Object.assign(root, node, { children: root.children });
@@ -94,8 +94,8 @@ function Tree({ root, onOpen, pagesById }: { root: SitemapNode; onOpen: (pageId:
   return (
     <ul role="tree" aria-label="Sitemap" className="py-1">
       {visible.map((n) => {
-        const st = nodeStatus(n.node);
         const page = n.node.page_id ? pagesById.get(n.node.page_id) : undefined;
+        const st = nodeStatus({ ...n.node, auth_context: n.node.auth_context ?? page?.auth_context });
         const isOpen = expanded.has(n.key);
         return (
           <li
@@ -146,7 +146,7 @@ function List({ pages, onOpen }: { pages: PageSummary[]; onOpen: (id: string) =>
       {/* below md: one card per page, so the view never scrolls sideways (§14 #32) */}
       <ul aria-label="Pages found" className="space-y-3 md:hidden">
         {pages.map((p) => {
-          const st = nodeStatus({ page_id: p.id, http_status: p.http_status, requires_auth: p.requires_auth, visited: true });
+          const st = nodeStatus({ page_id: p.id, http_status: p.http_status, requires_auth: p.requires_auth, auth_context: p.auth_context, visited: true });
           return (
             <li key={p.id} className="space-y-1.5 rounded-lg border border-line bg-surface p-3">
               <button type="button" onClick={() => onOpen(p.id)} className="break-all text-left font-mono text-small text-navy-700 underline underline-offset-2">
@@ -186,7 +186,7 @@ function ListTable({ pages, onOpen }: { pages: PageSummary[]; onOpen: (id: strin
       </THead>
       <TBody>
         {pages.map((p) => {
-          const st = nodeStatus({ page_id: p.id, http_status: p.http_status, requires_auth: p.requires_auth, visited: true });
+          const st = nodeStatus({ page_id: p.id, http_status: p.http_status, requires_auth: p.requires_auth, auth_context: p.auth_context, visited: true });
           return (
             <Tr key={p.id}>
               <Td rowHeader className="font-mono text-small">
@@ -214,11 +214,12 @@ function ListTable({ pages, onOpen }: { pages: PageSummary[]; onOpen: (id: strin
   );
 }
 
-const AUTH_FILTERS = [
+const AUTH_FILTERS: { value: AccessFilter; label: string }[] = [
   { value: "all", label: "All pages" },
   { value: "public", label: "Public" },
+  { value: "signed_in", label: "Signed in" },
   { value: "auth", label: "Needs credentials" },
-] as const;
+];
 
 /** Sitemap (design spec §8.2): ARIA tree (APG pattern) with a List alternative; filter by type and access. */
 export function SitemapView({ sitemap, pages, onOpenPage }: { sitemap: SitemapNode | undefined; pages: PageSummary[]; onOpenPage: (id: string) => void }) {
@@ -228,12 +229,12 @@ export function SitemapView({ sitemap, pages, onOpenPage }: { sitemap: SitemapNo
   }, []);
   const [q, setQ] = useState("");
   const [type, setType] = useState("all");
-  const [auth, setAuth] = useState<(typeof AUTH_FILTERS)[number]["value"]>("all");
+  const [auth, setAuth] = useState<AccessFilter>("all");
   const types = useMemo(() => Array.from(new Set(pages.map((p) => p.page_type))).sort(), [pages]);
   const filtered = pages.filter(
     (p) =>
       (type === "all" || p.page_type === type) &&
-      (auth === "all" || (auth === "auth" ? p.requires_auth : !p.requires_auth)) &&
+      matchesAccess(p, auth) &&
       (!q || `${p.url} ${p.title}`.toLowerCase().includes(q.toLowerCase())),
   );
   const filtering = q || type !== "all" || auth !== "all";
@@ -266,7 +267,7 @@ export function SitemapView({ sitemap, pages, onOpenPage }: { sitemap: SitemapNo
         </label>
         <label className="text-small text-fg-strong">
           <span className="mb-1 block font-medium">Access</span>
-          <select value={auth} onChange={(e) => setAuth(e.target.value as typeof auth)} className="h-10 rounded-md bg-surface px-2 text-body ring-1 ring-inset ring-line-input">
+          <select value={auth} onChange={(e) => setAuth(e.target.value as AccessFilter)} className="h-10 rounded-md bg-surface px-2 text-body ring-1 ring-inset ring-line-input">
             {AUTH_FILTERS.map((f) => (
               <option key={f.value} value={f.value}>
                 {f.label}

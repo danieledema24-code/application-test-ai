@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Query
 from sqlalchemy import func, or_, select
@@ -111,6 +112,7 @@ async def list_pages(
     q: str | None = Query(None, max_length=200),
     requires_auth: bool | None = None,
     status: str | None = None,
+    auth_context: Literal["anonymous", "authenticated"] | None = None,
     limit: int | None = Query(None, ge=1, le=100),
     cursor: str | None = None,
 ) -> api.Page[api.PageSummary]:
@@ -123,6 +125,8 @@ async def list_pages(
         stmt = stmt.where(DiscoveredPage.requires_auth.is_(requires_auth))
     if status:
         stmt = stmt.where(DiscoveredPage.status == status)
+    if auth_context:
+        stmt = stmt.where(DiscoveredPage.auth_context == auth_context)
     if q:
         like = q.lower()
         stmt = stmt.where(

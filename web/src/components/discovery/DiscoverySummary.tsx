@@ -1,7 +1,7 @@
 "use client";
 
 import type { Feature, Journey, ScanDetail } from "@/lib/contract";
-import { accessGapRows, elapsed } from "@/lib/discovery";
+import { accessGapRows, elapsed, scanSignIn } from "@/lib/discovery";
 import { fmtDateTime } from "@/lib/format";
 import { Card, CardBody, CardHeader, StatTile } from "@/components/ui";
 import { GeneratedByLabel, LabelsHelp, ObservationLabel } from "@/components/domain/ObservationLabel";
@@ -27,6 +27,7 @@ export function DiscoverySummary({
 }) {
   const soFar = scan.status === "cancelled" || scan.status === "partial" || scan.status === "running" ? " so far" : "";
   const gaps = accessGapRows(scan).length;
+  const signIn = scanSignIn(scan);
   const key = (features ?? []).slice().sort((a, b) => b.confidence - a.confidence).slice(0, 6);
   return (
     <div className="space-y-6">
@@ -35,6 +36,7 @@ export function DiscoverySummary({
         <StatTile label="Forms" value={scan.stats.forms} />
         <StatTile label="User journeys" value={journeys ? journeys.length : "—"} />
         <StatTile label="Access gaps" value={gaps} />
+        {signIn?.state === "succeeded" && <StatTile label="Signed-in pages" value={signIn.pages} />}
       </div>
       <Card>
         <CardHeader title="Key observations" actions={<LabelsHelp />} />
@@ -70,7 +72,7 @@ export function DiscoverySummary({
                   ["Maximum link depth", scan.limits?.max_depth],
                   ["Viewports", scan.limits?.include_mobile ? "Desktop + Mobile" : "Desktop only"],
                   ["robots.txt", scan.limits?.respect_robots ? "Respected" : "Ignored"],
-                  ["Credentials", "None (public pages only)"],
+                  ["Credentials", signIn === null ? "None (public pages only)" : signIn.state === "succeeded" ? "Test account, sign-in succeeded" : "Test account, sign-in failed"],
                   ["Started", fmtDateTime(scan.started_at)],
                   ["Finished", scan.finished_at ? fmtDateTime(scan.finished_at) : "—"],
                   ["Duration", elapsed(scan.started_at, scan.finished_at)],

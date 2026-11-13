@@ -166,6 +166,8 @@ class EvidenceKind(StrEnum):
     axe_result = "axe_result"
     lighthouse_result = "lighthouse_result"
     report_render = "report_render"
+    document_file = "document_file"
+    document_text = "document_text"
 
 
 class KnowledgeKind(StrEnum):
@@ -225,3 +227,131 @@ class EventLevel(StrEnum):
     info = "info"
     warn = "warn"
     error = "error"
+
+
+# ---------------------------------------------------------------- Phase 2
+
+
+class ReviewStatus(StrEnum):
+    not_required = "not_required"
+    pending_review = "pending_review"
+    applied = "applied"
+    discarded = "discarded"
+
+
+class BehaviourScope(StrEnum):
+    ui = "ui"
+    backend = "backend"
+    mixed = "mixed"
+
+
+class RequirementType(StrEnum):
+    functional = "functional"
+    non_functional = "non_functional"
+
+
+class RequirementSource(StrEnum):
+    discovery = "discovery"
+    document = "document"
+    user = "user"
+    assistant = "assistant"
+
+
+class RequirementStatus(StrEnum):
+    draft = "draft"
+    approved = "approved"
+    rejected = "rejected"
+    needs_info = "needs_info"
+
+
+class ItemStatus(StrEnum):
+    draft = "draft"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class AcKind(StrEnum):
+    positive = "positive"
+    negative = "negative"
+    boundary = "boundary"
+
+
+class ReadinessKind(StrEnum):
+    dor = "dor"
+    dod = "dod"
+
+
+class ReadinessScope(StrEnum):
+    requirement = "requirement"
+    project = "project"
+
+
+class ReadinessStatus(StrEnum):
+    active = "active"
+    removed = "removed"
+
+
+class StrategyStatus(StrEnum):
+    draft = "draft"
+    awaiting_approval = "awaiting_approval"
+    approved = "approved"
+    stale = "stale"
+
+
+class RiskCategory(StrEnum):
+    product = "product"
+    project = "project"
+
+
+class RiskLevel(StrEnum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    very_high = "very_high"
+
+
+class RiskStatus(StrEnum):
+    open = "open"
+    mitigated = "mitigated"
+    accepted = "accepted"
+
+
+class PlanSource(StrEnum):
+    derived = "derived"
+    edited = "edited"
+    regenerated = "regenerated"
+
+
+class DocumentStatus(StrEnum):
+    extracting = "extracting"
+    ready = "ready"
+    failed = "failed"
+    withdrawn = "withdrawn"
+
+
+class MessageRole(StrEnum):
+    user = "user"
+    assistant = "assistant"
+
+
+class ProposalStatus(StrEnum):
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+    stale = "stale"
+    failed = "failed"
+
+
+class SecretKind(StrEnum):
+    login_credentials = "login_credentials"
+
+
+class SignInResult(StrEnum):
+    succeeded = "succeeded"
+    failed = "failed"
+    not_attempted = "not_attempted"
+
+
+class AuthContext(StrEnum):
+    anonymous = "anonymous"
+    authenticated = "authenticated"

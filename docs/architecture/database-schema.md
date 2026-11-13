@@ -20,7 +20,7 @@ SQLAlchemy 2.x (async) models, Alembic migrations. Runs on SQLite (aiosqlite, WA
 Two mechanisms:
 
 1. **Generation versioning (stage level)**: each stage execution is a `stage_runs` row (`version` 1..n). Artefacts produced by an agent carry `stage_run_id`. Regenerating creates new artefact rows under the new stage run; the project "current" view = artefacts of `workflow_stages.current_stage_run_id`. Old versions remain queryable and diffable (needed for change impact, Phase 6).
-2. **Edit versioning (entity level)**: user edits to requirements, acceptance criteria, test cases, scripts, strategies and plans bump `version` and write the previous state to `entity_revisions(entity_type, entity_id, version, snapshot JSON, changed_by, change_reason)`. Locked/human-edited items are carried forward on regeneration (matched by `lineage_id`) instead of overwritten.
+2. **Edit versioning (entity level)**: user edits to requirements, acceptance criteria, test cases, scripts, strategies and plans bump `version` and write the previous state to `entity_revisions(entity_type, entity_id, lineage_id, version, snapshot JSON, changes, source, changed_by, change_reason)`, read by `lineage_id` so history survives regeneration. Locked/human-edited items are carried forward on regeneration (matched by `lineage_id`) instead of overwritten.
 
 `lineage_id` (UUID) on regenerable artefacts links "the same thing" across stage-run versions (e.g. REQ-0004 v1 and v2), so keys stay stable and traceability survives regeneration.
 
@@ -65,6 +65,16 @@ erDiagram
   agent_tasks ||--o{ agent_events : emits
   projects ||--o{ qa_reports : produces
   projects ||--o{ knowledge_items : remembers
+  requirements ||--o{ entity_revisions : history_by_lineage
+  stage_runs ||--o{ readiness_criteria : produces
+  test_strategies ||--o{ risks : registers
+  risks }o--o{ requirements : threatens_by_lineage
+  test_strategies ||--o{ test_plans : planned_by
+  projects ||--o{ source_documents : informs
+  source_documents ||--|| evidence : stored_as
+  projects ||--o{ assistant_threads : discusses
+  assistant_threads ||--o{ assistant_messages : contains
+  assistant_messages ||--o{ assistant_proposals : proposes
 ```
 
 ## Tables
@@ -93,7 +103,7 @@ erDiagram
 | `stage_runs` | P1 | `workflow_stage_id`, `project_id`, `stage_key`, `version`, `status`, `agent_task_id`, `input_hash`, `upstream_versions JSON`, `output JSON` (summary + ids of produced artefacts), `validation_issues JSON`, `generated_by` (ai/rules/mixed), `partial bool`, `started_at`, `finished_at`, `triggered_by` | unique `(workflow_stage_id, version)` |
 | `gate_decisions` | P1 | `project_id`, `gate_key`, `stage_run_id`, `decision` (approve/reject/request_changes), `comment`, `decided_by`, `agent_recommendation JSON` | `(project_id, gate_key, created_at)` |
 | `approvals` | P4 | `project_id`, `kind` (destructive/external_transaction/load_test/security_test/real_user_data), `scope JSON`, `requested_by`, `decided_by`, `status`, `expires_at` | `(project_id, kind, status)` |
-| `entity_revisions` | P2 | `entity_type`, `entity_id`, `version`, `snapshot JSON`, `changed_by`, `change_reason` | unique `(entity_type, entity_id, version)` |
+| `entity_revisions` | P2 | See "Phase 2 changes to existing tables": keyed by `lineage_id`, with `changes`, `source`, `proposal_id` | unique `(entity_type, lineage_id, version)` |
 
 ### Discovery
 
@@ -105,15 +115,56 @@ erDiagram
 | `feature_pages` | P1 | `feature_id`, `page_id` | PK both |
 | `user_journeys` | P1 | `scan_session_id`, `stage_run_id`, `lineage_id`, `project_id`, `key` (JRN-0001), `name`, `steps JSON` ([{page_id, action, element_ref?}]), `provenance`, `confidence`, `evidence_refs JSON`, `generated_by` | `(project_id, stage_run_id)` |
 
-### Requirements and strategy (Phase 2)
+### Requirements, readiness, strategy, plan, documents and assistant (Phase 2)
 
-| Table | Key columns | Indexes |
+All tables below are tenant tables (`id`, `organisation_id`, `created_at`, `updated_at`; composite indexes lead with `organisation_id`), accessed only through `TenantRepository`. **Regenerable artefacts** share one column set, written once as a mixin (`RegenerableMixin`):
+
+| Column | Purpose |
+|---|---|
+| `project_id`, `stage_run_id` | Owning project and the stage-run version that produced or carried the row. The current view is the rows of `workflow_stages.current_stage_run_id`. |
+| `lineage_id` | Same logical item across versions (keys stay stable, history by lineage). |
+| `key` | Human key (`REQ-0001` …), unique per `(project_id, stage_run_id, key)`; reused across versions of one lineage. |
+| `match_key` | Deterministic matcher for carry-forward: source anchor (feature/form/field/journey/document anchor) + `rule_id` or normalised title. Index `(project_id, match_key)`. |
+| `carried_from_id` | Previous-version row this row was carried from (nullable). |
+| `provenance`, `confidence`, `evidence_refs JSON`, `generated_by` (ai/rules/human), `rule_id?` | Provenance model (architecture §5). Requirements and ACs expose `provenance` as `classification`. |
+| `locked bool`, `human_edited bool`, `version INT` (optimistic, `version_id_col`), `updated_by?` | Edit control. `version` continues across carried rows of a lineage. |
+| `suggested_change JSON?` | Only on rows of a **candidate** (pending review) run: for protected items, the generator's proposed content shown in the change review. Cleared when the review is applied or discarded. |
+
+| Table | Key columns (beyond the mixin) | Indexes / constraints |
 |---|---|---|
-| `requirements` | `project_id`, `stage_run_id`, `lineage_id`, `key` (REQ-0001), `title`, `description`, `type` (functional/non_functional), `category`, `classification` (observed/inferred/assumed/unverified), `source` (discovery/document/user), `evidence_refs JSON`, `confidence`, `assumptions JSON`, `status` (draft/approved/rejected/needs_info), `locked bool`, `version`, `risk_likelihood?`, `risk_impact?` | unique `(project_id, key, stage_run_id)`; `(project_id, status)` |
-| `requirement_features` | `requirement_id`, `feature_id` | PK both |
-| `acceptance_criteria` | `requirement_id`, `project_id`, `key` (AC-0001), `given`, `when`, `then`, `status`, `version` | `(requirement_id)` |
-| `test_strategies` | `project_id`, `stage_run_id`, `version`, `status`, `content JSON` (scope, levels, types, techniques, entry/exit, DoR, DoD, environments, data approach), `risk_register JSON` | `(project_id, status)` |
-| `test_plans` | `project_id`, `strategy_id`, `stage_run_id`, `version`, `status`, `content JSON` | `(project_id)` |
+| `requirements` | `title`, `description`, `type` (functional/non_functional), `category`, `behaviour_scope` (ui/backend/mixed), `source` (discovery/document/user/assistant), `source_refs JSON` (journey/page/document ids), `assumptions JSON`, `status` (draft/approved/rejected/needs_info), `status_comment?`, `status_changed_by?`, `status_changed_at?`, `risk_level?` (denormalised max of linked risks, written by P2-06), `validation_issues JSON` | unique `(project_id, stage_run_id, key)`; unique `(stage_run_id, lineage_id)`; `(organisation_id, project_id, stage_run_id, status)`; CHECK `NOT (provenance = 'observed' AND behaviour_scope <> 'ui')` (DB backstop for the code rule) |
+| `requirement_features` | `requirement_id → requirements CASCADE`, `feature_id → application_features` | PK both; index `feature_id` |
+| `acceptance_criteria` | mixin + `requirement_id → requirements CASCADE`, `kind` (positive/negative/boundary), `given_text`, `when_text`, `then_text` (`WHEN`/`THEN` are SQL keywords; the API exposes `given`/`when`/`then`), `status` (draft/approved/rejected), `test_values JSON?`, `sort_order` | unique `(project_id, stage_run_id, key)`; `(requirement_id, sort_order)` |
+| `readiness_criteria` (**new**) | mixin + `kind` (dor/dod), `scope` (requirement/project), `text`, `status` (active/removed), `check_rule_id?`, `evaluable_from_phase?`, `evaluation JSON?` (project-level result; per-requirement results are computed on read, not stored) | unique `(project_id, stage_run_id, key)`; `(project_id, stage_run_id, kind)` |
+| `test_strategies` | `project_id`, `stage_run_id`, `key` (TS-001), `version`, `status` (draft/awaiting_approval/approved/stale), `generated_by`, `content JSON` (sections, see api-contracts `TestStrategy.sections`; DoR/DoD and the risk register are **no longer** in here), `approved_input JSON` (requirements snapshot hash + version used), `human_edited_sections JSON`, `locked_sections JSON`, `suggested_changes JSON` (candidate runs only), `validation_issues JSON`, `updated_by?` | unique `(project_id, stage_run_id)`; `(organisation_id, project_id, status)` |
+| `risks` (**new**; replaces `test_strategies.risk_register JSON`) | mixin + `strategy_id → test_strategies`, `title`, `description`, `category` (product/project), `likelihood` 1–5, `impact` 1–5, `score` (L×I, written only by the domain service), `level` (low 1–4 / medium 5–9 / high 10–16 / very_high 20–25), `factors JSON`, `likelihood_rationale`, `impact_rationale`, `mitigation JSON` (test_types, techniques, notes), `requires_approval bool`, `status` (open/mitigated/accepted), `status_comment?` (required for accepted) | unique `(project_id, stage_run_id, key)`; `(project_id, stage_run_id, level)`; CHECK `likelihood BETWEEN 1 AND 5 AND impact BETWEEN 1 AND 5 AND score = likelihood * impact` |
+| `risk_requirements` (**new**) | `risk_id → risks CASCADE`, `requirement_lineage_id` (lineage, not row id: requirement edits and regeneration don't break the link; resolved to the current row on read) | PK both; index `requirement_lineage_id` |
+| `risk_features` (**new**) | `risk_id → risks CASCADE`, `feature_id → application_features` | PK both |
+| `test_plans` | One row **per plan version** (each save is a new version, design P2 §9): `project_id`, `strategy_id → test_strategies`, `stage_run_id`, `key` (TP-001), `version`, `strategy_version` (approved strategy version it derives from), `source` (derived/edited/regenerated), `review_status` (not_required/pending_review/applied/discarded, for regenerated candidates), `is_current bool`, `generated_by`, `content JSON` (sections), `human_edited_sections JSON`, `rules_template_sections JSON`, `suggested_changes JSON` (candidates only), `note?`, `created_by?` | unique `(project_id, version)`; `(organisation_id, project_id, is_current)` |
+| `source_documents` (**new**) | `project_id`, `key` (DOC-001), `title`, `filename`, `mime`, `size`, `sha256`, `status` (extracting/ready/failed/withdrawn), `pages?`, `chars?`, `outline JSON` (anchor, heading, page, char offsets), `statements JSON` (rule-extracted requirement-like statements with anchors), `injection_flags JSON`, `file_evidence_id → evidence`, `text_evidence_id? → evidence`, `error?`, `uploaded_by`, `withdrawn_at?`, `withdrawn_by?` | unique `(project_id, key)`; `(organisation_id, project_id, status)`; unique `(project_id, sha256)` where not withdrawn (re-upload of the same file → 409; enforced in the service on SQLite) |
+| `assistant_threads` (**new**) | `project_id`, `user_id → users` (owner; threads are private), `title`, `archived_at?`, `last_message_at` | `(organisation_id, project_id, user_id, last_message_at desc)` |
+| `assistant_messages` (**new**; append-only, no `updated_at`) | `thread_id → assistant_threads CASCADE`, `project_id`, `role` (user/assistant), `content` (redacted before storage), `intent?`, `params JSON`, `context_ref JSON?`, `answered_by?` (intent/ai), `generated_by?`, `citations JSON` (ArtefactRef list), `notices JSON`, `llm JSON?` (model, tokens, tool calls; no prompt text) | `(thread_id, created_at)` |
+| `assistant_proposals` (**new**) | `project_id`, `thread_id`, `message_id → assistant_messages`, `key` (PROP-0001), `kind`, `target_type?`, `target_id?`, `target_lineage_id?`, `summary`, `payload JSON` (validated per kind), `preview JSON`, `base_versions JSON`, `status` (pending/accepted/rejected/stale/failed), `generated_by`, `created_by`, `decided_by?`, `decided_at?`, `decision_comment?`, `result JSON?` | unique `(project_id, key)`; `(organisation_id, project_id, status)`; `(target_type, target_id)` |
+
+**Removed from the earlier Phase 2 sketch:** `requirements.risk_likelihood` / `risk_impact` (risk lives in `risks`; requirements carry only the derived `risk_level`), `test_strategies.risk_register JSON` and the DoR/DoD inside `test_strategies.content` (now `risks` and `readiness_criteria`, because both are edited, versioned, linked and gate-checked per item).
+
+### Phase 2 changes to existing tables
+
+| Table | Change | Story |
+|---|---|---|
+| `entity_revisions` | Created in Phase 2 (`0005`). Columns: `project_id`, `entity_type` (requirement/acceptance_criterion/readiness_criterion/test_strategy/risk/test_plan), `entity_id` (row), `lineage_id`, `version`, `snapshot JSON`, `changes JSON` (field diff), `source` (user/assistant_proposal/regeneration_review/system), `proposal_id?`, `changed_by?`, `change_reason?`; no `updated_at` (append-only). Unique `(entity_type, lineage_id, version)`; index `(organisation_id, project_id, entity_type, lineage_id)`. History is read by **lineage**, so it survives regeneration. | P2-00 |
+| `gate_decisions` | + `artefact_snapshot JSON` (`[{type, id, version}]` approved), `snapshot_hash` (sha256 of the sorted snapshot, for "is this exactly what was approved"), `stage_run_versions JSON` (G3 covers `requirements` + `readiness_criteria`). | P2-00 |
+| `workflow_stages` | No schema change. `stale_reason` is now also set when a re-approved gate changes a downstream stage's input. | P2-00 |
+| `stage_runs` | + `review_status` (not_required/pending_review/applied/discarded, default not_required), `review_decisions JSON?`, `applied_by?`, `applied_at?`, `guidance?` (user text for the AI path), `approved_input JSON?` (upstream gate snapshot hash + version used). `current_stage_run_id` moves only on apply (or immediately for a first run). | P2-00 |
+| `secrets` | + `kind` (login_credentials), `metadata JSON` (non-secret: `login_url`, masked `username_hint`), `version INT`, `last_used_at?`, `last_result?` (succeeded/failed/not_attempted), `last_reason_code?`, `last_result_at?`. Ciphertext stays AES-256-GCM `<key_id>:…`, holding the JSON `{username, password}`. Existing Phase 1 `scan_credentials` rows are backfilled: `kind='login_credentials'`, metadata from the decrypted login URL and username hint (done in a **data migration step run by the app**, not in Alembic, because Alembic has no encryption key; it runs once at startup and is idempotent). | P2-01 |
+| Secrets usage | No new table. Every decrypt writes `audit_logs` `secret.used` with `{secret_id, task_id, purpose: "discovery_signin"|"signin_test"}` (append-only, never values). `secrets.last_used_at` is the convenience copy. | P2-01 |
+| `scan_sessions` | + `auth JSON` (`attempted`, `result`, `reason_code`, `login_url`, `authenticated_pages`, `started_at`, `finished_at`). | P2-01 |
+| `discovered_pages` | + `auth_context` (anonymous/authenticated, default anonymous). Index `(scan_session_id, auth_context)`. | P2-01 |
+| `evidence` | `kind` CHECK widened with `document_file`, `document_text`; + `source_document_id?`. | P2-08 |
+| `knowledge_items` | No schema change. Rejections (requirements, ACs, risks) write `kind='decision'` with `metadata.lineage_id` so carry-forward suppresses them. | P2-02 |
+| `qa_reports` | No schema change. `report_type` already allows `requirements_spec`, `test_strategy`, `test_plan`; `source_versions` holds stage-run versions + `snapshot_hash`. | P2-09 |
+| `project_counters` | New `kind`s: `REQ`, `AC`, `DOR`, `DOD`, `TS`, `RISK`, `TP`, `DOC`, `PROP`. Keys reused per lineage; a counter is consumed only for new lineages. | P2-00+ |
+| `organisations.limits` | + `assistant_ai_turns_per_day` (default 200), `max_documents_per_project` (default 10), `max_document_mb` (default 20). | P2-08, P2-10 |
 
 ### Test design (Phase 3)
 
@@ -152,7 +203,7 @@ erDiagram
 | `agent_tasks` | P1 | `project_id`, `stage_run_id?`, `agent_key`, `status` (queued/running/succeeded/failed/cancelled/paused), `input JSON` (ids + parameters, no secrets), `output_ref JSON`, `error JSON`, `attempt`, `llm JSON` (provider, model, tokens_in/out, repairs, fallback_used), `started_at`, `finished_at`, `heartbeat_at` | `(project_id, created_at desc)`; partial unique on `(project_id, agent_key, stage_run_id)` where status in (queued, running) — emulated by service check + unique `dedupe_key` |
 | `agent_events` | P1 | `id BIGINT autoincrement` (monotonic cursor; not UUID), `organisation_id`, `project_id`, `agent_task_id?`, `stage_key?`, `agent_key?`, `type`, `level` (info/warn/error), `message` (user-readable), `data JSON`, `created_at` | `(project_id, id)`, `(organisation_id, id)` |
 | `jobs` | P1 | `kind`, `organisation_id`, `project_id?`, `payload JSON` (ids only), `status` (queued/running/succeeded/failed/cancelled), `dedupe_key?`, `attempts`, `max_attempts`, `run_after`, `locked_by`, `locked_at`, `heartbeat_at`, `last_error` | `(status, run_after)`; unique `dedupe_key` (nullable) |
-| `secrets` | **P1** (moved from P2) | `project_id`, `name`, `ciphertext` (AES-256-GCM, key id prefix), `created_by`, `rotated_at` | unique `(project_id, name)` |
+| `secrets` | **P1** (moved from P2); columns added in P2-01 | `project_id`, `name`, `ciphertext` (AES-256-GCM, key id prefix), `created_by`, `rotated_at`; P2: `kind`, `metadata`, `version`, `last_used_*`, `last_result*` | unique `(project_id, name)` |
 | `worker_heartbeats` | P1 (added) | `worker_id` PK, `mode` (inline/separate), `heartbeat_at` — not tenant data; feeds `GET /health` | – |
 
 ## Phase 1 migration set
@@ -171,3 +222,11 @@ erDiagram
 - `agent_tasks` adds `dedupe_key` (unique, cleared on finish) instead of the partial unique index. `jobs` adds `concurrency_group` (`scan` enforces the per-organisation limit inside the claim `UPDATE`), `cancel_requested`, `finished_at`.
 
 Migrations are generated with Alembic autogenerate, reviewed by hand, use `render_as_batch=True` (SQLite ALTER support), and are tested by running `upgrade head` + `downgrade base` on a fresh SQLite DB in CI. A Postgres run of the same migrations is added once a Postgres instance is available (Docker).
+
+## Phase 2 migration set
+
+Each story ships its own migration (numbers follow the roadmap build order; renumber at merge if stories move, never edit a merged migration):
+
+`0005_revisions_gates` (entity_revisions; gate_decisions and stage_runs review columns) → `0006_requirements` (requirements, requirement_features, acceptance_criteria) → `0007_readiness_criteria` → `0008_strategy_risks` (test_strategies, risks, risk_requirements, risk_features) → `0009_test_plans` → `0010_assistant` (assistant_threads, assistant_messages, assistant_proposals) → `0011_secrets_auth_scan` (secrets columns, scan_sessions.auth, discovered_pages.auth_context) → `0012_source_documents` (source_documents, evidence kind + column).
+
+Rules: all `render_as_batch=True` (SQLite ALTERs; CHECK changes on `evidence.kind` and `secrets` go through batch table recreation); every migration has a working `downgrade`; CI runs `upgrade head → downgrade base → upgrade head` on a fresh SQLite DB and on a copy of a **Phase 1 database with data** (fixture DB from the P1 e2e run) to prove that existing projects, scans and secrets survive. New columns on existing tables are nullable or have server defaults so no Phase 1 row needs rewriting. The secrets backfill is the only data change and runs in app code (see above).

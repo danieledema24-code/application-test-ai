@@ -23,33 +23,35 @@ export const REPORT_SECTIONS = [
   { id: "glossary", n: "B", title: "Labels & glossary" },
 ];
 
+export type TocSection = { id: string; n: string; title: string };
+
 /** Table of contents: sticky nav at lg+, "Contents" disclosure below; highlights the section in view. */
-export function ReportToc() {
-  const [current, setCurrent] = useState(REPORT_SECTIONS[0].id);
+export function ReportToc({ sections = REPORT_SECTIONS, label = "Report contents", prefix = "report-" }: { sections?: TocSection[]; label?: string; prefix?: string } = {}) {
+  const [current, setCurrent] = useState(sections[0]?.id ?? "");
   useEffect(() => {
     const obs = new IntersectionObserver(
       (entries) => {
         const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible[0]) setCurrent(visible[0].target.id.replace(/^report-/, ""));
+        if (visible[0]) setCurrent(visible[0].target.id.slice(prefix.length));
       },
       { rootMargin: "-80px 0px -60% 0px" },
     );
-    for (const s of REPORT_SECTIONS) {
-      const el = document.getElementById(`report-${s.id}`);
+    for (const s of sections) {
+      const el = document.getElementById(`${prefix}${s.id}`);
       if (el) obs.observe(el);
     }
     return () => obs.disconnect();
-  }, []);
+  }, [sections, prefix]);
   const list = (
     <ol className="space-y-0.5 text-small">
-      {REPORT_SECTIONS.map((s) => (
+      {sections.map((s) => (
         <li key={s.id}>
           <a
-            href={`#report-${s.id}`}
+            href={`#${prefix}${s.id}`}
             aria-current={current === s.id ? "location" : undefined}
             className={`flex gap-2 rounded-md px-2 py-1.5 ${current === s.id ? "bg-accent-soft font-semibold text-fg-strong" : "text-fg-muted hover:bg-overlay hover:text-fg-strong"}`}
           >
-            <span className="w-4 tabular-nums">{s.n}</span>
+            <span className="w-5 shrink-0 tabular-nums">{s.n}</span>
             {s.title}
           </a>
         </li>
@@ -58,12 +60,12 @@ export function ReportToc() {
   );
   return (
     <>
-      <nav aria-label="Report contents" className="no-print sticky top-24 hidden lg:block">
+      <nav aria-label={label} className="no-print sticky top-24 hidden lg:block">
         {list}
       </nav>
       <div className="no-print rounded-lg border border-line bg-surface p-3 lg:hidden">
         <Disclosure label="Contents">
-          <nav aria-label="Report contents" className="mt-2">
+          <nav aria-label={label} className="mt-2">
             {list}
           </nav>
         </Disclosure>

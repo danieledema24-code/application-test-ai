@@ -394,7 +394,7 @@ test("part 2: results, evidence, report, re-scan, Gate 2, downloads, isolation, 
 
   // ---- Gate 2 by keyboard: Review gate → comment → Approve ---------------------------------------------------
   await page.goto(projectUrl);
-  const review = page.getByRole("link", { name: "Review gate" }).first();
+  const review = page.getByRole("link", { name: "Review Gate 2" }).first();
   await review.focus();
   await page.keyboard.press("Enter");
   await expect.soft(page.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");

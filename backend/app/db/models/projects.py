@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, IdMixin, TenantMixin, TimestampMixin
@@ -18,6 +18,9 @@ from app.domain.enums import (
     GateStatus,
     GeneratedBy,
     ProjectStatus,
+    ReviewStatus,
+    SecretKind,
+    SignInResult,
     StageKey,
     StageStatus,
     UrlRole,
@@ -53,6 +56,16 @@ class ProjectSecret(IdMixin, TenantMixin, TimestampMixin, Base):
     ciphertext: Mapped[str] = mapped_column(Text)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     rotated_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Phase 2 (P2-01). Non-secret metadata only: login_url and a masked username hint.
+    kind: Mapped[SecretKind] = mapped_column(
+        str_enum(SecretKind, "secret_kind"), default=SecretKind.login_credentials, server_default="login_credentials"
+    )
+    meta: Mapped[dict[str, Any] | None] = mapped_column("metadata", default=None)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    last_used_at: Mapped[datetime | None] = mapped_column(default=None)
+    last_result: Mapped[SignInResult | None] = mapped_column(str_enum(SignInResult, "secret_last_result"), default=None)
+    last_reason_code: Mapped[str | None] = mapped_column(String(32), default=None)
+    last_result_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class ProjectUrl(IdMixin, TenantMixin, TimestampMixin, Base):
@@ -123,6 +136,17 @@ class StageRun(IdMixin, TenantMixin, TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     triggered_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # Phase 2 (P2-00): regeneration review of candidate runs.
+    review_status: Mapped[ReviewStatus] = mapped_column(
+        str_enum(ReviewStatus, "stage_run_review_status"),
+        default=ReviewStatus.not_required,
+        server_default="not_required",
+    )
+    review_decisions: Mapped[dict[str, Any] | None] = mapped_column(default=None)
+    applied_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
+    applied_at: Mapped[datetime | None] = mapped_column(default=None)
+    guidance: Mapped[str | None] = mapped_column(Text, default=None)
+    approved_input: Mapped[dict[str, Any] | None] = mapped_column(default=None)
 
 
 class GateDecision(IdMixin, TenantMixin, TimestampMixin, Base):
@@ -136,3 +160,7 @@ class GateDecision(IdMixin, TenantMixin, TimestampMixin, Base):
     comment: Mapped[str] = mapped_column(Text, default="")
     decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
     agent_recommendation: Mapped[dict[str, Any] | None] = mapped_column(default=None)
+    # Phase 2 (P2-00): exactly what was approved ([{type, id, version}]) and its hash.
+    artefact_snapshot: Mapped[list[Any] | None] = mapped_column(default=None)
+    snapshot_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    stage_run_versions: Mapped[dict[str, Any] | None] = mapped_column(default=None)

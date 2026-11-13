@@ -30,6 +30,7 @@ class DiscoveryLimits(Strict):
     total_timeout_s: int = 1200
     politeness_ms: int = 500
     mobile_sample: int = 10
+    use_credentials: bool = True  # P2-01: sign in with saved test credentials when there are some
 
 
 class DiscoveryInput(Strict):

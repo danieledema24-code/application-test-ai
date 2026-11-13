@@ -6,6 +6,7 @@ LLM (if enabled) sees page summaries only inside untrusted blocks and has no too
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -28,6 +29,7 @@ from app.agents.discovery.crawler import (
     CrawlResult,
     FailedPage,
     Frontier,
+    FrontierItem,
     canonical,
     parse_robots,
 )
@@ -61,6 +63,7 @@ from app.db.models import (
 from app.db.tenant import TenantScope, bind_scope
 from app.db.types import utcnow
 from app.domain.enums import (
+    AuthContext,
     EventLevel,
     EvidenceKind,
     GeneratedBy,
@@ -70,9 +73,11 @@ from app.domain.enums import (
     PageType,
     Provenance,
     ScanStatus,
+    SignInResult,
 )
 from app.llm.base import Budget, UntrustedBlock
 from app.llm.injection import detect_injection
+from app.security.redact import redact_text
 from app.security.ssrf import normalise_url
 from app.services.counters import next_key
 from app.services.evidence import write_evidence
@@ -233,6 +238,10 @@ class _DbSink:
         page_id = uuid.uuid4()
         url_key = canonical(cp.final_url)
         injection = detect_injection(f"{ex.text}\n{ex.hidden_text}")
+        if a.auth_pass and cp.found_via == "sign_in_response":
+            needs_auth: bool | None = True  # the response to the sign-in POST: only reachable by signing in
+        else:
+            needs_auth = await a.needs_auth(cp.final_url) if a.auth_pass else None
         async with a.session() as s:
             evid: dict[str, Evidence] = {}
             name = (urlsplit(cp.final_url).path.strip("/").replace("/", "_") or "home")[:60]
@@ -255,7 +264,10 @@ class _DbSink:
                 redirected_from=cp.redirected_from,
                 page_type=page_type,
                 # A sign-in page that loaded is public; only a URL that redirected to it required signing in.
-                requires_auth=page_type == PageType.auth and bool(cp.redirected_from),
+                requires_auth=needs_auth
+                if needs_auth is not None
+                else page_type == PageType.auth and bool(cp.redirected_from),
+                auth_context=AuthContext.authenticated if a.auth_pass else AuthContext.anonymous,
                 headings=[x.text for x in ex.headings],
                 nav_links=[x.model_dump() for x in ex.nav_links],
                 links=[link.href for link in ex.links if a.crawler and a.crawler._same_site(link.href)][:200],
@@ -695,6 +707,13 @@ class DiscoveryAgent:
         self.tools = ToolRegistry(AGENT_KEY, DISCOVERY_TOOLS)
         self.policy: NetworkPolicy | None = None
         self.crawler: Crawler | None = None
+        # P2-01: set while crawling with the signed-in session; `auth_state` is stored as scan_sessions.auth.
+        self.auth_pass = False
+        self.auth_state: dict[str, Any] | None = None
+        self.auth_evidence_refs: list[dict[str, Any]] = []
+        self.remaining_auth_areas: set[str] = (
+            set()
+        )  # sign-in areas still unobserved after the signed-in pass  # evidence for the sign-in-failed access gap
 
     # ------------------------------------------------------------------ helpers
 
@@ -817,6 +836,8 @@ class DiscoveryAgent:
                     for item in prior:
                         self.crawler.skipped[item["url"]] = item["reason"]
                 result = await self.crawler.run(frontier)
+                if result.stop not in ("paused", "cancelled", "failed"):
+                    await self._auth_pass(context, limits, sink, allowed_hosts, result, max_dom=s_.scan_max_dom_bytes)
         except Exception as exc:
             log.exception("discovery browser failed")
             result = CrawlResult(
@@ -830,6 +851,276 @@ class DiscoveryAgent:
                 error=f"The browser could not be started ({str(exc).splitlines()[0][:160]}).",
             )
         return await self._finish(result, limits)
+
+    async def needs_auth(self, url: str) -> bool:
+        """Re-requests a page found with the signed-in session once, without cookies (policy-checked GET)."""
+        try:
+            n = normalise_url(url)
+            res = await safe_fetch(self.ctx, n, approved_origins={n.origin}, max_redirects=0)
+        except Exception:  # noqa: BLE001 - any failure: treat as signed-in only (never claim public)
+            return True
+        if res.status in (401, 403):
+            return True
+        location = (res.headers or {}).get("location", "") if res.status and 300 <= res.status < 400 else ""
+        return bool(location) and any(k in location.lower() for k in ("login", "signin", "sign-in", "auth"))
+
+    async def _auth_pass(
+        self,
+        context: Any,
+        limits: DiscoveryLimits,
+        sink: _DbSink,
+        allowed_hosts: list[str],
+        public: CrawlResult,
+        *,
+        max_dom: int,
+    ) -> None:
+        """P2-01 (B)-(D): one sign-in attempt, then a crawl with the session seeded from the post-login page."""
+        from app.agents.discovery.signin import sign_in
+        from app.services.secrets import credentials_secret, use_credentials
+
+        async with self.session() as s:
+            scan = await self.load_scan(s)
+            secret = await credentials_secret(s, self.project_id)
+            if secret is None:
+                return
+            login_url = (secret.meta or {}).get("login_url")
+            if not scan.limits.get("use_credentials", True):
+                self.auth_state = {
+                    "attempted": False,
+                    "result": "not_attempted",
+                    "reason_code": None,
+                    "login_url": login_url,
+                    "authenticated_pages": 0,
+                }
+                return
+            creds = await use_credentials(self.ctx, s, secret, purpose="discovery", task_id=self.task_id)
+            await s.commit()
+        login_url = creds.get("login_url") or login_url
+        await self.emit(
+            "auth.signin_started",
+            "Signing in with the saved test credentials",
+            data={"kind": "action", "login_url": login_url},
+        )
+        assert self.policy is not None
+        outcome = await sign_in(
+            context,
+            self.policy,
+            str(login_url),
+            creds["username"],
+            creds["password"],
+            timeout_ms=limits.page_timeout_s * 1000,
+            keep_page=True,
+        )
+        mask = [v for v in (creds.get("username"), creds.get("password")) if v]
+        del creds
+        try:
+            await self._auth_crawl(context, limits, sink, allowed_hosts, public, outcome, str(login_url), mask, max_dom)
+        finally:
+            if outcome.page is not None:
+                with contextlib.suppress(Exception):
+                    await outcome.page.close()
+
+    async def _auth_crawl(
+        self,
+        context: Any,
+        limits: DiscoveryLimits,
+        sink: _DbSink,
+        allowed_hosts: list[str],
+        public: CrawlResult,
+        outcome: Any,
+        login_url: str,
+        mask: list[str],
+        max_dom: int,
+    ) -> None:
+        from app.services.secrets import credentials_secret
+
+        assert self.policy is not None
+        self.auth_state = {
+            "attempted": True,
+            "result": outcome.result,
+            "reason_code": outcome.reason_code,
+            "login_url": login_url,
+            "authenticated_pages": 0,
+        }
+        async with self.session() as s:
+            row = await credentials_secret(s, self.project_id)
+            if row is not None:
+                row.last_used_at = utcnow()
+                row.last_result = SignInResult(outcome.result)
+                row.last_reason_code = outcome.reason_code
+                row.last_result_at = utcnow()
+                seq = (
+                    await s.execute(select(ScanSession.sequence).where(ScanSession.id == self.scan_id))
+                ).scalar_one_or_none()
+                row.meta = {**(row.meta or {}), "last_used_scan_number": seq}
+            await s.commit()
+        if outcome.result != "succeeded":
+            await self._signin_failure_evidence(login_url, outcome)
+            await self.emit(
+                "auth.signin_failed",
+                f"Sign-in failed ({outcome.reason_code}); continuing without it",
+                level=EventLevel.warn,
+                data={"kind": "warning", "login_url": login_url, "reason_code": outcome.reason_code},
+            )
+            return
+        landing = outcome.landing_url or str(login_url)
+        await self.emit(
+            "auth.signin_succeeded",
+            "Signed in with the saved test credentials",
+            data={"kind": "finding", "login_url": login_url, "landing_path": h.path_of(landing)},
+        )
+        # Seeds: the post-login page, its links and the areas that needed credentials in the public pass.
+        async with self.session() as s:
+            gap_rows = list(
+                (
+                    await s.execute(
+                        select(DiscoveredPage).where(
+                            DiscoveredPage.scan_session_id == self.scan_id,
+                            DiscoveredPage.requires_auth.is_(True),
+                            DiscoveredPage.status != PageStatus.visited,
+                        )
+                    )
+                ).scalars()
+            )
+            gap_urls = [r.url for r in gap_rows]
+            # The post-sign-in page is often the response to the sign-in POST, shown at the sign-in URL (it can't be
+            # fetched again with GET). Its signed-in view is recorded as its own page row from the open page; the
+            # anonymous row keeps the public view, like the protected pages above.
+            landing_key = canonical(landing)
+            record_landing = outcome.page is not None and landing_key in sink.page_ids
+            if record_landing:
+                anon = await s.get(DiscoveredPage, sink.page_ids[landing_key])
+                if anon is not None:
+                    gap_rows.append(anon)
+                else:
+                    record_landing = False
+            for r in gap_rows:  # kept as the anonymous view; the signed-in view is stored as its own page row
+                sink.page_ids.pop(canonical(r.url), None)
+                r.url_hash = hashlib.sha256(f"{canonical(r.url)}#anonymous".encode()).hexdigest()
+            await s.commit()
+        seen = set(sink.page_ids)
+        frontier = Frontier()
+        frontier.started = True
+        frontier.seen = set(seen)
+        remaining = max(1, limits.max_pages - len(set(sink.page_ids.values())))
+        auth_limits = limits.model_copy(update={"max_pages": remaining})
+        self.auth_pass = True
+        try:
+            crawler = Crawler(
+                context=context,
+                policy=self.policy,
+                start_url=landing,
+                allowed_hosts=allowed_hosts,
+                limits=auth_limits,
+                sink=_SkipFlushingSink(sink, self),
+                robots=None,
+                sitemap_urls=[],
+                max_dom_bytes=max_dom,
+            )
+            crawler.skipped = dict(self.crawler.skipped) if self.crawler else {}
+            crawler.mask_values = mask
+            if record_landing and outcome.page is not None:
+                frontier.seen.add(landing_key)
+                item = FrontierItem(landing, 1, None, "sign_in_response")
+                await crawler.capture(outcome.page, frontier, item, landing, outcome.status, None, 0, [], [])
+            crawler._enqueue(frontier, landing, 1, None, "sign_in")  # no-op when the public pass saw it
+            for u in [*gap_urls, *(outcome.links or [])]:
+                crawler._enqueue(frontier, u, 1, landing, "sign_in")
+            auth_result = await crawler.run(frontier)
+            public.skipped_links = [
+                *public.skipped_links,
+                *[x for x in auth_result.skipped_links if x not in public.skipped_links],
+            ]
+        finally:
+            self.auth_pass = False
+
+    async def _signin_failure_evidence(self, login_url: str, outcome: Any) -> None:
+        """Evidence for the failed attempt: a note with the outcome, and the page as it was left (credential values
+        blanked and masked before the screenshot). Neither ever contains the username or password."""
+        path = h.path_of(login_url)
+        note = (
+            f"One sign-in attempt was made at {path} with the saved test credentials.\n"
+            f"Result: failed ({outcome.reason_code}).\n"
+            "Credential values are never recorded. No other form was submitted.\n"
+        )
+        async with self.session() as s:
+            ev = await write_evidence(
+                s,
+                self.ctx.storage,
+                org_id=self.scope.org_id,
+                project_id=self.project_id,
+                kind=EvidenceKind.page_text,
+                data=redact_text(note).encode("utf-8"),
+                mime="text/plain; charset=utf-8",
+                name="sign-in-attempt.txt",
+                owner_id=self.scan_id,
+                scan_session_id=self.scan_id,
+                source_url=login_url,
+                metadata={"title": "Sign-in attempt", "reason_code": outcome.reason_code},
+            )
+            refs = [{"evidence_id": str(ev.id), "selector": None, "excerpt": None, "note": "Sign-in attempt record"}]
+            if outcome.screenshot:
+                shot = await write_evidence(
+                    s,
+                    self.ctx.storage,
+                    org_id=self.scope.org_id,
+                    project_id=self.project_id,
+                    kind=EvidenceKind.screenshot,
+                    data=outcome.screenshot,
+                    mime="image/jpeg",
+                    name="sign-in-failed.jpg",
+                    owner_id=self.scan_id,
+                    scan_session_id=self.scan_id,
+                    source_url=login_url,
+                    viewport="desktop 1440x900",
+                    metadata={"title": "After the sign-in attempt", "alt": f"Page after the failed sign-in at {path}"},
+                )
+                refs.insert(
+                    0, {"evidence_id": str(shot.id), "selector": None, "excerpt": None, "note": "After the attempt"}
+                )
+            await s.commit()
+        self.auth_evidence_refs = refs
+
+    def _signed_in_paths(self, rows: list[DiscoveredPage]) -> set[str]:
+        """Paths observed with the signed-in session (empty unless sign-in succeeded)."""
+        if not self.auth_state or self.auth_state.get("result") != "succeeded":
+            return set()
+        return {
+            h.path_of(r.url)
+            for r in rows
+            if r.auth_context == AuthContext.authenticated and r.status == PageStatus.visited
+        }
+
+    def _auth_gaps(self, gaps: list[dict[str, Any]], rows: list[DiscoveredPage]) -> list[dict[str, Any]]:
+        st = self.auth_state
+        if st is None or not st.get("attempted"):
+            return gaps
+        if st.get("result") == "succeeded":
+            if self._signed_in_paths(rows):
+                return [
+                    g
+                    for g in gaps
+                    if g.get("reason") != "Needs credentials" or g.get("area") in self.remaining_auth_areas
+                ]
+            return gaps
+        code = st.get("reason_code")
+        if code in ("captcha", "mfa_required"):
+            reason, suggestion = (
+                "Sign-in needs a CAPTCHA or MFA (not attempted)",
+                "Use a test account without CAPTCHA or MFA",
+            )
+        else:
+            reason, suggestion = "Sign-in failed with the saved credentials", "Update the test credentials and re-scan"
+        return [
+            *[g for g in gaps if g.get("reason") != "Needs credentials"],
+            {
+                "area": h.path_of(str(st.get("login_url") or "")),
+                "reason": reason,
+                "description": f"One sign-in attempt was made ({code}); only public pages were observed.",
+                "suggestion": suggestion,
+                "evidence_refs": list(self.auth_evidence_refs),
+            },
+        ]
 
     async def _sitemap_urls(self, start: Any, sitemaps: list[str]) -> list[str]:
         candidates = list(dict.fromkeys([*sitemaps, f"{start.origin}/sitemap.xml"]))[:3]
@@ -944,14 +1235,21 @@ class DiscoveryAgent:
             robots_skipped=result.robots_skipped,
             skipped_links=result.skipped_links,
             bot_protection=bot,
+            signin_attempted=bool(self.auth_state and self.auth_state.get("attempted")),
         )
         # Areas that could not be observed without signing in; the same list drives the "Needs credentials" gaps,
         # the Gate 2 completeness line, the summary and the limitation. A visible sign-in page is a boundary; when
         # it is the only signal, the signed-in area behind it counts as one area.
         auth_areas = list(dict.fromkeys(h.path_of(b["url"]) for b in boundaries if b["kind"] != "login_form"))
         login_forms = list(dict.fromkeys(h.path_of(b["url"]) for b in boundaries if b["kind"] == "login_form"))
-        if not auth_areas and login_forms:
+        signed_in = self._signed_in_paths(rows)
+        if signed_in:
+            # After a successful sign-in, areas observed with the session are covered; only those still
+            # unreachable need credentials (and the area behind the sign-in form was observed).
+            auth_areas = [a for a in auth_areas if a not in signed_in]
+        elif not auth_areas and login_forms:
             auth_areas = [h.signed_in_area_label(login_forms)]
+        self.remaining_auth_areas = set(auth_areas)
         failed_loads = [v.path for v in views if v.failed and v.status not in (401, 403, 404) and not v.redirect_target]
         mobile_captured = all("mobile" in (r.responsive or {}) for r in rows if r.status == PageStatus.visited)
         completeness = assess(
@@ -1062,6 +1360,12 @@ class DiscoveryAgent:
                         scan_session_id=self.scan_id,
                     )
                 )
+            gaps = self._auth_gaps(gaps, rows)
+            if self.auth_state is not None:
+                self.auth_state["authenticated_pages"] = sum(
+                    1 for r in rows if r.auth_context == AuthContext.authenticated and r.status == PageStatus.visited
+                )
+                scan.auth = dict(self.auth_state)
             stats = dict(scan.stats or empty_stats())
             stats["access_gaps"] = len(gaps)
             stats["queued"] = 0
@@ -1172,12 +1476,19 @@ class DiscoveryAgent:
             out.append(
                 f"{n} request{'s' if n != 1 else ''} to other or internal addresses {'were' if n != 1 else 'was'} blocked to keep the scan safe."
             )
-        if needs_sign_in:
+        auth = self.auth_state or {}
+        if needs_sign_in and has_credentials and auth.get("attempted") and auth.get("result") != "succeeded":
             out.append(
-                "Some pages need a sign-in. Phase 1 discovery is unauthenticated: the credentials you provided are stored "
-                "encrypted for authenticated discovery in a later phase."
+                "Some pages need a sign-in. Discovery tried the saved test credentials once and the sign-in didn't "
+                "succeed, so only public pages were explored; signed-in areas are listed as access gaps."
+            )
+        elif needs_sign_in:
+            out.append(
+                "Some pages need a sign-in. With the saved test credentials, discovery signs in once per scan and also "
+                "explores the signed-in pages; areas it still couldn't reach are listed as access gaps."
                 if has_credentials
-                else "Some pages need a sign-in. Phase 1 discovery covers public pages only; signed-in areas are listed as access gaps."
+                else "Some pages need a sign-in. Without test credentials only public pages are explored; add them in "
+                "Settings to include signed-in areas. Signed-in areas are listed as access gaps."
             )
         if limits.include_mobile:
             out.append(

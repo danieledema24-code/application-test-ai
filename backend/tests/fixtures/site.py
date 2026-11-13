@@ -33,11 +33,53 @@ def _layout(title: str, body: str, extra_head: str = "") -> str:
 class FixtureSite:
     internal_port: int = 0
     account_public: bool = False  # True: /account is a normal page, so the only sign-in signal is the login form
+    # P2-01: with credentials set, POST /login with them starts a cookie session that unlocks /account/*.
+    credentials: tuple[str, str] | None = None
+    captcha: bool = False  # the sign-in page carries a CAPTCHA widget
+    login_posts: list[str] = field(default_factory=list)  # raw bodies of POST /login (tests assert attempts)
     requests: list[tuple[str, str]] = field(default_factory=list)
     internal_hits: list[str] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def pages(self, path: str, query: dict[str, list[str]]) -> tuple[int, dict[str, str], str]:
+    SESSION = "fixture-session-7f3a"
+
+    def signed_in(self, cookie: str) -> bool:
+        return self.credentials is not None and f"sid={self.SESSION}" in cookie
+
+    def login(self, body: str) -> tuple[int, dict[str, str], str]:
+        html = {"Content-Type": "text/html; charset=utf-8"}
+        form = {k: v[0] for k, v in parse_qs(body).items()}
+        if self.credentials is not None and (form.get("u"), form.get("p")) == self.credentials:
+            headers = {**html, "Set-Cookie": f"sid={self.SESSION}; Path=/; HttpOnly"}
+            body_html = '<p>Welcome back.</p><a href="/account/orders">Your orders</a> <a href="/logout">Sign out</a>'
+            return 200, headers, _layout("Your account", body_html)
+        return 200, html, _layout("Sign in", '<p class="error">Invalid email or password.</p>' + self._login_form())
+
+    def _login_form(self) -> str:
+        captcha = '<div class="g-recaptcha" data-sitekey="fixture"></div>' if self.captcha else ""
+        return (
+            '<form action="/login" method="post"><label for="u">Email</label><input id="u" name="u" type="email" required>'
+            f'<label for="p">Password</label><input id="p" name="p" type="password" value="{PREFILLED_SECRET}" required>'
+            f'{captcha}<button type="submit">Sign in</button></form>'
+        )
+
+    def pages(self, path: str, query: dict[str, list[str]], cookie: str = "") -> tuple[int, dict[str, str], str]:
+        if path.startswith("/account") and self.signed_in(cookie):
+            if path == "/account":
+                body = '<p>Your account.</p><a href="/account/orders">Your orders</a> <a href="/account/settings">Settings</a>'
+                return 200, {"Content-Type": "text/html; charset=utf-8"}, _layout("My account", body)
+            if path in ("/account/orders", "/account/settings"):
+                return (
+                    200,
+                    {"Content-Type": "text/html; charset=utf-8"},
+                    _layout(path.rsplit("/", 1)[-1].title(), "<p>Private.</p>"),
+                )
+        if path.startswith("/account/") and self.credentials is not None:
+            return (
+                401,
+                {"Content-Type": "text/html; charset=utf-8"},
+                _layout("Sign in required", "<p>Please sign in.</p>"),
+            )
         internal = f"http://127.0.0.1:{self.internal_port}"
         html = {"Content-Type": "text/html; charset=utf-8"}
         if path == "/":
@@ -81,12 +123,7 @@ class FixtureSite:
             )
             return 200, html, _layout("Contact", body)
         if path == "/login":
-            body = (
-                '<form action="/login" method="post"><label for="u">Email</label><input id="u" name="u" type="email" required>'
-                f'<label for="p">Password</label><input id="p" name="p" type="password" value="{PREFILLED_SECRET}" required>'
-                '<button type="submit">Sign in</button></form>'
-            )
-            return 200, html, _layout("Sign in", body)
+            return 200, html, _layout("Sign in", self._login_form())
         if path == "/account" and self.account_public:
             return 200, html, _layout("Our accounts team", "<p>Contact the accounts team.</p>")
         if path == "/account":
@@ -125,10 +162,15 @@ def _handler(site: FixtureSite, internal: bool) -> type[BaseHTTPRequestHandler]:
                 (site.internal_hits.append(parts.path) if internal else site.requests.append((self.command, self.path)))
             if internal:
                 status, headers, body = 200, {"Content-Type": "text/plain"}, "internal secret"
+            elif self.command == "POST" and parts.path == "/login" and site.credentials is not None:
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+                with site.lock:
+                    site.login_posts.append(raw)
+                status, headers, body = site.login(raw)
             elif self.command != "GET":
                 status, headers, body = 405, {"Content-Type": "text/plain"}, "no"
             else:
-                status, headers, body = site.pages(parts.path, parse_qs(parts.query))
+                status, headers, body = site.pages(parts.path, parse_qs(parts.query), self.headers.get("Cookie") or "")
             data = body.encode()
             self.send_response(status)
             for k, v in headers.items():
@@ -143,8 +185,10 @@ def _handler(site: FixtureSite, internal: bool) -> type[BaseHTTPRequestHandler]:
 
 
 @contextmanager
-def running_site(*, account_public: bool = False) -> Iterator[tuple[str, FixtureSite]]:
-    site = FixtureSite(account_public=account_public)
+def running_site(
+    *, account_public: bool = False, credentials: tuple[str, str] | None = None, captcha: bool = False
+) -> Iterator[tuple[str, FixtureSite]]:
+    site = FixtureSite(account_public=account_public, credentials=credentials, captcha=captcha)
     internal = ThreadingHTTPServer(("127.0.0.1", 0), _handler(site, internal=True))
     site.internal_port = internal.server_address[1]
     target = ThreadingHTTPServer(("127.0.0.1", 0), _handler(site, internal=False))

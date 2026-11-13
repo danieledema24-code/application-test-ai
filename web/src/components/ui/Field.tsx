@@ -99,24 +99,16 @@ export const TextArea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttrib
   },
 );
 
-export function SelectField({
-  label,
-  hint,
-  error,
-  wrapClassName,
-  hideLabel,
-  id,
-  options,
-  placeholder,
-  className = "",
-  ...rest
-}: React.SelectHTMLAttributes<HTMLSelectElement> &
-  Common & { options: (string | { value: string; label: string })[]; placeholder?: string }) {
+export const SelectField = forwardRef<
+  HTMLSelectElement,
+  React.SelectHTMLAttributes<HTMLSelectElement> & Common & { options: (string | { value: string; label: string })[]; placeholder?: string }
+>(function SelectField({ label, hint, error, wrapClassName, hideLabel, id, options, placeholder, className = "", ...rest }, ref) {
   const auto = useId();
   const fid = id || auto;
   return (
     <FieldWrap id={fid} label={label} hint={hint} error={error} required={rest.required} className={wrapClassName} hideLabel={hideLabel}>
       <select
+        ref={ref}
         id={fid}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy(fid, hint, error)}
@@ -138,7 +130,7 @@ export function SelectField({
       </select>
     </FieldWrap>
   );
-}
+});
 
 export const Checkbox = forwardRef<
   HTMLInputElement,

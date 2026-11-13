@@ -481,6 +481,10 @@ def file_name(content: dict[str, Any], ext: str) -> str:
 
 async def render_report(ctx: AppContext, session: AsyncSession, report: QaReport) -> QaReport:
     """Builds content and renders JSON + HTML + PDF files for `report` (status -> ready / failed)."""
+    if report.report_type != ReportType.discovery:
+        from app.agents.reporting import phase2_reports
+
+        return await phase2_reports.render(ctx, session, report)
     project = (await session.execute(select(Project).where(Project.id == report.project_id))).scalar_one()
     scan = (await session.execute(select(ScanSession).where(ScanSession.id == report.scan_session_id))).scalar_one()
     try:
