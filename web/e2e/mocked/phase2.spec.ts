@@ -26,7 +26,7 @@ test.describe("Phase 2 · requirements", () => {
     await page.goto("/projects/p1/requirements");
     await expect(page.getByRole("heading", { level: 1, name: "Requirements" })).toBeVisible();
     // Sidebar attention badge is part of the link name (§3.2).
-    await expect(page.getByRole("navigation", { name: "Project sections" }).getByRole("link", { name: "Requirements, Gate 3 waiting for your review" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Project sections" }).getByRole("link", { name: "Requirements, Gate 3 waiting for approval" })).toBeVisible();
     // G3 banner on the list tab.
     await expect(page.getByText(/Gate 3 · .* is waiting for your approval/)).toBeVisible();
     const table = page.getByRole("table").first();
@@ -277,7 +277,7 @@ test.describe("Phase 2 · settings, strategy, reports", () => {
   test("reports list shows the Requirements Specification with a download menu", async ({ page }) => {
     await setup(page, { g3: "approved" });
     await page.goto("/projects/p1/reports");
-    const table = page.getByRole("table", { name: "Phase 2 reports" });
+    const table = page.getByRole("table", { name: "Phase 2 and 3 reports" });
     await expect(table.getByRole("row", { name: /Requirements Specification/ })).toContainText("Approved (Gate 3)");
     await expect(table.getByRole("row", { name: /Test Plan/ })).toContainText("Needs Gate 4 approval");
     await table.getByRole("button", { name: "Download Requirements Specification version 1" }).click();
@@ -295,7 +295,9 @@ test.describe("Phase 2 · AI QA Analyst", () => {
     await expect(tasks.getByRole("heading", { name: "Works without AI" })).toBeVisible();
     await expect(tasks.getByRole("button", { name: /Reassess application risk/ })).toBeVisible();
     await expect(tasks.getByRole("button", { name: /Add negative criteria/ })).toBeVisible();
-    await expect(tasks.getByText("Available in Phase 3: needs test cases").first()).toBeVisible();
+    // Phase 3 built the test-case tasks (design P3 §16.1): only Phase 4 tasks remain under "Later phases".
+    await expect(tasks.getByText("Available in Phase 3: needs test cases")).toHaveCount(0);
+    await expect(tasks.getByText("Available in Phase 4: needs test runs").first()).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Ask about this project" })).toHaveCount(0);
     await expect(page.getByText(/Free-form questions and AI proposals need AI/).first()).toBeVisible();
     expect(await axe(page)).toEqual([]);

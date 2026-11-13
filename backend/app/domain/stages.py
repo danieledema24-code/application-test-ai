@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from app.domain.enums import GateKey, GatePolicy, StageKey, StageStatus
 
-CURRENT_PHASE = 2
+CURRENT_PHASE = 3
 
 
 @dataclass(frozen=True)
@@ -83,7 +83,7 @@ DEFAULT_APPROVAL_POLICY: dict[GateKey, GatePolicy] = {
     GateKey.G2: GatePolicy.recommended,
     GateKey.G3: GatePolicy.required,
     GateKey.G4: GatePolicy.required,
-    GateKey.G5: GatePolicy.recommended,
+    GateKey.G5: GatePolicy.required,
     GateKey.G6: GatePolicy.required,
     GateKey.G7: GatePolicy.required,
     GateKey.G8: GatePolicy.required,
@@ -98,8 +98,12 @@ OUTPUT_STATUSES = frozenset(
 )
 ACTIVE_STATUSES = frozenset({StageStatus.queued, StageStatus.running})
 
-# Phase 2 stages whose re-runs produce a candidate version that is reviewed before it is applied (P2-00).
-REGENERABLE_STAGES = frozenset({StageKey.requirements, StageKey.readiness_criteria, StageKey.test_strategy})
+# Stages whose re-runs produce a candidate version that is reviewed before it is applied (P2-00, P3-01b).
+REGENERABLE_STAGES = frozenset(
+    {StageKey.requirements, StageKey.readiness_criteria, StageKey.test_strategy, StageKey.test_design}
+)
+# Stages whose status is derived on read from another stage; never queued, no agent (P3-00).
+DERIVED_STAGES: dict[StageKey, StageKey] = {StageKey.traceability: StageKey.test_design}
 # Stages queued again automatically when their upstream produces a new version ("auto_rerun").
 AUTO_RERUN_STAGES = frozenset({StageKey.discovery_report})
 # Stages a user can start with POST /stages/{stage}/run in the current phase.
@@ -110,6 +114,7 @@ RUNNABLE_IN_PHASE = frozenset(
         StageKey.requirements,
         StageKey.readiness_criteria,
         StageKey.test_strategy,
+        StageKey.test_design,
     }
 )
 

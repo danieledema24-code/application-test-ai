@@ -84,6 +84,8 @@ export type AuthResponse = {
   user: User;
   organisation: Organisation;
   role: Role;
+  /** Read if the server sends it; otherwise the app waits for /auth/me (design P3 §17.4). Never derived from role. */
+  can_approve?: boolean;
 };
 
 export type Me = { user: User; organisation: Organisation; role: Role; can_approve: boolean };
@@ -566,7 +568,11 @@ export type ArtefactType =
   | "document"
   | "gate"
   | "stage"
-  | "scan";
+  | "scan"
+  // Phase 3
+  | "test_condition"
+  | "test_case"
+  | "test_data";
 
 export type ArtefactRef = { type: ArtefactType; id: Uuid | null; key: string; label: string; path: string };
 
@@ -577,7 +583,7 @@ export type ReviewAction = "accept" | "keep" | "skip" | "mark_rejected";
 export type ChangeReviewItem = {
   lineage_id: Uuid;
   key: string;
-  type: "requirement" | "acceptance_criterion" | "readiness_criterion" | "risk" | "strategy_section" | "plan_section";
+  type: "requirement" | "acceptance_criterion" | "readiness_criterion" | "risk" | "strategy_section" | "plan_section" | "test_condition" | "test_case" | "test_data";
   change: "added" | "changed" | "protected_with_proposal" | "no_longer_found" | "unchanged";
   protected_reason: "locked" | "human_edited" | "approved" | "user_created" | null;
   current: Record<string, unknown> | null;
@@ -591,7 +597,7 @@ export type ChangeReviewItem = {
 
 export type ChangeReview = {
   stage_key: StageKey;
-  artefact: "requirements" | "readiness_criteria" | "test_strategy" | "test_plan";
+  artefact: "requirements" | "readiness_criteria" | "test_strategy" | "test_plan" | "test_design";
   current_version: number | null;
   candidate_version: number;
   review_status: "pending_review" | "applied" | "discarded";
@@ -792,7 +798,8 @@ export type TestType =
   | "spike"
   | "endurance";
 export type TestLevel = "component" | "component_integration" | "system" | "system_integration" | "acceptance";
-export type Technique = "equivalence_partitioning" | "boundary_value_analysis" | "decision_table" | "state_transition" | "use_case" | "error_guessing" | "exploratory";
+/** "checklist" is the Phase 3 technique for non-functional cases (design P3 open question 4, accepted). */
+export type Technique = "equivalence_partitioning" | "boundary_value_analysis" | "decision_table" | "state_transition" | "use_case" | "error_guessing" | "exploratory" | "checklist" | "other";
 export type RiskLevel = "low" | "medium" | "high" | "very_high";
 
 export type StrategyItem = { text: string; rationale: string | null; evidence_refs?: EvidenceRef[]; related?: ArtefactRef[]; generated_by: GeneratedBy };
@@ -854,6 +861,8 @@ export type Risk = Provenanced &
     requires_approval: boolean;
     status: "open" | "mitigated" | "accepted";
     status_comment: string | null;
+    /** Phase 3 (P3-05): computed test coverage. Absent before test design. */
+    coverage?: { requirements: number; test_cases: number; approved_test_cases: number; uncovered_requirement_keys: string[] } | null;
   };
 
 export type RiskMatrix = { cells: { likelihood: number; impact: number; count: number; risk_keys: string[] }[]; totals: Partial<Record<RiskLevel, number>> };
@@ -950,6 +959,14 @@ export type SourceDocumentDetail = SourceDocument & {
 // ---- Assistant (P2-10) --------------------------------------------------------
 
 export type AssistantIntent =
+  // Phase 3 (P3-06)
+  | "list_test_cases"
+  | "explain_test_case"
+  | "traceability_for"
+  | "propose_negative_cases"
+  | "propose_regression_suite"
+  | "propose_test_case_update"
+  | "propose_missing_test_cases"
   | "help"
   | "workflow_status"
   | "needs_attention"
@@ -980,6 +997,8 @@ export type AssistantCapabilities = {
     params_schema: Record<string, unknown>;
     creates_proposal: boolean;
     requires_ai: boolean;
+    /** As built: same as `requires_ai`. */
+    needs_ai?: boolean;
     available: boolean;
     requires_role: "viewer" | "member";
   }[];
@@ -992,11 +1011,21 @@ export type ProposalStatus = "pending" | "accepted" | "rejected" | "stale" | "fa
 export type Proposal = {
   id: Uuid;
   key: string;
-  kind: "add_acceptance_criteria" | "update_requirement" | "add_requirement" | "reassess_risks" | "update_risk" | "regenerate_stage";
+  kind:
+    | "add_acceptance_criteria"
+    | "update_requirement"
+    | "add_requirement"
+    | "reassess_risks"
+    | "update_risk"
+    | "regenerate_stage"
+    // Phase 3 (P3-06)
+    | "add_test_cases"
+    | "update_test_case"
+    | "set_suite";
   target: ArtefactRef | null;
   summary: string;
   payload: Record<string, unknown>;
-  preview: { field: string; from: unknown; to: unknown }[] | AcceptanceCriterionCreate[] | null;
+  preview: { field: string; from: unknown; to: unknown }[] | AcceptanceCriterionCreate[] | ProposedTestCase[] | SuiteChange[] | null;
   base_versions: Record<string, number>;
   status: ProposalStatus;
   generated_by: "ai" | "rules";
@@ -1068,3 +1097,387 @@ export type TestStrategyReportContent = {
 };
 
 export type TestPlanReportContent = { project: Record<string, unknown>; generated_at: IsoDate; approval: ReportApproval; plan: TestPlan; strategy_version: number };
+
+// ============================================================================
+// Phase 3 (api-contracts.md "Phase 3 endpoints (full detail)")
+// Fields marked "assumed" are not in the contract; readers treat them as optional.
+// ============================================================================
+
+export type CaseStatus = "draft" | "approved" | "rejected" | "deprecated";
+export type Priority = "critical" | "high" | "medium" | "low";
+export type Suite = "smoke" | "regression";
+export type SideEffect = "submits_form" | "signs_in" | "creates_data" | "external_transaction";
+export type ExecutionStatus = "not_run" | "passed" | "failed" | "blocked" | "error";
+
+export type LintCode =
+  | "missing_steps"
+  | "missing_expected_result"
+  | "orphan_case"
+  | "unresolved_placeholder"
+  | "technique_data_mismatch"
+  | "literal_secret"
+  | "non_synthetic_data"
+  | "open_question"
+  | "vague_wording"
+  | "too_many_steps"
+  | "duplicate_case"
+  | "type_not_in_strategy"
+  | "linked_requirement_rejected"
+  | "priority_below_risk";
+
+export type LintItem = {
+  code: LintCode;
+  severity: "error" | "warning" | "info";
+  /** All errors and open_question. */
+  blocks_approval: boolean;
+  message: string;
+  /** e.g. "steps[2].expected" */
+  path: string | null;
+  hint: string | null;
+};
+
+/** Wherever Phase 4+ data would appear. Never rendered as 0 or an empty list. */
+export type Unavailable = { available: false; available_from_phase: number; message: string };
+
+export type CoverageItem = { id: string; label: string; covered_by: string[] };
+
+export type TestCondition = Provenanced &
+  Editable & {
+    id: Uuid;
+    key: string;
+    lineage_id: Uuid;
+    title: string;
+    description: string;
+    technique: Technique;
+    test_type: string;
+    feature: ArtefactRef | null;
+    requirements: ArtefactRef[];
+    acceptance_criteria: ArtefactRef[];
+    /** Technique-specific; values computed in code (database-schema.md test_conditions.design_basis). */
+    design_basis: Record<string, unknown>;
+    coverage_items: CoverageItem[];
+    notes: string[];
+    status: "draft" | "approved" | "rejected";
+    rule_id: string | null;
+    stage_run_version: number;
+    /** Assumed: the classification the expected results carry (contract says Provenanced). */
+    classification?: Provenance;
+    /** Assumed: detail endpoint includes its cases. */
+    cases?: TestCaseSummary[];
+    /** Assumed: "Expected result not decided: REQ-0011 asks …". */
+    open_question?: { requirement: ArtefactRef; message: string } | null;
+  };
+
+export type TestStep = { n: number; action: string; data: ArtefactRef[]; expected: string };
+
+export type TestCaseSummary = Provenanced & {
+  id: Uuid;
+  key: string;
+  lineage_id: Uuid;
+  title: string;
+  technique: Technique;
+  test_type: string;
+  test_level: string;
+  status: CaseStatus;
+  /** Effective priority (override or derived). */
+  priority: Priority;
+  derived_priority: Priority;
+  priority_overridden: boolean;
+  risk_level: RiskLevel | null;
+  risk_score: number | null;
+  suites: Suite[];
+  requirement_keys: string[];
+  lint_summary: { errors: number; warnings: number; blocks_approval: boolean };
+  expected_result_status: "defined" | "open_question";
+  execution_status: ExecutionStatus;
+  /** Always null in Phase 3. */
+  last_result: null;
+  stage_run_version: number;
+  version: number;
+  locked: boolean;
+  human_edited: boolean;
+  updated_at: IsoDate;
+  /** As built: where the case came from. Optional so older fixtures still type-check. */
+  source?: "design" | "user" | "assistant";
+  /** Assumed extras, read if present (design P3 §6.1 columns and filters). */
+  classification?: Provenance;
+  risk_key?: string | null;
+  feature?: ArtefactRef | null;
+  condition_key?: string | null;
+  changed_in_latest?: boolean;
+  objective?: string;
+  /** Read if present: the requirement an open-question case waits on (it isn't always in `requirement_keys`). */
+  open_question?: { requirement: ArtefactRef | null; message?: string } | null;
+};
+
+export type TestDataItem = Editable & {
+  id: Uuid;
+  key: string;
+  lineage_id: Uuid;
+  name: string;
+  field_label: string;
+  feature: ArtefactRef | null;
+  kind: "valid" | "invalid" | "boundary" | "secret_ref";
+  value_type: "text" | "email" | "number" | "empty" | "whitespace" | "secret_ref";
+  /** Never a secret. Long values are returned in full; the UI truncates. */
+  value: string | null;
+  /** Secret NAME only, e.g. "login_credentials". */
+  secret_ref: string | null;
+  length: number | null;
+  boundary: { condition: ArtefactRef; coverage_item: string; coverage_item_label?: string | null } | null;
+  synthetic: boolean;
+  generator: string | null;
+  status: "active" | "retired";
+  used_by_count: number;
+  generated_by: GeneratedBy;
+  /** Detail only. */
+  used_by?: (ArtefactRef & { status?: CaseStatus })[];
+  /** As built (backend notes): the field's form; keys optional. */
+  form_ref?: { form_anchor?: string; path?: string; field_type?: string } | null;
+  /** Assumed: the form the field belongs to ("Contact (/contact)"). */
+  form?: { label: string; path?: string | null } | null;
+  /** Assumed: true when an approved case uses it (drives "Save and reopen review"). */
+  used_by_approved?: string[];
+};
+
+export type TestCaseDetail = TestCaseSummary & {
+  objective: string;
+  preconditions: string[];
+  steps: TestStep[];
+  expected_result: string;
+  open_question: { requirement: ArtefactRef; message: string } | null;
+  condition: ArtefactRef | null;
+  design_basis: { technique: Technique; coverage_item: string; coverage_item_label?: string | null; explanation: string } | null;
+  requirements: ArtefactRef[];
+  acceptance_criteria: ArtefactRef[];
+  risks: ArtefactRef[];
+  test_data: TestDataItem[];
+  side_effects: SideEffect[];
+  automation_suitability: { value: "suitable" | "partial" | "manual_only"; reason: string; assessed: "preliminary" | "assessed" } | null;
+  priority_source: { kind: "risk" | "override" | "default"; risk: ArtefactRef | null; override_reason: string | null; overridden_by: UserRef | null; overridden_at?: IsoDate | null };
+  lint: LintItem[];
+  evidence: EvidenceLink[];
+  source: "design" | "user" | "assistant";
+  rule_id: string | null;
+  status_comment: string | null;
+  status_changed_by: UserRef | null;
+  status_changed_at: IsoDate | null;
+  created_at: IsoDate;
+  updated_by: UserRef | null;
+};
+
+export type TestStepInput = { action: string; data_ids: Uuid[]; expected: string };
+
+export type TestCaseCreate = {
+  title: string;
+  objective: string;
+  preconditions: string[];
+  steps: TestStepInput[];
+  expected_result: string;
+  test_type: string;
+  test_level: string;
+  technique: Technique;
+  requirement_ids: Uuid[];
+  acceptance_criterion_ids: Uuid[];
+  condition_id?: Uuid | null;
+  suites: Suite[];
+  side_effects: SideEffect[];
+};
+
+/** Only the fields that changed are sent, plus version (P2 bug class: saves must send what changed). */
+export type TestCasePatch = {
+  version: number;
+  title?: string;
+  objective?: string;
+  preconditions?: string[];
+  steps?: TestStepInput[];
+  expected_result?: string;
+  test_type?: string;
+  test_level?: string;
+  suites?: Suite[];
+  side_effects?: SideEffect[];
+  requirement_ids?: Uuid[];
+  acceptance_criterion_ids?: Uuid[];
+  priority_override?: Priority;
+  priority_override_reason?: string;
+  clear_priority_override?: boolean;
+  change_reason?: string;
+};
+
+export type TestCaseStats = {
+  stage_run_version: number | null;
+  generated_by: string | null;
+  total: number;
+  by_status: Partial<Record<CaseStatus, number>>;
+  by_technique: Record<string, number>;
+  by_type: Record<string, number>;
+  by_level: Record<string, number>;
+  by_priority: Partial<Record<Priority, number>>;
+  by_suite: Partial<Record<Suite, number>>;
+  lint: { errors: number; warnings: number; cases_blocked: number };
+  open_questions: number;
+  not_designed: { test_type: string; reason: string }[];
+  execution: Unavailable;
+  pending_review_version: number | null;
+  /** Assumed: technique coverage summary for the Conditions tab header. */
+  conditions?: { total: number; complete: number } | null;
+};
+
+export type CaseBulkStatusResult = { updated: TestCaseSummary[]; skipped: { id: Uuid; key: string; reason: string }[] };
+
+export type DesignLint = {
+  rules_version: string;
+  errors: number;
+  warnings: number;
+  by_code: Partial<Record<LintCode, number>>;
+  cases: { key: string; items: LintItem[] }[];
+};
+
+/** `GET /stages/test_design/runs/{v}` output. */
+export type TestDesignRunOutput = {
+  counts?: { conditions: number; cases: number; data: number; by_technique: Record<string, number>; by_type: Record<string, number>; by_status: Record<string, number> };
+  not_designed?: { test_type: string; reason: string }[];
+  lint?: { errors: number; warnings: number };
+  diff?: RegenerationDiff;
+};
+
+// ---- Traceability (P3-04) -------------------------------------------------------------
+
+export type ForwardRow = {
+  requirement: ArtefactRef;
+  requirement_status: string;
+  risk: { level: string; risks: ArtefactRef[] } | null;
+  acceptance_criteria: { ac: ArtefactRef; covered: boolean }[];
+  conditions: (ArtefactRef & { technique?: Technique })[];
+  test_cases: { case: ArtefactRef; status: CaseStatus; priority: Priority }[];
+  automation: Unavailable;
+  results: Unavailable;
+  defects: Unavailable;
+};
+
+export type BackwardRow = {
+  test_case: ArtefactRef;
+  status: CaseStatus;
+  conditions: ArtefactRef[];
+  acceptance_criteria: ArtefactRef[];
+  requirements: ArtefactRef[];
+  risks: ArtefactRef[];
+  /** Assumed extras, read if present. */
+  priority?: Priority;
+  technique?: Technique;
+};
+
+export type Coverage = {
+  basis: "current" | "approved";
+  design_version: number | null;
+  snapshot_hash: string | null;
+  requirements: { approved: number; with_case: number; with_approved_case: number; percent_approved_covered: number };
+  acceptance_criteria: { approved: number; covered: number; percent: number };
+  high_risk_requirements: { total: number; with_approved_case: number };
+  techniques: { condition: ArtefactRef; technique: Technique; items: number; covered: number }[];
+  test_cases: { by_status: Partial<Record<CaseStatus, number>>; orphans: number };
+  execution: Unavailable;
+  /** Assumed: when basis=approved, the G5 approval date. */
+  approved_at?: IsoDate | null;
+};
+
+export type Gaps = {
+  requirements_without_test_cases: { none: ArtefactRef[]; none_approved: ArtefactRef[] };
+  test_cases_without_requirements: ArtefactRef[];
+  acceptance_criteria_without_test_cases: ArtefactRef[];
+  untested_high_risk: { open: { risk: ArtefactRef; requirements: ArtefactRef[] }[]; accepted: { risk: ArtefactRef; comment: string }[] };
+  features_without_requirements: ArtefactRef[];
+  requirements_without_execution_evidence: Unavailable;
+  failed_tests: Unavailable;
+  outdated_automation_scripts: Unavailable;
+  defects_without_regression_coverage: Unavailable;
+};
+
+export type Chain = {
+  root: ArtefactRef;
+  upstream: { type: string; items: ArtefactRef[] }[];
+  downstream: { type: string; items: ArtefactRef[] }[];
+  later_phase: { type: "automation_script" | "execution_result" | "defect"; status: Unavailable }[];
+};
+
+// ---- Reports (P3-08) ------------------------------------------------------------------
+
+export type TestCaseSpecContent = {
+  project: Record<string, unknown>;
+  generated_at: IsoDate;
+  approval: ReportApproval;
+  scope_and_method: string[];
+  techniques: { technique: Technique; definition: string; conditions: number }[];
+  counts: TestCaseStats;
+  /** Cases with no requirement are grouped under a `null` requirement ("Not linked to a requirement"). */
+  cases_by_feature: Record<string, { requirement: ArtefactRef | null; cases: TestCaseDetail[] }[]>;
+  conditions: TestCondition[];
+  test_data: TestDataItem[];
+  not_designed: { test_type: string; reason: string }[];
+  execution_note: string;
+  summary: string;
+  summary_generated_by: "ai" | "rules";
+  disclaimer: string;
+};
+
+export type RtmContent = {
+  project: Record<string, unknown>;
+  generated_at: IsoDate;
+  approval: ReportApproval;
+  based_on: { G3: string | null; G4: string | null; G5: string | null };
+  forward: ForwardRow[];
+  backward: BackwardRow[];
+  coverage: Coverage;
+  gaps: Gaps;
+};
+
+// ---- Assistant v2 (P3-06) ------------------------------------------------------------------
+
+/** One case in an `add_test_cases` proposal preview (TestCaseCreate + computed data). */
+export type ProposedTestCase = Omit<Partial<TestCaseCreate>, "steps" | "title"> & {
+  title: string;
+  steps: { action: string; expected: string; data?: (string | { key?: string | null; label: string; value?: string | null; new?: boolean })[] }[];
+  expected_result?: string;
+  classification?: Provenance;
+  priority?: Priority;
+  risk_key?: string | null;
+  constraint?: string | null;
+  classification_note?: string | null;
+  /** As built (negative cases): the values the case uses, `new` when an item will be created on apply. */
+  data?: { field_label: string; value: string | null; new?: boolean }[];
+};
+
+export type SuiteChange = { key: string; from: Suite[]; to: Suite[]; reason?: string | null; title?: string | null; action?: "add" | "remove"; case_id?: Uuid };
+
+// ---- Members and invitations (P3-07) -------------------------------------------------------
+
+export type Member = {
+  membership_id: Uuid;
+  user: UserRef;
+  /** Only for owners and admins. */
+  email: string | null;
+  role: Role;
+  can_approve: boolean;
+  joined_at: IsoDate | null;
+  invited_by: UserRef | null;
+  is_you: boolean;
+  /** Assumed: optimistic version for PATCH. */
+  version?: number;
+};
+
+export type Invitation = {
+  id: Uuid;
+  email: string;
+  role: Exclude<Role, "owner">;
+  can_approve: boolean;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  invited_by: UserRef;
+  created_at: IsoDate;
+  expires_at: IsoDate;
+  accepted_at: IsoDate | null;
+};
+
+export type InvitationCreated = { invitation: Invitation; link: string };
+
+/** Public lookup. `email_hint` is masked, e.g. "ne***@example.com" (design P3 open question 2, accepted). */
+export type InvitationLookup = { organisation_name: string; invited_by_name: string; role: Exclude<Role, "owner">; email_hint: string | null; expires_at: IsoDate };

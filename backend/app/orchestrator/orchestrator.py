@@ -54,6 +54,7 @@ from app.domain.enums import (
 )
 from app.domain.stages import (
     ACTIVE_STATUSES,
+    DERIVED_STAGES,
     GATE_STAGE,
     GATE_TITLES,
     OUTPUT_STATUSES,
@@ -86,11 +87,13 @@ def _phase2_agents() -> dict[StageKey, Any]:
     from app.agents.readiness.agent import ReadinessAgent
     from app.agents.requirements.agent import RequirementsAgent
     from app.agents.strategy.agent import StrategyAgent
+    from app.agents.testdesign.agent import TestDesignAgent
 
     return {
         StageKey.requirements: RequirementsAgent,
         StageKey.readiness_criteria: ReadinessAgent,
         StageKey.test_strategy: StrategyAgent,
+        StageKey.test_design: TestDesignAgent,
     }
 
 
@@ -308,7 +311,8 @@ class Orchestrator:
 
         Automatic runs (architecture.md §4): discovery once the project exists; the discovery report whenever
         discovery has a new version; provisional requirements once discovery has results; Definition of Ready/Done
-        whenever the requirements version changes; the test strategy once G3 is approved.
+        whenever the requirements version changes; the test strategy once G3 is approved; test design once G4 is
+        approved (P3-00). Traceability is derived on read and never queued.
         """
         queued: list[StageKey] = []
         async with self.ctx.session_factory() as s:
@@ -377,7 +381,7 @@ class Orchestrator:
             if st.status == StageStatus.not_started or run is None:
                 return True
             return (run.upstream_versions or {}).get("requirements") != urun.version
-        if key == StageKey.test_strategy:
+        if key in (StageKey.test_strategy, StageKey.test_design):
             return st.status == StageStatus.not_started
         return False
 
@@ -427,6 +431,15 @@ class Orchestrator:
         if st.stage_key == StageKey.test_strategy:
             items, versions = await gate_rules.g3_snapshot(s, project.id)
             approved_input = {"g3_hash": gate_rules.snapshot_hash(items), "versions": versions}
+        elif st.stage_key == StageKey.test_design:
+            # P3-00: the design is built from exactly these G3/G4 approvals (G5 checks the G4 one still holds).
+            g3_items, g3_versions = await gate_rules.g3_snapshot(s, project.id)
+            g4_items, g4_versions = await gate_rules.g4_snapshot(s, project.id)
+            approved_input = {
+                "requirements_snapshot_hash": gate_rules.snapshot_hash(g3_items),
+                "strategy_snapshot_hash": gate_rules.snapshot_hash(g4_items),
+                "versions": {**g3_versions, **g4_versions},
+            }
         run = StageRun(
             organisation_id=project.organisation_id,
             workflow_stage_id=st.id,
@@ -545,6 +558,11 @@ class Orchestrator:
         reason: str | None,
     ) -> None:
         d = STAGE_BY_KEY[stage_key]
+        if stage_key in DERIVED_STAGES:
+            raise ValidationFailed(
+                "Traceability is computed automatically",
+                details=[{"field": "stage", "message": "Traceability is computed automatically"}],
+            )
         if not d.available or stage_key not in RUNNABLE_IN_PHASE:
             raise ValidationFailed(
                 f"The stage '{stage_key.value}' is not available in this phase",
@@ -581,6 +599,8 @@ class Orchestrator:
             if run.review_status != ReviewStatus.pending_review:
                 # A candidate changes nothing until it is applied; a direct re-run supersedes downstream outputs.
                 for dk in downstream_of(stage_key):
+                    if dk in DERIVED_STAGES:
+                        continue  # derived on read from its source stage
                     dst = await self.stage(s, project.id, dk)
                     if dst.status in OUTPUT_STATUSES or dst.status in (
                         StageStatus.failed,
@@ -838,7 +858,7 @@ class Orchestrator:
             recommendation = (run.output or {}).get("recommendation")
             items: list[dict[str, Any]] = []
             versions: dict[str, int] = {}
-            if gate in (GateKey.G3, GateKey.G4):
+            if gate in (GateKey.G3, GateKey.G4, GateKey.G5):
                 if decision == GateDecisionKind.approve:
                     blocking = gate_rules.blockers(await gate_rules.preconditions(s, project, gate))
                     if blocking:
@@ -919,6 +939,22 @@ class Orchestrator:
                 rtype = ReportType.requirements_spec if gate == GateKey.G3 else ReportType.test_strategy
                 if await phase2_reports.has_source(s, project.id, rtype):
                     report = await phase2_reports.create(s, project, rtype, user_id=scope.user_id, frozen=True)
+            extra_reports: list[uuid.UUID] = []
+            if decision == GateDecisionKind.approve and gate == GateKey.G5:
+                # P3-08: frozen Test Case Specification and RTM for exactly the approved snapshot.
+                from app.agents.reporting import phase2_reports
+
+                for rtype in (ReportType.test_case_spec, ReportType.rtm):
+                    if await phase2_reports.has_source(s, project.id, rtype):
+                        rep_row = await phase2_reports.create(s, project, rtype, user_id=scope.user_id, frozen=True)
+                        extra_reports.append(rep_row.id)
+            if decision == GateDecisionKind.approve and gate == GateKey.G4:
+                # P3-05: risk-derived priorities follow the approved register (derived: no version bump).
+                from app.services import testdesign as tds
+
+                updated = await tds.recompute_priorities(s, project.id)
+            else:
+                updated = 0
             await s.commit()
             report_id = report.id if report is not None else None
         word = "approved" if decision == GateDecisionKind.approve else "returned with requested changes"
@@ -944,13 +980,21 @@ class Orchestrator:
                 stage=dk,
                 data={"kind": "status", "stage_key": dk.value, "from": "approved", "to": "stale", "version": None},
             )
-        if report_id is not None:
+        for rid in [*([report_id] if report_id is not None else []), *extra_reports]:
             await self.ctx.queue.enqueue(
                 "report_render",
-                {"report_id": str(report_id)},
+                {"report_id": str(rid)},
                 org_id=project.organisation_id,
                 project_id=project.id,
-                dedupe_key=f"report:{report_id}",
+                dedupe_key=f"report:{rid}",
+            )
+        if updated:
+            await self._emit(
+                project,
+                "test_cases.priorities_updated",
+                f"Risk-based priority changed on {updated} test case(s)",
+                stage=StageKey.test_design,
+                data={"kind": "result", "count": updated},
             )
         if decision == GateDecisionKind.approve and gate == GateKey.G4:
             await self.ctx.queue.enqueue(
@@ -966,20 +1010,35 @@ class Orchestrator:
     async def _mark_changed_downstream(
         self, s: AsyncSession, project: Project, stage_key: StageKey, digest: str, previous: GateDecision | None
     ) -> list[StageKey]:
-        """On re-approval with different content, downstream outputs built from the old approval become stale."""
+        """On re-approval with different content, downstream outputs built from the old approval become stale.
+
+        Each downstream run records the approval it was built from in `approved_input` (G3 hash for the strategy;
+        G3 and G4 hashes for the test design); a stage built from another approval goes stale. Its current output
+        stays in use until it is regenerated and reviewed.
+        """
         if previous is None or previous.snapshot_hash == digest:
             return []
         out: list[StageKey] = []
+        keys = {GateKey.G3: ("g3_hash", "requirements_snapshot_hash"), GateKey.G4: ("strategy_snapshot_hash",)}
+        gate = STAGE_BY_KEY[stage_key].gate
         for dk in downstream_of(stage_key):
-            if dk == StageKey.readiness_criteria:
+            if dk == StageKey.readiness_criteria or dk in DERIVED_STAGES or gate not in keys:
                 continue
             dst = await self.stage(s, project.id, dk)
             drun = await self.current_run(s, dst)
             if drun is None or dst.status not in OUTPUT_STATUSES:
                 continue
-            if (drun.approved_input or {}).get("g3_hash") not in (None, digest):
+            built = drun.approved_input or {}
+            used = next((built[k] for k in keys[gate] if built.get(k)), None)
+            if used is not None and used != digest:
                 dst.status = StageStatus.stale
-                dst.stale_reason = "Requirements changed after this strategy was written"
+                dst.stale_reason = (
+                    "Requirements changed after this strategy was written"
+                    if dk == StageKey.test_strategy
+                    else "Requirements changed after these test cases were designed"
+                    if gate == GateKey.G3
+                    else "Strategy changed after these test cases were designed"
+                )
                 out.append(dk)
         return out
 
@@ -1196,7 +1255,7 @@ class Orchestrator:
             await self._emit(
                 project,
                 "gate.awaiting_approval",
-                f"Gate {g.value[1:]}: {GATE_TITLES[g]} is waiting for your approval"
+                f"Gate {g.value[1:]}: {GATE_TITLES[g]} is waiting for approval"
                 if gate_event["policy"] == "required"
                 else f"Gate {g.value[1:]}: {GATE_TITLES[g]} is ready for review (approval recommended)",
                 stage=stage_key,

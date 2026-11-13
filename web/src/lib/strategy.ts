@@ -64,6 +64,8 @@ export const TECHNIQUE_NAMES: Record<Technique, string> = {
   use_case: "Use case",
   error_guessing: "Error guessing",
   exploratory: "Exploratory",
+  checklist: "Checklist",
+  other: "Other",
 };
 
 /** Accessible name of a matrix cell: "2 risks, likelihood 4 Likely, impact 3 Moderate, score 12, High". */
@@ -154,4 +156,19 @@ export function gate4Checks(strategy: TestStrategy, risks: Risk[], opts: { requi
       text: `${approval.length} planned test type${approval.length === 1 ? " needs" : "s need"} separate approval before running: ${approval.map((t) => TYPE_NAMES[t.type]).join(", ")}`,
     });
   return out;
+}
+
+// ---- Phase 3: risk register "Test coverage" (design P3 §9) -------------------------------------------
+
+/** "3 cases, 2 approved" · "No approved case" · "Accepted · not required"; null before test design. */
+export function riskCoverageText(r: Pick<Risk, "status" | "coverage">): { text: string; tone: "ok" | "danger" | "muted" } | null {
+  if (r.status === "accepted") return { text: "Accepted · not required", tone: "muted" };
+  const c = r.coverage;
+  if (!c) return null;
+  if (c.approved_test_cases === 0) return { text: "No approved case", tone: "danger" };
+  return { text: `${c.test_cases} case${c.test_cases === 1 ? "" : "s"}, ${c.approved_test_cases} approved`, tone: "ok" };
+}
+
+export function riskHasNoApprovedCase(r: Pick<Risk, "status" | "coverage">): boolean {
+  return r.status !== "accepted" && !!r.coverage && r.coverage.approved_test_cases === 0;
 }

@@ -1017,12 +1017,442 @@ AI tool set (P2-10, server-side only; not an HTTP API): read-only `get_workflow`
 | sign-in tests per project | 5 / 10 min |
 | stage runs per project | 10 / hour (Phase 1 limit; also covers plan regenerate) |
 
+## Phase 3 endpoints (full detail)
+
+All Phase 1/2 conventions apply: bearer auth, the session's organisation as tenant (other organisations get 404), the error envelope, `?limit&cursor` pagination, `version` on mutable resources (a mismatch is 409 `conflict`; a superseded stage run is 409 `conflict` "The test design was regenerated; reload to continue"), `extra="forbid"` on bodies, and an audit entry on every write.
+
+Role rules:
+- `viewer`: read only.
+- `member`: runs test design, creates and edits cases, conditions and data, approves, rejects or deprecates individual cases (decision D2), and accepts proposals.
+- `can_approve`: G5 decisions, with the same check as G3/G4 (decision D1).
+- owner/admin: member management (owner-only for the `owner` role).
+
+Code-owned fields are rejected with 422 when sent: `classification`, `confidence`, `execution_status`, `risk_level`, `risk_score`, `derived_priority`, `lint`.
+
+### Shared Phase 3 schemas
+
+```python
+Technique = Literal["equivalence_partitioning", "boundary_value_analysis", "decision_table", "state_transition",
+                    "use_case", "error_guessing", "exploratory", "checklist"]
+    # from P2-06; "exploratory" is not designed in Phase 3. "checklist" is the technique of non-functional
+    # (accessibility, compatibility, usability) cases.
+CaseStatus = Literal["draft", "approved", "rejected", "deprecated"]
+Priority = Literal["critical", "high", "medium", "low"]
+Suite = Literal["smoke", "regression"]
+SideEffect = Literal["submits_form", "signs_in", "creates_data", "external_transaction"]
+ExecutionStatus = Literal["not_run", "passed", "failed", "blocked", "error"]   # always "not_run" in Phase 3
+
+ArtefactRef.type  # gains "test_condition", "test_case", "test_data"; keys TCOND-0001, TC-0001, TD-0001
+ChangeReviewItem.type  # gains "test_condition", "test_case", "test_data"; ChangeReview.artefact gains "test_design"
+ValidationIssue.code   # gains boundary_not_found, case_cap_reached, not_designed_type, open_question
+
+class LintItem(BaseModel):
+    code: Literal["missing_steps", "missing_expected_result", "orphan_case", "unresolved_placeholder",
+                  "technique_data_mismatch", "literal_secret", "non_synthetic_data", "open_question",
+                  "vague_wording", "too_many_steps", "duplicate_case", "type_not_in_strategy",
+                  "linked_requirement_rejected", "priority_below_risk"]
+    severity: Literal["error", "warning", "info"]
+    blocks_approval: bool                 # all errors + open_question
+    message: str                          # e.g. "Step 3 has no expected result"
+    path: str | None                      # "steps[2].expected"
+    hint: str | None                      # e.g. "Describe what the user sees, e.g. 'Name is marked as required'"
+
+class Unavailable(BaseModel):              # used wherever Phase 4+ data would appear
+    available: Literal[False] = False
+    available_from_phase: int             # 4
+    message: str                          # "Available after test execution (Phase 4)"
+```
+
+### Workflow additions (P3-00)
+
+- `POST /projects/{id}/stages/test_design/run` with the Phase 2 `StageRunRequest` body: `{reason?, parameters?: {guidance?: str (≤ 1000)}}`. Test design also starts automatically when G4 is approved and the stage has never run.
+  - 409 `gate_blocked` "Test strategy approval (G4) must be approved first".
+  - 409 `conflict` if a test design candidate is pending review.
+  - `traceability` cannot be run: 422 "Traceability is computed automatically".
+- The change review endpoints (`/stages/test_design/runs/{version}/review`, `/apply`, `/discard`) work as in Phase 2. Items are typed `test_condition`/`test_case`/`test_data`.
+- `GET /projects/{id}/stages/test_design/runs/{version}` `output` = `{counts: {conditions, cases, data, by_technique, by_type, by_status}, not_designed: list[{test_type, reason}], lint: {errors, warnings}, diff: RegenerationDiff}`.
+- **G5 is a required sign-off (decision D1).**
+  - `DEFAULT_APPROVAL_POLICY.G5 = "required"`. New projects store it, and existing projects are switched by a startup data step (see roadmap P3-00).
+  - When design output is produced, `test_design` goes to `awaiting_approval` with gate `pending`.
+  - Phase 4 stages treat `test_design` as gate-satisfied only when it is `approved`.
+  - `PATCH /projects/{id}` may still set G5 to `recommended`/`auto` (G5 is not a locked gate).
+- `POST /projects/{id}/gates/G5/decision`: same body as G3/G4. **Permission:** `can_approve`, the same check as G3/G4. Without it you get the existing 403 "You don't have permission to approve quality gates. Ask an owner or admin."
+  - **Blockers**:
+    1. G4 approved, and the design's `approved_input` matches it
+    2. ≥1 approved case
+    3. no approved case with a blocking lint item
+    4. every approved requirement linked to an open high/very-high risk has ≥1 approved case
+    5. no open-question case among draft **or** approved cases (`code: "open_questions"`; decision D6, settled by the P3 design)
+  - **Warnings**: drafts remain; approved requirements without an approved case; approved ACs without a case; lint warnings on approved cases; accepted high risks without an approved case.
+  - Precondition codes: `g4_approved`, `approved_case`, `approved_lint_errors`, `open_questions`, `high_risk_covered` (blocking); `drafts_remaining`, `requirements_without_case`, `acs_without_case`, `drafts_with_errors`, `approved_lint_warnings`, `accepted_risks` (warnings).
+  - `StageState.approved_input` for `test_design` = `{stage_key: "test_strategy", snapshot_hash, version, requirements_snapshot_hash, requirements_version}`.
+  - The `gate.awaiting_approval` event reads "… is waiting for approval" (no role is implied; the UI words it from `can_approve`).
+  - On approval, the TCS and RTM frozen reports are queued.
+- `StageState.gate.preconditions` and `changes_since_approval` are computed for G5 as for G3/G4.
+
+### Test conditions (P3-01a, P3-02)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-conditions` | `?technique=&status=&requirement_key=&feature_id=&stage_run_version=&limit&cursor` | `Page[TestCondition]` | Default: current design run. |
+| GET | `/test-conditions/{id}` | – | `TestCondition` (with its cases) | |
+| PATCH | `/test-conditions/{id}` | `{version, title?, description?, notes?, change_reason?}` | `TestCondition` | member+. `design_basis` values are not editable (edit the requirement/AC or the case). Reopens G5 if it holds approved cases. Audit `test_condition.updated`. |
+| POST | `/test-conditions/{id}/status` | `{version, status: "draft"\|"approved"\|"rejected", comment?}` | `{condition: TestCondition, rejected_cases: list[ArtefactRef]}` | member+. Rejecting needs `comment` (422) and rejects its **draft** cases in the same transaction (approved cases must be deprecated explicitly). |
+| POST | `/test-conditions/{id}/lock` | `{version, locked}` | `TestCondition` | |
+| GET | `/test-conditions/{id}/revisions` | – | `list[Revision]` | |
+
+```python
+class TestCondition(Provenanced, Editable):
+    id: UUID; key: str; lineage_id: UUID
+    title: str; description: str
+    technique: Technique; test_type: str
+    feature: ArtefactRef | None
+    requirements: list[ArtefactRef]; acceptance_criteria: list[ArtefactRef]
+    design_basis: dict                    # technique-specific (database-schema.md); values computed in code. The API adds:
+        # constraint: str | None          declared constraint, e.g. "required, type=email" (EP) or "required, maxlength=80" (BVA)
+        # evidence_refs: list[EvidenceRef] the condition's evidence (same as the top-level field)
+        # values: list[{coverage_item, value: str | None, length: int | None, tests: str, expected: str | None,
+        #               case_keys: list[str]}]   one row per coverage item, from the active cases covering it
+        # boundary_values: list[...]       BVA only: the stored boundary list (what `values` held before)
+    coverage_items: list[{"id": str, "label": str, "covered_by": list[str]}]   # e.g. "Name: 0 characters" -> ["TC-0007"]
+    notes: list[str]                      # e.g. "No maximum length was discovered for Message; no upper boundary case is designed"
+    status: Literal["draft", "approved", "rejected"]
+    rule_id: str | None; stage_run_version: int
+```
+
+### Test cases (P3-01a read; P3-02 write; P3-05 priority)
+
+| Method | Path | Request | Response | Errors / notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-cases` | `?status=&technique=&test_type=&test_level=&priority=&risk_level=&suite=&requirement_key=&feature_id=&lint=error\|warning\|clean&open_question=bool&q=&sort=priority\|key\|updated&stage_run_version=&limit&cursor` | `Page[TestCaseSummary]` | Default sort: effective priority, then risk score. `q` matches (case-insensitive) the key, title, objective, overall expected result, step actions and step expected results. |
+| GET | `/projects/{id}/test-cases/stats` | `?stage_run_version=` | `TestCaseStats` | Used by reports and the assistant. |
+| GET | `/projects/{id}/test-cases/by-key/{key}` | – | `TestCaseDetail` | Current design run. |
+| GET | `/test-cases/{id}` | – | `TestCaseDetail` | |
+| POST | `/projects/{id}/test-cases` | `TestCaseCreate` | `201 TestCaseDetail` | member+. `generated_by="human"`, `source="user"`, `classification="assumed"`. Added to the current design version. Reopens G5 if approved. Audit `test_case.created`. |
+| PATCH | `/test-cases/{id}` | `TestCasePatch` | `TestCaseDetail` | member+. Lock/version rules. Approved → `draft`, G5 reopens. Changing only `suites` or the priority override keeps an approved case approved but still reopens G5. Writing the expected result or steps sets `classification="assumed"`. Lint re-run. Audit `test_case.updated`. |
+| POST | `/test-cases/{id}/status` | `{version, status: CaseStatus, comment?, reason?: "incorrect"\|"duplicate"\|"not_applicable"\|"out_of_scope"\|"other", duplicate_of?: UUID}` | `TestCaseDetail` | member+. `approved` → 422 `validation_error` with `details` = blocking `LintItem`s. `rejected` needs comment or reason (writes a knowledge decision). `deprecated` only from `approved`, needs comment. Audit `test_case.status_changed`. |
+| POST | `/projects/{id}/test-cases/bulk-status` | `{ids: list[UUID] (1..200), status, comment?}` | `{updated: list[TestCaseSummary], skipped: list[{id, key, reason}]}` | member+. Skipped with a reason: blocking lint ("Checks you must fix: …"), open questions ("Open question"), locked cases (except approve), cases of a superseded run, unknown ids. |
+| POST | `/test-cases/{id}/lock` | `{version, locked}` | `TestCaseDetail` | |
+| POST | `/test-cases/{id}/duplicate` | `{title?}` | `201 TestCaseDetail` | member+. Human draft copy with the same links and data. |
+| GET | `/test-cases/{id}/revisions` | – | `list[Revision]` | By lineage. |
+| DELETE | `/test-cases/{id}` | – | 405 | Deprecate or reject instead (traceability). |
+| GET | `/projects/{id}/test-design/lint` | – | `{rules_version, errors, warnings, by_code: dict[str, int], cases: list[{key, items: list[LintItem]}]}` | |
+
+```python
+class TestStep(BaseModel):
+    n: int
+    action: str = Field(min_length=3, max_length=500)
+    data: list[ArtefactRef]               # TD items (resolved for display: label "TD-0004 · Name · 0 characters")
+    expected: str = Field(max_length=500) # may be "": lint only needs one step with an expected result (plus the overall one)
+
+class TestCaseSummary(Provenanced):
+    id: UUID; key: str; lineage_id: UUID
+    title: str; technique: Technique; test_type: str; test_level: str
+    status: CaseStatus
+    priority: Priority                    # effective (override or derived)
+    derived_priority: Priority; priority_overridden: bool
+    risk_level: Literal["low", "medium", "high", "very_high"] | None; risk_score: int | None
+    suites: list[Suite]
+    requirement_keys: list[str]
+    lint_summary: {"errors": int, "warnings": int, "blocks_approval": bool}
+    expected_result_status: Literal["defined", "open_question"]
+    execution_status: ExecutionStatus     # "not_run"
+    last_result: None                     # always null in Phase 3 (UI: "—", "Execution arrives in Phase 4")
+    stage_run_version: int; version: int; locked: bool; human_edited: bool; updated_at: datetime
+    source: Literal["design", "user", "assistant"]
+    # Additive (QA round 1):
+    classification: Classification        # same value as `provenance`
+    objective: str
+    risk_key: str | None                  # the risk the derived priority comes from
+    feature: ArtefactRef | None           # feature of the first linked requirement that has one
+    condition_key: str | None
+    changed_in_latest: bool               # new or different vs the design run this one replaced; false for v1
+    open_question: {"requirement": ArtefactRef, "message": str} | None   # also on the summary
+
+class TestCaseDetail(TestCaseSummary):    # every spec §7 field
+    objective: str
+    preconditions: list[str]
+    steps: list[TestStep]
+    expected_result: str                  # an open question reads "REQ-0007 asks whether Message is optional";
+                                          # the UI and reports add the "Not decided:" prefix
+    open_question: {"requirement": ArtefactRef, "message": str} | None
+    condition: ArtefactRef | None
+    design_basis: {"technique": Technique, "coverage_item": str, "explanation": str}
+        # e.g. "Boundary: Name requires at least 1 character (required attribute); this case uses 0 characters"
+    requirements: list[ArtefactRef]; acceptance_criteria: list[ArtefactRef]; risks: list[ArtefactRef]
+    test_data: list[TestDataItem]
+    side_effects: list[SideEffect]
+    automation_suitability: {"value": Literal["suitable", "partial", "manual_only"], "reason": str,
+                             "assessed": Literal["preliminary", "assessed"]}   # "preliminary" in Phase 3
+    priority_source: {"kind": Literal["risk", "override", "default"], "risk": ArtefactRef | None,
+                      "override_reason": str | None, "overridden_by": UserRef | None,
+                      "overridden_at": datetime | None}
+    lint: list[LintItem]
+    evidence: list[EvidenceLink]
+    source: Literal["design", "user", "assistant"]; rule_id: str | None
+    status_comment: str | None; status_changed_by: UserRef | None; status_changed_at: datetime | None
+    created_at: datetime; updated_by: UserRef | None
+
+class TestCaseCreate(BaseModel, extra="forbid"):
+    title: str = Field(min_length=5, max_length=160); objective: str = Field(max_length=1000)
+    preconditions: list[str] = Field(default_factory=list, max_length=20)
+    steps: list[{"action": str, "data_ids": list[UUID], "expected": str}] = Field(min_length=1, max_length=30)
+    expected_result: str = Field(max_length=1000)
+    test_type: str; test_level: str; technique: Technique
+    requirement_ids: list[UUID] = []; acceptance_criterion_ids: list[UUID] = []   # empty -> lint orphan_case
+    condition_id: UUID | None = None
+    suites: list[Suite] = []; side_effects: list[SideEffect] = []
+
+class TestCasePatch(BaseModel, extra="forbid"):
+    version: int
+    title: str | None = None; objective: str | None = None; preconditions: list[str] | None = None
+    steps: list[{"action": str, "data_ids": list[UUID], "expected": str}] | None = None
+    expected_result: str | None = None      # writing one clears an open question (human_edited)
+    test_type: str | None = None; test_level: str | None = None
+    suites: list[Suite] | None = None; side_effects: list[SideEffect] | None = None
+    requirement_ids: list[UUID] | None = None; acceptance_criterion_ids: list[UUID] | None = None
+    priority_override: Priority | None = None; priority_override_reason: str | None = Field(None, max_length=500)
+    clear_priority_override: bool = False   # override without reason -> 422
+    change_reason: str | None = Field(None, max_length=500)
+
+class TestCaseStats(BaseModel):
+    stage_run_version: int | None; generated_by: str | None
+    total: int
+    by_status: dict[CaseStatus, int]; by_technique: dict[str, int]; by_type: dict[str, int]
+    by_level: dict[str, int]; by_priority: dict[Priority, int]; by_suite: dict[Suite, int]
+    lint: {"errors": int, "warnings": int, "cases_blocked": int}
+    open_questions: int                   # draft + approved cases only
+    not_designed: list[{"test_type": str, "reason": str}]
+    execution: Unavailable
+    pending_review_version: int | None
+```
+
+`RequirementDetail.linked_test_cases` is now populated: the non-rejected cases of the current design run linked to the requirement's lineage, as `ArtefactRef` with the label `"TC-0004 · Approved · BVA"`.
+
+### Test data (P3-01a read; P3-03 write)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-data` | `?field=&feature_id=&kind=&used=bool&status=&stage_run_version=&limit&cursor` | `Page[TestDataItem]` | |
+| GET | `/test-data/{id}` | – | `TestDataItem` (+ `used_by: list[ArtefactRef & {status: CaseStatus}]`) | |
+| POST | `/projects/{id}/test-data` | `{name, field_label, form_ref?, kind, value?: str, secret_ref?: str}` | `201 TestDataItem` | member+. Synthetic guard → 422 with a field message. Audit `test_data.created`. |
+| PATCH | `/test-data/{id}` | `{version, name?, value?, secret_ref?, change_reason?}` | `{item: TestDataItem, affected_cases: list[ArtefactRef]}` | member+. The guard re-runs. A boundary item must keep its length (422 "This item tests the 81-character boundary; change the case instead"). Used by approved cases → G5 reopens. Audit `test_data.updated`. |
+| POST | `/test-data/{id}/status` | `{version, status: "active"\|"retired"}` | `TestDataItem` | Retiring an item used by draft or approved cases → 409 `conflict`, `details: {"used_by": ["TC-0012", "TC-0042"]}` (an object, not a list). |
+| POST | `/test-data/{id}/lock` | `{version, locked}` | `TestDataItem` | |
+| GET | `/test-data/{id}/revisions` | – | `list[Revision]` | |
+
+```python
+class TestDataItem(Editable):
+    id: UUID; key: str; lineage_id: UUID      # TD-0001
+    name: str; field_label: str; feature: ArtefactRef | None
+    form_ref: {"form_anchor": str, "path": str, "field_type": str} (keys optional)
+    kind: Literal["valid", "invalid", "boundary", "secret_ref"]
+    value_type: Literal["text", "email", "number", "empty", "whitespace", "secret_ref"]
+    value: str | None                     # never a secret; long values are returned in full, the UI truncates
+    secret_ref: str | None                # secret NAME only, e.g. "login_credentials"; UI: "Uses the saved test credentials"
+    length: int | None
+    boundary: {"condition": ArtefactRef, "coverage_item": str} | None
+    synthetic: bool; generator: str | None
+    status: Literal["active", "retired"]
+    used_by_count: int
+    generated_by: Literal["ai", "rules", "human"]
+    # Additive (QA round 1):
+    form: {"label": str, "path": str | None} | None   # e.g. {"label": "Contact us form", "path": "/contact"}; the UI shows the path
+    used_by_approved: list[str]           # keys of approved cases using it: editing it moves them back to draft
+                                          # (the UI says "Save and reopen review")
+```
+
+Synthetic guard errors are 422 `validation_error` with `field: "value"`:
+- "Use a reserved domain such as example.com; real-looking data isn't allowed"
+- "Use a fictional phone number from the reserved ranges"
+- "This looks like a real card number; use a published test card"
+- "Passwords must reference saved test credentials"
+- "No saved test credentials are called '<name>'"
+
+### Risks (P3-05 additions)
+
+- `Risk` gains `coverage: {"requirements": int, "test_cases": int, "approved_test_cases": int, "uncovered_requirement_keys": list[str]}` (computed).
+- `GET /projects/{id}/risks` gains `?uncovered=bool`.
+- Risk writes (PATCH, status, accepted reassessment, regeneration apply, G4 approval) recompute `risk_level`, `risk_score` and `derived_priority` on current cases in the same transaction. There is no case version bump and no gate reopen. Project event `test_cases.priorities_updated {count}`.
+
+### Traceability (P3-04)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/traceability` | `?view=forward\|backward&basis=current\|approved&status=&risk_level=&feature_id=&uncovered=bool&limit(≤50)&cursor` | `Page[ForwardRow]` or `Page[BackwardRow]` | Computed on read. `basis=approved` uses the last G5 snapshot (404 if G5 was never approved). |
+| GET | `/projects/{id}/traceability/coverage` | `?basis=` | `Coverage` | |
+| GET | `/projects/{id}/traceability/gaps` | `?basis=` | `Gaps` | |
+| GET | `/projects/{id}/traceability/chain` | `?key=REQ-0003\|AC-…\|TCOND-…\|TC-…\|RISK-…` | `Chain` | 404 for unknown keys. |
+
+```python
+class ForwardRow(BaseModel):
+    requirement: ArtefactRef; requirement_status: str; risk: {"level": str, "risks": list[ArtefactRef]} | None
+    acceptance_criteria: list[{"ac": ArtefactRef, "covered": bool}]
+    conditions: list[ArtefactRef]
+    test_cases: list[{"case": ArtefactRef, "status": CaseStatus, "priority": Priority}]
+    automation: Unavailable; results: Unavailable; defects: Unavailable   # Phase 4 columns
+
+class BackwardRow(BaseModel):
+    test_case: ArtefactRef; status: CaseStatus
+    conditions: list[ArtefactRef]; acceptance_criteria: list[ArtefactRef]
+    requirements: list[ArtefactRef]; risks: list[ArtefactRef]
+
+class Coverage(BaseModel):
+    basis: Literal["current", "approved"]; design_version: int | None; snapshot_hash: str | None
+    requirements: {"approved": int, "with_case": int, "with_approved_case": int, "percent_approved_covered": float}
+    acceptance_criteria: {"approved": int, "covered": int, "percent": float}
+    high_risk_requirements: {"total": int, "with_approved_case": int}
+    techniques: list[{"condition": ArtefactRef, "technique": Technique, "items": int, "covered": int}]
+    test_cases: {"by_status": dict[CaseStatus, int], "orphans": int}
+    execution: Unavailable
+
+class Gaps(BaseModel):                      # spec §12
+    requirements_without_test_cases: {"none": list[ArtefactRef], "none_approved": list[ArtefactRef]}
+    test_cases_without_requirements: list[ArtefactRef]
+    acceptance_criteria_without_test_cases: list[ArtefactRef]
+    untested_high_risk: {"open": list[{"risk": ArtefactRef, "requirements": list[ArtefactRef]}],
+                         "accepted": list[{"risk": ArtefactRef, "comment": str}]}
+    features_without_requirements: list[ArtefactRef]
+    requirements_without_execution_evidence: Unavailable
+    failed_tests: Unavailable
+    outdated_automation_scripts: Unavailable
+    defects_without_regression_coverage: Unavailable
+
+class Chain(BaseModel):
+    root: ArtefactRef
+    upstream: list[{"type": str, "items": list[ArtefactRef]}]     # e.g. TC -> conditions -> ACs -> requirements -> risks
+    downstream: list[{"type": str, "items": list[ArtefactRef]}]   # e.g. REQ -> ACs -> conditions -> cases
+    later_phase: list[{"type": Literal["automation_script", "execution_result", "defect"], "status": Unavailable}]
+```
+
+Readiness: `dod.ac_covered` and `dod.traceability_updated` now evaluate to `met`/`not_met` from `Coverage`. `dor.test_data_identified` uses TD items (P3-03).
+
+### Reports (P3-08)
+
+- `POST /projects/{id}/reports` accepts `report_type ∈ {"test_case_spec", "rtm"}`. 409 `gate_blocked` "Design test cases first" when test design has no output.
+- Frozen versions are created on each G5 approval (both types).
+- `ReportFile.format` gains `"csv"`; `ReportSummary.formats` is `["json", "html", "pdf", "csv"]` for these two types.
+- `GET /reports/{id}/download?format=pdf|html|json|csv`. CSV is available for these two types only (422 for others):
+  - UTF-8 with BOM
+  - formula-injection guard: a leading `= + - @ \t \r` is prefixed with `'`
+  - `Content-Disposition: attachment`
+- `ReportSummary.approval.gate = "G5"`.
+
+```python
+class TestCaseSpecContent(BaseModel):
+    project: dict; generated_at: datetime; approval: dict
+    scope_and_method: list[str]; techniques: list[{"technique": Technique, "definition": str, "conditions": int}]
+    counts: TestCaseStats                              # identical to /test-cases/stats
+    cases_by_feature: dict[str, list[{"requirement": ArtefactRef, "cases": list[TestCaseDetail]}]]
+    conditions: list[TestCondition]; test_data: list[TestDataItem]   # secret refs by name only
+    not_designed: list[{"test_type": str, "reason": str}]
+    execution_note: str                                # "Execution status: Not run. Execution arrives in Phase 4."
+    summary: str; summary_generated_by: Literal["ai", "rules"]; disclaimer: str
+
+class RtmContent(BaseModel):
+    project: dict; generated_at: datetime; approval: dict
+    based_on: {"G3": str | None, "G4": str | None, "G5": str | None}   # snapshot hashes + approver/date
+    forward: list[ForwardRow]; backward: list[BackwardRow]
+    coverage: Coverage; gaps: Gaps
+```
+
+### AI QA Analyst v2 (P3-06)
+
+```python
+AssistantIntent  # adds, deterministic (AI off):
+    "list_test_cases", "explain_test_case", "traceability_for",
+    "propose_negative_cases", "propose_regression_suite"
+    # and AI-only: "propose_test_case_update", "propose_missing_test_cases"
+    # coverage_summary v2 includes test-case coverage + Gaps; explain_gate supports G5;
+    # propose_regenerate accepts stage "test_design"
+params:
+    list_test_cases: {status?, technique?, test_type?, priority?, requirement_key?, suite?, lint?}
+    explain_test_case: {key}; traceability_for: {key}
+    propose_negative_cases: {requirement_key? | feature_key?}       # one of
+    propose_regression_suite: {scope: "high_risk" | "changed_since_g5" | "all"}
+    propose_test_case_update (AI): {test_case_keys: list[str] (1..20), instruction: str (≤ 1000)}
+    propose_missing_test_cases (AI): {requirement_keys: list[str] (1..10), focus?: str}
+
+Proposal.kind  # adds "add_test_cases", "update_test_case", "set_suite"
+Proposal.preview  # add_test_cases: list[TestCaseCreate + computed data]; set_suite: list[{key, from, to}]
+```
+
+- Citation guard tokens add `TC-`, `TCOND-` and `TD-`.
+- `AssistantCapabilities.later_phase_tasks` no longer lists "Generate more negative test cases", "Review test coverage" or "Generate regression scenarios".
+- Accepting goes through the REST service functions with the accepting user's permissions (`source="assistant_proposal"`). Accepting into approved content reopens G5.
+- AI tools add read-only `list_test_cases`, `get_test_case`, `get_traceability` and `get_coverage`, and proposal tools `propose_test_cases`, `propose_test_case_update` and `propose_suite_change`. There are still no tools for gates, secrets, deletion, runs or members.
+- **Backend status (this build):** the deterministic intents and rule-based proposals above are implemented. `propose_test_case_update` and `propose_missing_test_cases` are listed in capabilities with `requires_ai: true, available: false` (not implemented yet, like `propose_missing_requirements` in Phase 2), and the AI tool set above is not wired yet.
+- `add_test_cases` payload: `{cases: list[{title, objective, preconditions, steps: [{action, data: [match keys], expected}], expected_result, technique, test_type, test_level, requirement_lineages, ac_lineages, provenance, data: [{match_key, name, field_label, kind, value, form_ref}]}], design_version}`; `base_versions = {"test_design": <run version>}` (a newer design → 409 and the proposal goes `stale`). Accepted cases are drafts with `source="assistant"`; their data items reuse an active item with the same field and value, otherwise a new item is created through the guard.
+- `set_suite` payload: `{changes: list[{case_id, key, from, to}], scope}`; `base_versions` per case.
+
+### Workspace members and invitations (P3-07)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/organisation/members` | `?limit&cursor` | `Page[Member]` | Any role. `email` (and `user.email`) only for owner/admin; others get `null` and see the name. `can_approve` is the server's value. |
+| PATCH | `/organisation/members/{membership_id}` | `{version?, role?: "owner"\|"admin"\|"member"\|"viewer", can_approve?: bool}` | `Member` | owner/admin. `version` is accepted and ignored (memberships are not versioned). Promoting to `admin` defaults `can_approve` to true unless sent. Admins can't change their own role (403). `owner` grant or change: owner only (else 403). The last owner can't be demoted (409). A viewer with `can_approve` → 422. Owners always have `can_approve`. Audit `member.role_changed`. |
+| DELETE | `/organisation/members/{membership_id}` | – | `204` | owner/admin. The last owner → 409. Revokes the user's sessions for this organisation. Audit `member.removed`. |
+| GET | `/organisation/invitations` | `?status=pending\|expired\|accepted\|revoked` | `list[Invitation]` | owner/admin. |
+| POST | `/organisation/invitations` | `{email, role: "admin"\|"member"\|"viewer", can_approve: bool = False}` | `201 {invitation: Invitation, link: str}` | owner/admin. `link` (`/invite/<token>`) is returned **only here, once**. An existing account for this email → 409 "This email already has an account. Multi-workspace accounts aren't supported yet". A pending invitation for this email → 409. 20/hour/org. Audit `member.invited`. |
+| POST | `/organisation/invitations/{id}/revoke` | – | `Invitation` | owner/admin. Audit `invitation.revoked`. |
+| GET | `/invitations/{token}` | – (public) | `{organisation_name, invited_by_name, role, email_hint, expires_at}` (`email_hint` = first character + `***@` + domain, e.g. `j***@example.com`) | Invalid, used, revoked or expired → 404 "This invitation is no longer valid" (one message for all). 10/hour/IP. |
+| POST | `/invitations/{token}/accept` | `{full_name, password}` (public; registration password rules) | `201 AuthResponse` | Creates the user and membership, and signs in. Same 404 rules. Audit `member.joined`. |
+
+```python
+`GET /auth/me` returns `can_approve` for the session's organisation, read from the membership on every request (changes apply on the next request).
+
+class Member(BaseModel):
+    membership_id: UUID; user: {"id": UUID, "full_name": str, "email": str | None}; email: str | None
+    role: Literal["owner", "admin", "member", "viewer"]; can_approve: bool
+    joined_at: datetime | None; invited_by: UserRef | None; is_you: bool
+
+class Invitation(BaseModel):
+    id: UUID; email: str; role: str; can_approve: bool
+    status: Literal["pending", "accepted", "revoked", "expired"]
+    invited_by: UserRef; created_at: datetime; expires_at: datetime; accepted_at: datetime | None
+```
+
+### Phase 3 project events (added to the SSE stream)
+
+`test_design.generated {stage_run_version, conditions, cases, data, generated_by}`, `test_design.review_ready {candidate_version, summary}`, `test_cases.priorities_updated {count}`, and `artefact.updated` with types `test_case`/`test_condition`/`test_data`. `gate.*` and `gate.reopened` cover G5. `data` never contains test data values or secret values.
+
+### Phase 3 rate limits
+
+| Scope | Limit |
+|---|---|
+| invitations per organisation | 20 / hour |
+| invitation lookups and accepts per IP | 10 / hour |
+| stage runs per project | 10 / hour (unchanged; covers test design) |
+| assistant | unchanged (20 messages/min/user; 200 AI turns/day/org) |
+
+### Phase 3 backend notes (as built)
+
+- `Risk` carries `coverage` on the list **and** on `GET /risks/{id}`, PATCH and create responses. `?uncovered=true` returns risks with an approved linked requirement that has no approved case (the same rule as `Gaps.untested_high_risk`, for every level).
+- Risk create/PATCH (and accepted reassessments, strategy regeneration apply, G4 approval) recompute derived case priority in the same transaction and emit `test_cases.priorities_updated {count}` when anything changed. A risk write still reopens G4 (Phase 2 rule); it never reopens G5.
+- `basis=approved` on traceability reads the cases frozen in the last G5 approval at their approved versions (content from their revisions); requirements, ACs and risks are the current versions.
+- `RtmContent.based_on[gate]` is `"<first 12 hex of the snapshot hash> · approved by <name> on <YYYY-MM-DD>"` or `null`. Both P3 reports are built from the current design (counts equal `/test-cases/stats`); the approval stamp is `approved` only when the current G5 snapshot hash equals the last G5 approval.
+- Readiness facts: `dor.test_data_identified` (form requirements in scope) reports per field label whether an active TD item is used by a draft/approved case, or the field has an open question (`not_met`, "Open question: Message (REQ-0007 has an open question)"); with no design yet it falls back to the Phase 2 AC test values. `dod.ac_covered` counts approved ACs of approved requirements covered by a draft/approved case. `dod.traceability_updated` is `not_met` when the design is stale, an approved requirement has no case, or a case has no requirement.
+- `DELETE /test-cases/{id}` answers 405 with `Allow: GET, PATCH` and error code `method_not_allowed`.
+- `Coverage.approved_at`: when the last G5 approval was made (the snapshot `basis=approved` reads), on both bases; `null` before any G5. The UI can offer "Last approved" whenever it is set, even while G5 is reopened.
+- `GET /projects/{id}/stages/{stage}/runs` (exists): each `StageRunSummary` gains `superseded: bool`. An older run replaced by the current version (its stored status `awaiting_approval`, `approved` or `completed`) is listed with `status: "superseded"` and `superseded: true`.
+- `GET /projects/{id}/test-cases/by-key/{key}` exists (current design run).
+- Every approved requirement gets at least one designed case. Where no technique applies (a security, performance or backend requirement, or one without a form), the rules design a `checklist` case from its acceptance criteria. A test type that needs separate approval or is out of scope gets a passive `functional` check with that reason in the explanation and condition notes. Active security/performance testing is still listed under `not_designed`. Sign-in over HTTPS has its own three-step check.
+- A boundary value whose length is inside the limit but whose value can't pass the field's format (for example a 1-character value in a `type=email` field) is expected to be rejected as an invalid email/web address/number/format, never accepted.
+- Lint `missing_expected_result` on steps: one error (path `steps[last].expected`) only when no step has an expected result. Steps without one are fine otherwise; the overall expected result is still required. `rules_version` is now 2 (stored lint is re-run on read).
+- The TCS CSV has exactly one row per case (a case linked to several requirements is listed once). Open-question expected results are written as "Not decided: …" in CSV and HTML.
+- Assistant capabilities: every intent carries `needs_ai` (= `requires_ai`). `propose_test_case_update` ("Update test cases") and `propose_missing_test_cases` ("Suggest missing test cases") are `needs_ai: true, available: false`.
+- `propose_negative_cases` draws on the baseline design's negatives plus the catalogue: spaces before and after a value, paste over `maxlength`, an email address with a space inside or two "@", and the email EP invalid classes. It drops existing cases by match key, normalised title and the same distinguishing data. Preview items: `{title, steps: [{action, expected}] (values written in), expected_result, technique, classification, constraint, data: [{field_label, value, new}]}`. When nothing is missing, the answer is "No further negative test cases can be derived from the discovered constraints." followed by the existing negative cases, cited.
+- `propose_regression_suite` changes and preview items: `{case_id, key, action: "add"|"remove", from, to, reason}`. Reasons are "Covers RISK-003 (high risk)", "Changed or added since Gate 5 was last approved", "Main positive case for its feature, so every feature keeps one check", "Approved test case (scope: every approved case)" or "Not selected by this scope". The summary names the scope in words ("high-risk cases", "changed since Gate 5", "every approved case").
+- `TestDataItem.boundary` and `TestCaseDetail.design_basis` gain `coverage_item_label` ("len:0" → "empty", "len:81" → "81 characters", "num:11" → "11", "email:missing_at" → "missing at"). `automation_suitability.reason` no longer starts with "Preliminary: assessed in Phase 4." (that is what `assessed: "preliminary"` means).
+- Cases accepted from an `add_test_cases` proposal are stored as previewed: the step text with values written in (no `{dN}`), the data, the expected results, `classification` from the preview, `generated_by: "rules"`, `human_edited: false`, `source: "assistant"`, and `design_basis.explanation` = the preview's `constraint`. New data items are `generated_by: "rules"`, `classification: "inferred"`. Rows created through the API (by people or from proposals, match key `user:…`) are kept by regeneration reviews, never rejected as no longer found.
+- Accepting an `add_test_cases` or `set_suite` proposal is one transaction: the cases, their new test data items, revisions (`source: "assistant"`), the G5 reopen and the `assistant.proposal_accepted` audit row commit together. A changed target gives 409 and marks the proposal `stale`. A validation failure gives 422 and marks it `failed`. Any other error rolls everything back and leaves it `pending`. Nothing is half-applied. New test data items are also listed in `result.applied`.
+
 ## Later phases (outline)
 
 | Phase | Endpoints |
 |---|---|
 | 2 | Specified in full above ("Phase 2 endpoints"). |
-| 3 | `GET /projects/{id}/test-conditions`, `GET/POST /projects/{id}/test-cases`, `GET/PATCH/DELETE /test-cases/{id}`, `POST /test-cases/bulk-status`, `GET /projects/{id}/traceability` (matrix + coverage stats + gap lists), `GET /projects/{id}/test-data`; risk propagation fields on `/projects/{id}/risks` (register itself ships in Phase 2); assistant v2 adds test-design intents/proposals to the Phase 2 assistant endpoints |
+| 3 | Specified in full above ("Phase 3 endpoints"). |
 | 4 | `GET /projects/{id}/automation` (bundle tree), `GET/PUT /automation-scripts/{id}`, `POST /automation-scripts/{id}/validate`, `GET /projects/{id}/automation/export.zip`, `POST /projects/{id}/approvals`, `POST /approvals/{id}/decision`, `POST /projects/{id}/execution-runs` (requires G7 decision id), `GET /execution-runs/{id}`, `POST /execution-runs/{id}/cancel`, `GET /execution-results/{id}` (+analysis), `POST /execution-results/{id}/heal-suggestions/{n}/accept`, `GET/POST /projects/{id}/defects`, `PATCH /defects/{id}` (confirm needs G8 permission) |
 | 5 | `POST /projects/{id}/performance-profiles`, `POST /projects/{id}/performance-runs` (requires approval id), `GET /performance-runs/{id}`, `POST /projects/{id}/accessibility-scans`, `POST /projects/{id}/security-assessments` (passive, approved), report types extended + `format=docx|xlsx|csv`, `GET /audit-logs` (admin), `POST /admin/projects/{id}/purge` |
 | 6 | `POST /projects/{id}/rescans`, `GET /projects/{id}/changes?from=&to=` (diff), `GET /projects/{id}/impact` (affected cases/scripts, rerun recommendation), `POST /projects/{id}/exploratory-sessions` (approved budget), `GET /projects/{id}/release-readiness` |

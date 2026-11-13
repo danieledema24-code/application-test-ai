@@ -110,7 +110,7 @@ export function comingLabel(phase: number | null): string {
 }
 
 /** The phase the product has reached: sections up to it are real screens (design P2 §3.2). */
-export const CURRENT_PHASE = 2;
+export const CURRENT_PHASE = 3;
 
 export function isBuilt(s: ProjectSection): boolean {
   return s.phase !== null && s.phase <= CURRENT_PHASE;
@@ -126,6 +126,7 @@ export function sectionBadge(
   slug: string,
   stages: { key: string; status: string; gate: { key: string; status: string } | null }[] | undefined,
   pendingProposals = 0,
+  openQuestions = 0,
 ): SectionBadge | null {
   const by = (k: string) => stages?.find((s) => s.key === k);
   const gateWaiting = (k: string) => {
@@ -134,13 +135,19 @@ export function sectionBadge(
     return !!s && (s.status === "awaiting_approval" || (s.status === "completed" && (g === "pending" || g === "recommended")));
   };
   if (slug === "requirements") {
-    if (gateWaiting("readiness_criteria") || gateWaiting("requirements")) return { text: "Review", srText: "Gate 3 waiting for your review" };
+    if (gateWaiting("readiness_criteria") || gateWaiting("requirements")) return { text: "Review", srText: "Gate 3 waiting for approval" };
     if (by("requirements")?.status === "stale") return { text: "Out of date", srText: "out of date" };
   }
   if (slug === "test-strategy") {
-    if (gateWaiting("test_strategy")) return { text: "Review", srText: "Gate 4 waiting for your review" };
+    if (gateWaiting("test_strategy")) return { text: "Review", srText: "Gate 4 waiting for approval" };
     if (by("test_strategy")?.status === "stale") return { text: "Out of date", srText: "out of date" };
   }
+  if (slug === "test-cases") {
+    if (gateWaiting("test_design")) return { text: "Review", srText: "Gate 5 waiting for approval" };
+    if (by("test_design")?.status === "stale") return { text: "Out of date", srText: "out of date" };
+    if (openQuestions > 0) return { text: `${openQuestions} ?`, srText: `${openQuestions} open question${openQuestions === 1 ? "" : "s"}` };
+  }
+  if (slug === "traceability" && (by("traceability")?.status === "stale" || by("test_design")?.status === "stale")) return { text: "Out of date", srText: "out of date" };
   if (slug === "assistant" && pendingProposals > 0)
     return { text: String(pendingProposals), srText: `${pendingProposals} proposal${pendingProposals === 1 ? "" : "s"} to review` };
   return null;

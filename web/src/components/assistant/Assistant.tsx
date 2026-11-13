@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, ChevronRight, Circle, Square, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import type { ArtefactRef, AssistantCapabilities, AssistantIntent, AssistantMessage, Feature, RequirementSummary, StageKey } from "@/lib/contract";
+import type { ArtefactRef, AssistantCapabilities, AssistantIntent, AssistantMessage, Feature, RequirementSummary, StageKey, TestCaseSummary } from "@/lib/contract";
 import { Button, Callout, Checkbox, Disclosure, InlineError, SelectField, Skeleton, TextArea } from "@/components/ui";
 import type { AiMode } from "@/components/domain/AiStatus";
 import { AnswerCard } from "./AnswerCard";
@@ -42,22 +42,26 @@ type TaskDef = {
   group: "no_ai" | "ai";
 };
 
-/** Task list (design §11.2, with the PM's change: risk reassessment and negative criteria work without AI). */
+/** Task list (design P2 §11.2 and P3 §16.1: test-design tasks; risk reassessment and negative criteria work without AI). */
 export const TASKS: TaskDef[] = [
-  { id: "coverage", label: "Review coverage", hint: "Features without requirements, criteria gaps, unmitigated risks", intent: "coverage_summary", group: "no_ai" },
+  { id: "coverage", label: "Review test coverage", hint: "Uncovered requirements, untested high risks, cases without requirements", intent: "coverage_summary", group: "no_ai" },
   { id: "attention", label: "What needs my attention?", intent: "needs_attention", group: "no_ai" },
   { id: "status", label: "Summarise project status", intent: "workflow_status", group: "no_ai" },
+  { id: "explain_case", label: "Explain a test case", hint: "Why it exists, its technique, values and links", intent: "explain_test_case", group: "no_ai" },
+  { id: "neg_cases", label: "Generate more negative test cases", intent: "propose_negative_cases", group: "no_ai" },
+  { id: "regression", label: "Generate regression scenarios", hint: "Suggests changes to the Regression suite", intent: "propose_regression_suite", group: "no_ai" },
+  { id: "regen_cases", label: "Regenerate test cases", intent: "propose_regenerate", group: "no_ai" },
   { id: "plan", label: "Create a new test plan", hint: "from the approved strategy", intent: "propose_regenerate", group: "no_ai" },
   { id: "risk", label: "Reassess application risk", intent: "propose_risk_reassessment", group: "no_ai" },
   { id: "negative", label: "Add negative criteria", hint: "Rule-based negative acceptance criteria", intent: "propose_negative_criteria", group: "no_ai" },
+  { id: "update_cases", label: "Update test cases", intent: "propose_test_case_update", group: "ai" },
+  { id: "missing_cases", label: "Suggest missing test cases", intent: "propose_missing_test_cases", group: "ai" },
   { id: "update", label: "Update requirements", intent: "propose_requirement_update", group: "ai" },
   { id: "missing", label: "Suggest missing requirements", intent: "propose_missing_requirements", group: "ai" },
   { id: "ask", label: "Ask anything about this project", intent: null, group: "ai" },
 ];
 
 export const LATER_TASKS_FALLBACK: { label: string; available_from_phase: number; needs: string }[] = [
-  { label: "Generate more negative test cases", available_from_phase: 3, needs: "test cases" },
-  { label: "Generate regression scenarios", available_from_phase: 3, needs: "test cases" },
   { label: "Explain a failed test", available_from_phase: 4, needs: "test runs" },
   { label: "Improve existing test scripts", available_from_phase: 4, needs: "test runs" },
   { label: "Analyse a defect", available_from_phase: 4, needs: "defects" },
@@ -69,16 +73,25 @@ type TaskData = {
   strategyVersion: number | null;
   g4Approved: boolean;
   context: ArtefactRef | null;
+  /** Phase 3: active test cases of the current design run, and whether design ran / G5 is approved. */
+  cases?: TestCaseSummary[];
+  designed?: boolean;
+  g5Approved?: boolean;
 };
 
 function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; data: TaskData; onRun: (i: SendInput) => void; busy: boolean; aiOn: boolean; onAsk: () => void }) {
   const first = useRef<HTMLElement | null>(null);
   const [scope, setScope] = useState("all");
   const [feature, setFeature] = useState("");
-  const [status, setStatus] = useState("draft");
   const [reason, setReason] = useState("");
   const [keep, setKeep] = useState(true);
   const ctxReq = data.context?.type === "requirement" ? data.context.key : "";
+  const ctxCase = data.context?.type === "test_case" ? data.context.key : "";
+  const [caseKey, setCaseKey] = useState(ctxCase);
+  const [caseKeys, setCaseKeys] = useState<string[]>(ctxCase ? [ctxCase] : []);
+  const [target, setTarget] = useState(ctxReq ? `req:${ctxReq}` : "");
+  const [regScope, setRegScope] = useState<"high_risk" | "changed_since_g5" | "all">("high_risk");
+  const [guidance, setGuidance] = useState("");
   const [req, setReq] = useState(ctxReq);
   const [reqs, setReqs] = useState<string[]>(ctxReq ? [ctxReq] : []);
   const [feats, setFeats] = useState<string[]>([]);
@@ -97,6 +110,9 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
     </Button>
   );
   const reqOptions = data.requirements.filter((r) => r.status !== "rejected");
+  const approvedReqs = data.requirements.filter((r) => r.status === "approved");
+  const cases = (data.cases ?? []).filter((c) => c.status !== "rejected" && c.status !== "deprecated");
+  const noDesign = !data.designed && <p className="text-small text-fg-muted">Available after test cases are designed.</p>;
   switch (task.id) {
     case "coverage":
       return (
@@ -109,35 +125,186 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
             options={[
               { value: "all", label: "All features" },
               { value: "feature", label: "A feature" },
-              { value: "status", label: "A requirement status" },
+              { value: "requirement", label: "A requirement" },
             ]}
           />
           {scope === "feature" && (
             <SelectField label="Feature" value={feature} onChange={(e) => setFeature(e.target.value)} placeholder="Choose a feature" options={data.features.map((f) => ({ value: f.key, label: f.name }))} />
           )}
-          {scope === "status" && (
-            <SelectField
-              label="Status"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              options={[
-                { value: "draft", label: "Draft" },
-                { value: "needs_info", label: "Needs info" },
-                { value: "approved", label: "Approved" },
-              ]}
-            />
+          {scope === "requirement" && (
+            <SelectField label="Requirement" value={req} onChange={(e) => setReq(e.target.value)} placeholder="Choose a requirement" options={reqOptions.map((r) => ({ value: r.key, label: `${r.key} ${r.title}` }))} />
           )}
-          {runBtn("Review coverage", () =>
-            run(
-              "coverage_summary",
-              scope === "feature" ? { scope, feature_key: feature } : scope === "status" ? { scope, status } : { scope },
-              `Review coverage · Scope: ${scope === "feature" ? (data.features.find((f) => f.key === feature)?.name ?? "a feature") : scope === "status" ? `requirements in ${status.replace("_", " ")}` : "All features"}`,
-            ),
-          scope === "feature" && !feature)}
+          {runBtn(
+            "Review test coverage",
+            () =>
+              run(
+                "coverage_summary",
+                scope === "feature" ? { scope, feature_key: feature } : scope === "requirement" ? { scope, requirement_key: req } : { scope },
+                `Review test coverage · Scope: ${scope === "feature" ? (data.features.find((f) => f.key === feature)?.name ?? "a feature") : scope === "requirement" ? req : "All features"}`,
+              ),
+            (scope === "feature" && !feature) || (scope === "requirement" && !req),
+          )}
         </div>
       );
     case "attention":
       return runBtn("Check now", () => run("needs_attention", {}, "What needs my attention?"));
+    case "explain_case":
+      return (
+        <div className="space-y-2">
+          <SelectField
+            id={`task-${task.id}-first`}
+            label="Test case"
+            value={caseKey}
+            onChange={(e) => setCaseKey(e.target.value)}
+            placeholder={cases.length ? "Choose a test case" : "No test cases yet"}
+            options={cases.map((c) => ({ value: c.key, label: `${c.key} ${c.title}` }))}
+          />
+          {noDesign}
+          {runBtn("Explain", () => run("explain_test_case", { key: caseKey }, `Explain ${caseKey}`), !caseKey)}
+        </div>
+      );
+    case "neg_cases":
+      return (
+        <div className="space-y-2">
+          <SelectField
+            id={`task-${task.id}-first`}
+            label="Requirement or feature"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            placeholder="Choose a requirement or feature"
+            options={[
+              ...approvedReqs.map((r) => ({ value: `req:${r.key}`, label: `Requirement · ${r.key} ${r.title}` })),
+              ...data.features.map((f) => ({ value: `feat:${f.key}`, label: `Feature · ${f.name}` })),
+            ]}
+          />
+          {noDesign}
+          {runBtn(
+            "Propose test cases",
+            () => {
+              const kind = target.slice(0, target.indexOf(":"));
+              const key = target.slice(target.indexOf(":") + 1);
+              const label = kind === "req" ? key : (data.features.find((f) => f.key === key)?.name ?? key);
+              run("propose_negative_cases", kind === "req" ? { requirement_key: key } : { feature_key: key }, `Generate more negative test cases for ${label}`);
+            },
+            !target || !data.designed,
+          )}
+        </div>
+      );
+    case "regression":
+      return (
+        <div className="space-y-2">
+          <fieldset>
+            <legend className="mb-1 text-body font-medium text-fg-strong">Scope</legend>
+            <div className="space-y-1">
+              {(
+                [
+                  ["high_risk", "High-risk cases", false],
+                  ["changed_since_g5", "Changed since Gate 5 approval", !data.g5Approved],
+                  ["all", "All features", false],
+                ] as const
+              ).map(([v, label, disabled], i) => (
+                <label key={v} className={`flex min-h-6 items-start gap-2 text-body ${disabled ? "text-fg-muted" : "text-fg"}`}>
+                  <input
+                    id={i === 0 ? `task-${task.id}-first` : undefined}
+                    type="radio"
+                    name="regression-scope"
+                    className="mt-1 h-4 w-4"
+                    checked={regScope === v}
+                    disabled={disabled}
+                    aria-describedby={disabled ? "regression-g5-hint" : undefined}
+                    onChange={() => setRegScope(v)}
+                  />
+                  <span>
+                    {label}
+                    {disabled && (
+                      <span id="regression-g5-hint" className="block text-small">
+                        Gate 5 hasn’t been approved yet
+                      </span>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {noDesign}
+          {runBtn(
+            "Propose suite changes",
+            () =>
+              run(
+                "propose_regression_suite",
+                { scope: regScope },
+                `Generate regression scenarios · ${regScope === "high_risk" ? "High-risk cases" : regScope === "changed_since_g5" ? "Changed since Gate 5 approval" : "All features"}`,
+              ),
+            !data.designed,
+          )}
+        </div>
+      );
+    case "regen_cases":
+      return (
+        <div className="space-y-2">
+          <TextArea id={`task-${task.id}-first`} label="Guidance (optional)" rows={2} maxLength={500} value={guidance} onChange={(e) => setGuidance(e.target.value)} hint="For example: focus on the contact form." />
+          {!data.g4Approved && <p className="text-small text-fg-muted">Available after Gate 4 is approved.</p>}
+          {runBtn("Regenerate test cases", () => run("propose_regenerate", { stage: "test_design", guidance: guidance.trim() || undefined }, `Regenerate test cases${guidance.trim() ? ` · ${guidance.trim()}` : ""}`), !data.g4Approved)}
+        </div>
+      );
+    case "update_cases":
+      return (
+        <div className="space-y-2">
+          <fieldset>
+            <legend className="mb-1 text-body font-medium text-fg-strong">Test cases (1–20)</legend>
+            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md p-1 ring-1 ring-inset ring-line">
+              {cases.length === 0 && <p className="text-small text-fg-muted">No test cases yet.</p>}
+              {cases.map((c, i) => (
+                <label key={c.key} className="flex min-h-6 items-center gap-2 text-small text-fg">
+                  <input
+                    id={i === 0 ? `task-${task.id}-first` : undefined}
+                    type="checkbox"
+                    className="h-4 w-4 accent-accent"
+                    checked={caseKeys.includes(c.key)}
+                    onChange={(e) => setCaseKeys(e.target.checked ? [...caseKeys, c.key].slice(0, 20) : caseKeys.filter((x) => x !== c.key))}
+                  />
+                  <span className="font-mono">{c.key}</span> {c.title}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <TextArea label="What should change" required rows={3} maxLength={1000} value={instruction} onChange={(e) => setInstruction(e.target.value)} error={error} />
+          {runBtn("Propose changes", () => {
+            if (!caseKeys.length) return setError("Choose at least one test case.");
+            if (!instruction.trim()) return setError("Describe what should change.");
+            setError(null);
+            run("propose_test_case_update", { test_case_keys: caseKeys, instruction: instruction.trim() }, instruction.trim());
+          })}
+        </div>
+      );
+    case "missing_cases":
+      return (
+        <div className="space-y-2">
+          <fieldset>
+            <legend className="mb-1 text-body font-medium text-fg-strong">Requirements (1–10)</legend>
+            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md p-1 ring-1 ring-inset ring-line">
+              {approvedReqs.map((r, i) => (
+                <label key={r.key} className="flex min-h-6 items-center gap-2 text-small text-fg">
+                  <input
+                    id={i === 0 ? `task-${task.id}-first` : undefined}
+                    type="checkbox"
+                    className="h-4 w-4 accent-accent"
+                    checked={reqs.includes(r.key)}
+                    onChange={(e) => setReqs(e.target.checked ? [...reqs, r.key].slice(0, 10) : reqs.filter((x) => x !== r.key))}
+                  />
+                  <span className="font-mono">{r.key}</span> {r.title}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <TextArea label="Focus (optional)" rows={2} maxLength={500} value={instruction} onChange={(e) => setInstruction(e.target.value)} />
+          {runBtn(
+            "Suggest test cases",
+            () => run("propose_missing_test_cases", { requirement_keys: reqs, focus: instruction.trim() || undefined }, `Suggest missing test cases for ${reqs.join(", ")}`),
+            reqs.length === 0 || !data.designed,
+          )}
+        </div>
+      );
     case "status":
       return runBtn("Summarise", () => run("workflow_status", {}, "Summarise project status"));
     case "plan":
@@ -265,7 +432,10 @@ export function AssistantTaskList({
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const later = caps?.later_phase_tasks?.length ? caps.later_phase_tasks : LATER_TASKS_FALLBACK;
-  const available = (t: TaskDef) => !t.intent || !caps || caps.intents.length === 0 || caps.intents.some((i) => i.intent === t.intent && i.available !== false);
+  // An AI task that isn't available (AI off, or not built yet) still shows under "Needs AI", where its form says
+  // what it needs; other unavailable intents are hidden.
+  const available = (t: TaskDef) =>
+    !t.intent || !caps || caps.intents.length === 0 || caps.intents.some((i) => i.intent === t.intent && (i.available !== false || (t.group === "ai" && (i.needs_ai ?? i.requires_ai))));
   const proposalTask = (t: TaskDef) => t.intent?.startsWith("propose_");
   const group = (g: TaskDef["group"], title: string) => (
     <section aria-labelledby={`tasks-${g}`}>
@@ -291,6 +461,8 @@ export function AssistantTaskList({
               <div className="ml-6 mt-1 rounded-md border border-line bg-elevated p-3">
                 {proposalTask(t) && !canWrite ? (
                   <p className="text-small text-fg-muted">Viewers can read answers but can’t create proposals.</p>
+                ) : aiOn && caps?.intents.some((i) => i.intent === t.intent && i.available === false) ? (
+                  <p className="text-small text-fg-muted">This task isn’t available yet.</p>
                 ) : (
                   <TaskForm task={t} data={data} onRun={onRun} busy={busy} aiOn={aiOn} onAsk={onAsk} />
                 )}

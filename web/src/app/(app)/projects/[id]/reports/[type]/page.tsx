@@ -7,16 +7,18 @@ import { api, ApiError, downloadFile } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { ReportDetail, ReportSummary } from "@/lib/contract";
 import { fmtDateTime } from "@/lib/format";
-import { draftBand, phase2ReportFileName, reportBySlug } from "@/lib/reports";
+import { approvedBand, downloadFailedText, downloadFormats, draftBand, isPhase3Report, phase2ReportFileName, preparingText, reportBySlug, type DownloadFormat } from "@/lib/reports";
 import { hostOf } from "@/lib/url";
 import { Button, Callout, EmptyState, ErrorState, LinkButton, LoadingBlock, SelectField, StatusPill, useToast } from "@/components/ui";
 import { Phase2ReportBody } from "@/components/report/Phase2Report";
+import { Phase3ReportBody } from "@/components/report/Phase3Report";
+import { useAuth } from "@/lib/auth";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { gateApproved, requirementsStages } from "@/components/requirements/hooks";
 
-type Format = "pdf" | "html";
+type Format = DownloadFormat;
 
-/** Requirements Specification, Test Strategy and Test Plan reports (design P2 §10.2–10.3). */
+/** Requirements Specification, Test Strategy, Test Plan (design P2 §10.2–10.3), Test Case Specification and RTM (P3 §15.2). */
 function Report() {
   const p = useProject();
   const toast = useToast();
@@ -35,6 +37,7 @@ function Report() {
   const [creating, setCreating] = useState(false);
   const [announce, setAnnounce] = useState("");
   const stages = requirementsStages(p.workflow);
+  const { role } = useAuth();
 
   useEffect(() => {
     if (def) document.title = `${def.name} · ${p.project?.name ?? "Project"} · QA Analyst`;
@@ -44,14 +47,14 @@ function Report() {
   async function download(format: Format) {
     if (!chosen || !def) return;
     setDownloading(format);
-    setAnnounce(format === "pdf" ? "Preparing PDF…" : "Preparing HTML…");
+    setAnnounce(preparingText(format));
     try {
       await downloadFile(`/reports/${chosen.id}/download?format=${format}`, phase2ReportFileName(hostOf(p.project?.primary_url) || "site", def.type, chosen.version, new Date(), format));
       setAnnounce("Report downloaded.");
       toast("Report downloaded.");
     } catch (err) {
       setAnnounce("");
-      toast(err instanceof ApiError && err.status === 409 ? "The report is still being prepared. Try again in a moment." : `Couldn’t create the ${format === "pdf" ? "PDF" : "HTML file"}. Try again.`, "error");
+      toast(err instanceof ApiError && err.status === 409 ? "The report is still being prepared. Try again in a moment." : downloadFailedText(format), "error");
     } finally {
       setDownloading(null);
     }
@@ -83,7 +86,7 @@ function Report() {
           value={String(chosen?.version ?? "")}
           onChange={(e) => router.replace(`/projects/${p.id}/reports/${def.slug}?version=${e.target.value}`)}
           options={list.map((r) => ({ value: String(r.version), label: `Version ${r.version} · ${fmtDateTime(r.created_at)} · ${r.approval?.status === "approved" ? "Approved" : "Draft"}` }))}
-          wrapClassName="w-80"
+          wrapClassName="w-full sm:w-80"
         />
       )}
     </div>
@@ -96,7 +99,11 @@ function Report() {
         ? "The Test Strategy report is available once the strategy is written."
         : def.type === "requirements_spec" && !stages.req?.current_version
           ? "The Requirements Specification is available once requirements are generated."
-          : null;
+          : isPhase3Report(def.type) && !stages.design?.current_version
+            ? def.type === "rtm"
+              ? "The Requirements Traceability Matrix is available after test cases are designed."
+              : "The Test Case Specification is available after test cases are designed."
+            : null;
 
   let body: React.ReactNode;
   if (reports.error && !reports.data) body = <ErrorState error={reports.error} title="Couldn’t load the report." message="Try again." onRetry={() => void reports.mutate()} />;
@@ -106,7 +113,7 @@ function Report() {
       <EmptyState
         title={notAvailable ?? "No version of this report exists yet."}
         action={
-          notAvailable ? undefined : (
+          notAvailable || role === "viewer" ? undefined : (
             <Button onClick={() => void createDraft()} loading={creating}>
               Create draft from current
             </Button>
@@ -120,6 +127,7 @@ function Report() {
   else if (!detail.data) body = <LoadingBlock label="Loading report…" />;
   else {
     const approved = chosen.approval?.status === "approved";
+    const phase3 = isPhase3Report(def.type);
     const planVersion = (detail.data.content as unknown as { strategy_version?: number } | null)?.strategy_version;
     body = (
       <div className="space-y-4">
@@ -128,7 +136,9 @@ function Report() {
         </span>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="flex flex-wrap items-center gap-2 text-body text-fg">
-            {approved ? (
+            {approved && phase3 ? (
+              <StatusPill status="approved" label={approvedBand(chosen.approval?.gate ?? "G5", chosen.approval?.approved_by?.full_name, chosen.approval?.approved_at ? fmtDateTime(chosen.approval.approved_at) : "")} />
+            ) : approved ? (
               <StatusPill status="approved" label={`Approved${chosen.approval?.approved_by?.full_name ? ` by ${chosen.approval.approved_by.full_name}` : ""}${chosen.approval?.approved_at ? ` · ${fmtDateTime(chosen.approval.approved_at)}` : ""}`} />
             ) : (
               <span className="rounded-md bg-warning-bg px-2 py-0.5 text-small font-semibold text-warning-fg ring-1 ring-inset ring-warning-line">{draftBand(def.type, chosen.version, planVersion)}</span>
@@ -142,6 +152,11 @@ function Report() {
             <Button variant="secondary" onClick={() => void download("html")} loading={downloading === "html"}>
               {downloading === "html" ? "Preparing HTML…" : "Download HTML"}
             </Button>
+            {downloadFormats(def.type).includes("csv") && (
+              <Button variant="secondary" onClick={() => void download("csv")} loading={downloading === "csv"}>
+                {downloading === "csv" ? "Preparing CSV…" : "Download CSV"}
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => window.print()} icon={<Printer className="h-4 w-4" aria-hidden />}>
               Print
             </Button>
@@ -151,15 +166,23 @@ function Report() {
           <Callout
             tone="info"
             actions={
-              <Button variant="secondary" onClick={() => void createDraft()} loading={creating}>
-                Create draft from current
-              </Button>
+              role === "viewer" ? undefined : (
+                <Button variant="secondary" onClick={() => void createDraft()} loading={creating}>
+                  Create draft from current
+                </Button>
+              )
             }
           >
-            This report reflects {def.source} version {chosen.stage_run_version ?? chosen.version}. The current version has changed since.
+            {phase3
+              ? `This report reflects design run ${chosen.stage_run_version ?? "?"}. The current run is ${stages.design?.current_version ?? "?"}.`
+              : `This report reflects ${def.source} version ${chosen.stage_run_version ?? chosen.version}. The current version has changed since.`}
           </Callout>
         )}
-        <Phase2ReportBody type={def.type} report={chosen} content={detail.data.content} />
+        {phase3 ? (
+          <Phase3ReportBody type={def.type as "test_case_spec" | "rtm"} report={chosen} content={detail.data.content} projectId={p.id} />
+        ) : (
+          <Phase2ReportBody type={def.type} report={chosen} content={detail.data.content} />
+        )}
       </div>
     );
   }

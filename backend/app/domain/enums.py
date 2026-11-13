@@ -355,3 +355,78 @@ class SignInResult(StrEnum):
 class AuthContext(StrEnum):
     anonymous = "anonymous"
     authenticated = "authenticated"
+
+
+# ---------------------------------------------------------------- Phase 3: test design and traceability
+
+
+class Technique(StrEnum):
+    equivalence_partitioning = "equivalence_partitioning"
+    boundary_value_analysis = "boundary_value_analysis"
+    decision_table = "decision_table"
+    state_transition = "state_transition"
+    use_case = "use_case"
+    error_guessing = "error_guessing"
+    exploratory = "exploratory"
+    # Fixed quality checklists for non-functional cases (labels, overflow, console errors; design P3 open question 4).
+    checklist = "checklist"
+
+
+class CaseStatus(StrEnum):
+    draft = "draft"
+    approved = "approved"
+    rejected = "rejected"
+    deprecated = "deprecated"
+
+
+class Priority(StrEnum):
+    critical = "critical"
+    high = "high"
+    medium = "medium"
+    low = "low"
+
+
+class ExecutionStatus(StrEnum):
+    not_run = "not_run"
+    passed = "passed"
+    failed = "failed"
+    blocked = "blocked"
+    error = "error"
+
+
+class CaseSource(StrEnum):
+    design = "design"
+    user = "user"
+    assistant = "assistant"
+
+
+class ExpectedResultStatus(StrEnum):
+    defined = "defined"
+    open_question = "open_question"
+
+
+class AutomationSuitability(StrEnum):
+    suitable = "suitable"
+    partial = "partial"
+    manual_only = "manual_only"
+
+
+class TestDataKind(StrEnum):
+    valid = "valid"
+    invalid = "invalid"
+    boundary = "boundary"
+    secret_ref = "secret_ref"  # noqa: S105 - a reference kind, not a password
+
+
+class TestDataValueType(StrEnum):
+    text = "text"
+    email = "email"
+    number = "number"
+    empty = "empty"
+    whitespace = "whitespace"
+    secret_ref = "secret_ref"  # noqa: S105 - a reference kind, not a password
+
+
+class TestDataStatus(StrEnum):
+    active = "active"
+    retired = "retired"

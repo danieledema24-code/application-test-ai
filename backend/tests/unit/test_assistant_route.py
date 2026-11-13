@@ -37,5 +37,7 @@ def test_ai_only_intents_are_marked() -> None:
         "propose_requirement_update",
         "propose_missing_requirements",
         "propose_risk_update",
+        "propose_test_case_update",  # P3-06, AI-only
+        "propose_missing_test_cases",  # P3-06, AI-only
     }
     assert all(s.requires_role == "member" for s in INTENTS.values() if s.creates_proposal)

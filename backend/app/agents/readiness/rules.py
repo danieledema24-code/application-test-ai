@@ -36,6 +36,12 @@ class Facts:
     credentials_result: str | None = None
     risks: int | None = None  # None = no strategy yet
     reports_ready: list[str] = field(default_factory=list)
+    # Phase 3 (None = no test design yet). requirement id -> field label -> "data" | "open_question" | "missing"
+    test_data: dict[str, dict[str, str]] | None = None
+    # requirement id -> (approved AC keys, approved AC keys covered by a draft/approved case)
+    ac_coverage: dict[str, tuple[list[str], list[str]]] | None = None
+    # {"stale": bool, "without_case": [REQ keys], "orphans": [TC keys]}
+    traceability: dict[str, Any] | None = None
 
 
 DOR, DOD = ReadinessKind.dor, ReadinessKind.dod
@@ -69,8 +75,6 @@ def templates(*, has_forms: bool, auth_boundary: bool) -> list[Template]:
 
 
 LATER_PHASE_DETAIL = {
-    "dod.ac_covered": "No test cases exist yet (Phase 3)",
-    "dod.traceability_updated": "No traceability matrix exists yet (Phase 3)",
     "dod.tests_executed": "No test execution exists yet (Phase 4)",
     "dod.no_open_high_defects": "No defect tracking exists yet (Phase 4)",
 }
@@ -120,6 +124,8 @@ def evaluate(rule_id: str | None, facts: Facts, *, requirement_id: str | None = 
         forms = [r for r in reqs if r["category"] in FORM_CATEGORIES]
         if not forms:
             return _result("not_applicable", "No form requirement in scope")
+        if facts.test_data is not None:
+            return _test_data(forms, facts.test_data)
         missing = [r["key"] for r in forms if not r["ac_with_values"]]
         return _result(
             "not_met" if missing else "met",
@@ -146,10 +152,71 @@ def evaluate(rule_id: str | None, facts: Facts, *, requirement_id: str | None = 
         if facts.risks is None:
             return _result("unknown", "The test strategy hasn't been generated yet")
         return _result("met" if facts.risks else "not_met", f"{facts.risks} risk(s) in the risk register")
+    if rule_id == "dod.ac_covered":
+        return _ac_covered(reqs, facts, requirement_id is not None)
+    if rule_id == "dod.traceability_updated":
+        tr = facts.traceability
+        if tr is None:
+            return _result("unknown", "Test cases haven't been designed yet")
+        if tr["stale"]:
+            return _result("not_met", "The test design is out of date with the requirements or strategy")
+        problems = []
+        if tr["without_case"]:
+            problems.append(f"Approved requirements without a test case: {', '.join(tr['without_case'][:8])}")
+        if tr["orphans"]:
+            problems.append(f"Test cases without a requirement: {', '.join(tr['orphans'][:8])}")
+        if problems:
+            return _result("not_met", "; ".join(problems))
+        return _result("met", "Every approved requirement traces to a test case and every case to a requirement")
     if rule_id == "dod.report_generated":
         ok = "requirements_spec" in facts.reports_ready
         return _result("met" if ok else "not_met", "Generated" if ok else "Not generated yet")
     return _result("unknown", "No automatic check for this criterion")
+
+
+def _test_data(forms: list[dict[str, Any]], data: dict[str, dict[str, str]]) -> dict[str, Any]:
+    missing: list[str] = []
+    questions: list[str] = []
+    ok: list[str] = []
+    for r in forms:
+        fields = data.get(r["id"], {})
+        if not fields:
+            missing.append(r["key"])
+            continue
+        for label, state in fields.items():
+            if state == "open_question":
+                questions.append(f"{label} ({r['key']} has an open question)")
+            elif state == "missing":
+                missing.append(f"{label} ({r['key']})")
+            elif label not in ok:
+                ok.append(label)
+    if not missing and not questions:
+        return _result("met", f"Test data is identified for {', '.join(ok[:8]) or 'every form field'}")
+    parts = []
+    if ok:
+        parts.append(f"Identified for {', '.join(ok[:8])}")
+    if questions:
+        parts.append(f"Open question: {', '.join(questions[:8])}")
+    if missing:
+        parts.append(f"No test data yet for {', '.join(missing[:8])}")
+    return _result("not_met", "; ".join(parts))
+
+
+def _ac_covered(reqs: list[dict[str, Any]], facts: Facts, single: bool) -> dict[str, Any]:
+    if facts.ac_coverage is None:
+        return _result("unknown", "Test cases haven't been designed yet")
+    scope = reqs if single else [r for r in reqs if r["status"] == "approved"]
+    total: list[str] = []
+    uncovered: list[str] = []
+    for r in scope:
+        approved, covered = facts.ac_coverage.get(r["id"], ([], []))
+        total += approved
+        uncovered += [k for k in approved if k not in covered]
+    if not total:
+        return _result("unknown", "No approved acceptance criteria to cover")
+    if uncovered:
+        return _result("not_met", f"Not covered by a test case: {', '.join(uncovered[:8])}")
+    return _result("met", f"All {len(total)} approved acceptance criteria are covered by a test case")
 
 
 def stamp(result: dict[str, Any] | None, key: str) -> dict[str, Any] | None:

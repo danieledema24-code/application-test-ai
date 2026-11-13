@@ -195,7 +195,8 @@ test("S2 requirements: every row labelled, provenance rules hold, evidence resol
   for (const h of ["Description", "Evidence", "Assumptions", "Related features", "Linked test cases"]) await expect(page.getByRole("heading", { name: h })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Acceptance criteria \(\d+\)/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Revision history/ })).toBeVisible();
-  await expect(page.getByText(/None yet\. Test cases are written in Phase 3/)).toBeVisible();
+  // Phase 3 replaced the Phase 2 placeholder with the linked-cases states (design P3 §9).
+  await expect(page.getByRole("heading", { name: /Linked test cases/ })).toBeVisible();
   for (const t of ["Given", "When", "Then"]) await expect(page.getByRole("term").filter({ hasText: t }).first()).toBeVisible();
   await a11y(page, "requirement detail");
   const ev = page.getByRole("button", { name: /evidence for REQ-0004/ }).first();
@@ -723,7 +724,7 @@ test("S10 reports: each page renders; PDF and HTML download; approved vs draft s
   expect(draft.content.summary_generated_by).toBe("rules");
   // Download every latest Phase 2 report as PDF and HTML through the list's Download menu.
   await page.goto(`${base}/reports`);
-  const table = page.getByRole("table", { name: "Phase 2 reports" });
+  const table = page.getByRole("table", { name: "Phase 2 and 3 reports" });
   await expect(table).toBeVisible();
   await a11y(page, "reports list");
   await shot(page, "21-reports-list");

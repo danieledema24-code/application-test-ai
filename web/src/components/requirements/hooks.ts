@@ -65,7 +65,9 @@ export function requirementsStages(wf: Workflow | undefined) {
   const g2 = wf?.stages.find((s) => s.gate?.key === "G2");
   const strategy = by("test_strategy");
   const g4 = wf?.stages.find((s) => s.gate?.key === "G4");
-  return { req, dor, g3, g2, strategy, g4, discovery: by("discovery") };
+  const design = by("test_design");
+  const g5 = wf?.stages.find((s) => s.gate?.key === "G5");
+  return { req, dor, g3, g2, strategy, g4, discovery: by("discovery"), design, g5, trace: by("traceability") };
 }
 
 export function isWorking(s: StageState | undefined | null): boolean {
@@ -81,7 +83,7 @@ export function gateApproved(s: StageState | undefined | null): boolean {
  * One-time warning after the first change to approved content (design P2 §6.2): the gate reopens and the
  * downstream stage keeps the last approved version. Remembered per project and gate for the session.
  */
-export function noteGateReopened(projectId: string, gate: "G3" | "G4", wasApproved: boolean, toast: (m: string, k?: "success" | "error" | "info") => void) {
+export function noteGateReopened(projectId: string, gate: "G3" | "G4" | "G5", wasApproved: boolean, toast: (m: string, k?: "success" | "error" | "info") => void) {
   if (!wasApproved || typeof window === "undefined") return;
   const k = `qa:reopen:${projectId}:${gate}`;
   try {
@@ -93,7 +95,9 @@ export function noteGateReopened(projectId: string, gate: "G3" | "G4", wasApprov
   toast(
     gate === "G3"
       ? "Requirements changed since Gate 3 approval. Approve again to pass the changes to the Test Strategy."
-      : "The Test Strategy changed since Gate 4 approval. Approve again to update the Test Plan.",
+      : gate === "G5"
+        ? "Test cases changed since Gate 5 approval. Approve Gate 5 again so the changes become the approved set."
+        : "The Test Strategy changed since Gate 4 approval. Approve again to update the Test Plan.",
     "info",
   );
 }

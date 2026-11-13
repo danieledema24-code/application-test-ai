@@ -11,7 +11,7 @@ import type { GateDecision, ScanDetail, StageRunDetail, StageState } from "@/lib
 import { fmtDateTime } from "@/lib/format";
 import { scanSignIn } from "@/lib/discovery";
 import { gateReview } from "@/lib/lifecycle";
-import { Button, Callout, Card, ConfirmDialog, InlineError, StatusPill, TextArea, useToast } from "@/components/ui";
+import { Button, Callout, Card, ConfirmDialog, Disclosure, InlineError, StatusPill, TextArea, useToast } from "@/components/ui";
 import { GeneratedByLabel } from "./ObservationLabel";
 
 const GATE_NAMES: Record<string, string> = {
@@ -78,6 +78,7 @@ function CheckIcon({ tone }: { tone: Check["tone"] }) {
 
 /** Banner shown at the top of Discovery and in "Needs your attention" while the gate is open. */
 export function GateBanner({ stage, reviewHref }: { stage: StageState; reviewHref: string }) {
+  const { canApprove } = useAuth();
   const review = gateReview(stage);
   if (!review || !stage.gate) return null;
   const name = `Gate ${stage.gate.key.slice(1)} · ${GATE_NAMES[stage.gate.key] ?? "Quality gate"}`;
@@ -85,7 +86,7 @@ export function GateBanner({ stage, reviewHref }: { stage: StageState; reviewHre
   return (
     <Callout
       tone={review === "required" ? "warning" : "info"}
-      title={review === "required" ? `${name} is waiting for your approval` : `${name} is ready for your review (approval recommended)`}
+      title={review === "required" ? `${name} is ${canApprove ? "waiting for your approval" : "waiting for approval by someone who can approve gates"}` : `${name} is ready for your review (approval recommended)`}
       actions={
         <Link href={reviewHref} className="inline-flex h-10 items-center gap-1 rounded-md bg-surface px-4 text-body font-medium text-fg-strong ring-1 ring-inset ring-line-input hover:bg-overlay">
           Review Gate {stage.gate.key.slice(1)} <ArrowRight className="h-4 w-4" aria-hidden />
@@ -133,6 +134,64 @@ function useGateDecisions(projectId: string, stage: StageState) {
   return { run, last };
 }
 
+/** Grouped gate lines (design P3 §13.1): blockers disable approval, advice never does. Each named link is unique. */
+export type GroupedCheckLine = { id: string; text: string; links: { label: string; href: string }[] };
+export type GroupedChecks = { blockers: GroupedCheckLine[]; advice: GroupedCheckLine[]; passed: GroupedCheckLine[] };
+
+function GroupedChecksView({ groups }: { groups: GroupedChecks }) {
+  const line = (l: GroupedCheckLine, tone: "fail" | "warn" | "ok") => (
+    <li key={l.id} className="flex items-start gap-2 text-body text-fg">
+      <span className="mt-0.5">
+        <CheckIcon tone={tone} />
+      </span>
+      <span className="min-w-0 flex-1">
+        {l.text}
+        {l.links.length > 0 && (
+          <span className="ml-2 inline-flex flex-wrap gap-x-3 gap-y-1">
+            {l.links.map((k) => (
+              <Link key={k.label} href={k.href} className="font-medium text-navy-700 underline underline-offset-2 hover:text-navy-900">
+                {k.label}
+              </Link>
+            ))}
+          </span>
+        )}
+      </span>
+    </li>
+  );
+  return (
+    <div className="space-y-4">
+      {groups.blockers.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-body font-semibold uppercase tracking-[0.04em] text-danger-fg">
+            <CircleX className="h-4 w-4" aria-hidden /> Must fix before approval ({groups.blockers.length})
+          </h3>
+          <ul className="mt-2 space-y-2">{groups.blockers.map((l) => line(l, "fail"))}</ul>
+        </div>
+      )}
+      {groups.advice.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-body font-semibold uppercase tracking-[0.04em] text-warning-fg">
+            <AlertTriangle className="h-4 w-4" aria-hidden /> Advice ({groups.advice.length})
+          </h3>
+          <ul className="mt-2 space-y-2">{groups.advice.map((l) => line(l, "warn"))}</ul>
+        </div>
+      )}
+      {groups.passed.length > 0 && (
+        <Disclosure
+          headingLevel={3}
+          label={
+            <span className="flex items-center gap-2 uppercase tracking-[0.04em] text-success-fg">
+              <CircleCheck className="h-4 w-4" aria-hidden /> Passed ({groups.passed.length})
+            </span>
+          }
+        >
+          <ul className="mt-2 space-y-1.5">{groups.passed.map((l) => line(l, "ok"))}</ul>
+        </Disclosure>
+      )}
+    </div>
+  );
+}
+
 export type GateConfirm = { title: string; body: React.ReactNode; confirmLabel: string; cancelLabel: string; onCancel?: () => void };
 
 /**
@@ -160,6 +219,10 @@ export function GateReviewPanel({
   confirmApprove,
   approvalCopy,
   changesSinceApproval,
+  groupedChecks,
+  blockedReason,
+  noPermission,
+  children,
   onDecided,
 }: {
   projectId: string;
@@ -183,7 +246,15 @@ export function GateReviewPanel({
   /** The policy sentence above the comment. Defaults to the required/recommended copy. */
   approvalCopy?: { required: string; recommended: string };
   /** "Changes since approval: {n}" while a reopened gate waits (design §6.2). */
-  changesSinceApproval?: { count: number; compareHref?: string } | null;
+  changesSinceApproval?: { count: number; compareHref?: string; compareLabel?: string; note?: React.ReactNode } | null;
+  /** Phase 3: checks in three groups (blockers, advice, passed) instead of one list. */
+  groupedChecks?: GroupedChecks | null;
+  /** Visible reason approval is blocked (the button stays focusable with aria-disabled). */
+  blockedReason?: string | null;
+  /** Permission copy shown to users without can_approve. Defaults to the G2–G4 sentence. */
+  noPermission?: React.ReactNode;
+  /** Extra sections between the checks and the recommendation (e.g. accepted risks, lint summary). */
+  children?: React.ReactNode;
   onDecided: () => void;
 }) {
   const { canApprove } = useAuth();
@@ -218,6 +289,7 @@ export function GateReviewPanel({
       setError("You don’t have permission to approve quality gates. Ask an owner or admin.");
       return;
     }
+    if (decision === "approve" && blockedReason) return;
     if (decision === "request_changes" && !comment.trim()) {
       setCommentError("Describe what needs to change.");
       commentRef.current?.focus();
@@ -257,7 +329,10 @@ export function GateReviewPanel({
 
   // A hard blocker means the gate can't be approved as it is: a blocking precondition from the server, or a failing
   // check on G3/G4 (on G2 a failing check, e.g. a failed sign-in, is advice; the user may still approve).
-  const hardBlocked = (gate.preconditions ?? []).some((x) => x.blocking && !x.met) || (gate.key !== "G2" && checks.some((c) => c.tone === "fail"));
+  const hardBlocked =
+    !!blockedReason || !!groupedChecks?.blockers.length || (gate.preconditions ?? []).some((x) => x.blocking && !x.met) || (gate.key !== "G2" && checks.some((c) => c.tone === "fail"));
+  const approveBlocked = !canApprove || !!blockedReason;
+  const reasonIds = [!canApprove ? `gate-${gate.key}-no-permission` : null, blockedReason && canApprove ? `gate-${gate.key}-blocked` : null].filter(Boolean).join(" ") || undefined;
   const changes = changesSinceApproval ?? (gate.changes_since_approval ? { count: gate.changes_since_approval } : null);
   const seen = new Set(checks.map((c) => key(c.text)));
   const reasons = unseen(assessmentReasons, seen);
@@ -274,7 +349,7 @@ export function GateReviewPanel({
           {title ?? gateName(gate.key)}
         </h2>
         {review === "required" ? (
-          <StatusPill status="awaiting_approval" label="Waiting for your approval" />
+          <StatusPill status="awaiting_approval" label={canApprove ? "Waiting for your approval" : "Waiting for approval by someone who can approve gates"} />
         ) : review === "recommended" ? (
           <StatusPill status="awaiting_approval" label="Ready for review" />
         ) : approved ? (
@@ -293,10 +368,11 @@ export function GateReviewPanel({
               <>
                 {" · "}
                 <Link href={changes.compareHref} className="font-medium text-navy-700 underline underline-offset-2">
-                  Compare with approved version
+                  {changes.compareLabel ?? "Compare with approved version"}
                 </Link>
               </>
             )}
+            {changes.note && <span className="mt-1 block text-small text-fg-muted">{changes.note}</span>}
           </p>
         )}
         {assessment && (
@@ -331,6 +407,8 @@ export function GateReviewPanel({
             ))}
           </ul>
         )}
+        {groupedChecks && <GroupedChecksView groups={groupedChecks} />}
+        {children}
         {recommendation && (
           <div className="rounded-md bg-elevated px-3 py-2">
             <p className="flex flex-wrap items-center gap-2 text-body text-fg-strong">
@@ -345,7 +423,7 @@ export function GateReviewPanel({
                 ))}
               </ul>
             )}
-            {waiting && !hardBlocked && <p className="mt-1 pl-6 text-small text-fg-muted">The recommendation is advisory. You can approve regardless.</p>}
+            {waiting && !hardBlocked && !groupedChecks && <p className="mt-1 pl-6 text-small text-fg-muted">The recommendation is advisory. You can approve regardless.</p>}
           </div>
         )}
 
@@ -383,7 +461,7 @@ export function GateReviewPanel({
             <p className="text-body text-fg">{review === "required" ? copy.required : copy.recommended}</p>
             {!canApprove && (
               <div id={`gate-${gate.key}-no-permission`}>
-                <Callout tone="neutral">You can review this gate, but approving needs gate-approval permission. Ask an owner or admin.</Callout>
+                <Callout tone="neutral">{noPermission ?? "You can review this gate, but approving needs gate-approval permission. Ask an owner or admin."}</Callout>
               </div>
             )}
             <TextArea
@@ -397,19 +475,26 @@ export function GateReviewPanel({
             />
             <InlineError error={error} />
             <div className="flex flex-wrap items-center gap-3">
+              {/* aria-disabled keeps the buttons focusable so the visible reason stays reachable (P3 §19). */}
               <Button
-                onClick={() => void decide("approve")}
+                onClick={() => {
+                  if (!approveBlocked) void decide("approve");
+                }}
                 loading={busy === "approve"}
-                disabled={!canApprove || (!!busy && busy !== "approve")}
-                aria-describedby={canApprove ? undefined : `gate-${gate.key}-no-permission`}
+                disabled={!!busy && busy !== "approve"}
+                aria-disabled={approveBlocked || undefined}
+                aria-describedby={reasonIds}
               >
                 {approveLabel}
               </Button>
               <Button
                 variant="secondary"
-                onClick={() => void decide("request_changes")}
+                onClick={() => {
+                  if (canApprove) void decide("request_changes");
+                }}
                 loading={busy === "request_changes"}
-                disabled={!canApprove || (!!busy && busy !== "request_changes")}
+                disabled={!!busy && busy !== "request_changes"}
+                aria-disabled={!canApprove || undefined}
                 aria-describedby={canApprove ? undefined : `gate-${gate.key}-no-permission`}
               >
                 Request changes
@@ -421,6 +506,11 @@ export function GateReviewPanel({
                 </Link>
               )}
             </div>
+            {blockedReason && canApprove && (
+              <p id={`gate-${gate.key}-blocked`} className="text-body text-fg">
+                {blockedReason}
+              </p>
+            )}
           </div>
         )}
       </div>

@@ -88,7 +88,55 @@ async def load_facts(s: AsyncSession, project_id: uuid.UUID) -> Facts:
             )
         ).scalars()
     ]
+    await _phase3_facts(s, project_id, reqs, acs, facts)
     return facts
+
+
+async def _phase3_facts(
+    s: AsyncSession, project_id: uuid.UUID, reqs: list[Any], acs: list[AcceptanceCriterion], facts: Facts
+) -> None:
+    """Test data per form field, AC coverage and traceability, from the current test design (P3-03, P3-04)."""
+    from app.domain.enums import CaseStatus, StageStatus, TestDataStatus
+    from app.services import testdesign as tds
+    from app.services import traceability as trace
+
+    run = await tds.current_run(s, project_id)
+    if run is None:
+        return
+    cases = [c for c in await tds.cases_of(s, run.id) if c.status in tds.ACTIVE_CASE]
+    data = {str(d.lineage_id): d for d in await tds.data_of(s, run.id) if d.status == TestDataStatus.active}
+    facts.test_data = {}
+    for r in reqs:
+        mine = [c for c in cases if str(r.lineage_id) in {str(x) for x in c.requirement_lineage_ids or []}]
+        fields: dict[str, str] = {}
+        for c in mine:
+            for lin in c.data_lineage_ids or []:
+                d = data.get(str(lin))
+                if d is not None:
+                    fields.setdefault(d.field_label, "data")
+        for c in mine:
+            label = (c.open_question_ref or {}).get("field") if c.status != CaseStatus.rejected else None
+            if c.expected_result_status.value == "open_question" and label:
+                fields[str(label)] = "open_question"
+        facts.test_data[str(r.id)] = fields
+    covered = {str(x) for c in cases for x in c.ac_lineage_ids or []}
+    facts.ac_coverage = {}
+    for r in reqs:
+        approved = sorted(
+            (a for a in acs if a.requirement_id == r.id and a.status == ItemStatus.approved), key=lambda a: a.key
+        )
+        facts.ac_coverage[str(r.id)] = (
+            [a.key for a in approved],
+            [a.key for a in approved if str(a.lineage_id) in covered],
+        )
+    t = await trace.load(s, project_id)
+    g = await trace.gaps(s, t)
+    st = await tds.design_stage(s, project_id)
+    facts.traceability = {
+        "stale": st.status == StageStatus.stale,
+        "without_case": [str(x["key"]) for x in g["requirements_without_test_cases"]["none"]],
+        "orphans": [str(x["key"]) for x in g["test_cases_without_requirements"]],
+    }
 
 
 def evaluate_row(row: ReadinessCriterion, facts: Facts, *, requirement_id: str | None = None) -> dict[str, Any] | None:

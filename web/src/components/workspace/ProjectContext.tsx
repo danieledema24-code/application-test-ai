@@ -64,7 +64,8 @@ function statusAnnouncement(e: AgentEvent): string | null {
       awaiting_approval: "is waiting for your approval",
       approved: "approved",
     };
-    return words[to] ? `${name} ${words[to]}` : null;
+    // Sentence case: "Test design is waiting for your approval", never "test design is…".
+    return words[to] ? `${name.charAt(0).toUpperCase()}${name.slice(1)} ${words[to]}` : null;
   }
   if (e.type === "gate.awaiting_approval") return e.message || "A quality gate is waiting for your approval";
   if (e.type === "task.failed") return e.message;

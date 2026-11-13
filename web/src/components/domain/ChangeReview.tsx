@@ -32,7 +32,27 @@ function itemTitle(i: ChangeReviewItem): string {
   return valueText(src.title ?? src.text ?? src.name ?? "");
 }
 
-function Row({ item, value, onChange, disabledReason }: { item: ChangeReviewItem; value: ReviewAction | null; onChange: (a: ReviewAction) => void; disabledReason?: string | null }) {
+const TYPE_FILTERS: { value: string; label: string; types: ChangeReviewItem["type"][] }[] = [
+  { value: "test_case", label: "Test cases", types: ["test_case"] },
+  { value: "test_condition", label: "Conditions", types: ["test_condition"] },
+  { value: "test_data", label: "Test data", types: ["test_data"] },
+];
+
+function Row({
+  item,
+  value,
+  onChange,
+  disabledReason,
+  viewer,
+  itemHref,
+}: {
+  item: ChangeReviewItem;
+  value: ReviewAction | null;
+  onChange: (a: ReviewAction) => void;
+  disabledReason?: string | null;
+  viewer?: boolean;
+  itemHref?: (i: ChangeReviewItem) => string | null;
+}) {
   const src = (item.proposed ?? item.current ?? {}) as Record<string, unknown>;
   const label = typeof src.classification === "string" ? src.classification : null;
   const conf = typeof src.confidence === "number" ? src.confidence : null;
@@ -63,8 +83,19 @@ function Row({ item, value, onChange, disabledReason }: { item: ChangeReviewItem
             <DiffView changes={item.field_diff} allowSideBySide={false} />
           )}
           {item.note && <p className="text-small text-fg">{item.note}</p>}
+          {!item.note && item.change === "no_longer_found" && item.type === "test_case" && status === "approved" && (
+            <p className="text-small text-fg">The requirement or constraint behind this case changed; consider deprecating it.</p>
+          )}
+          {item.change === "no_longer_found" && itemHref?.(item) && (
+            <a href={itemHref(item)!} className="text-small font-medium text-navy-700 underline underline-offset-2">
+              Open {item.key}
+            </a>
+          )}
           {disabledReason && <p className="text-small font-medium text-warning-fg">{disabledReason}</p>}
         </div>
+        {viewer ? (
+          <p className="text-body text-fg">{value ? actionLabel(value, item.change) : "No decision"}</p>
+        ) : (
         <div role="radiogroup" aria-label={`Decision for ${item.key}`} className="flex flex-wrap gap-3">
           {item.allowed_actions.map((a) => {
             const disabled = !!disabledReason && a === "accept";
@@ -76,6 +107,7 @@ function Row({ item, value, onChange, disabledReason }: { item: ChangeReviewItem
             );
           })}
         </div>
+        )}
       </div>
     </fieldset>
   );
@@ -90,15 +122,30 @@ export function ChangeReview({
   onApply,
   onDiscard,
   readOnly,
+  viewer,
+  applyNote,
+  protectedSub,
+  itemHref,
+  discardBody,
 }: {
   review: ChangeReviewT;
   onApply: (decisions: Record<string, ReviewAction>) => Promise<void>;
   onDiscard: () => Promise<void>;
   readOnly?: boolean;
+  /** View-only users see the default decisions as text, with no buttons (design P3 §12.2). */
+  viewer?: boolean;
+  /** Shown under the Apply button, e.g. "Gate 5 will need approval again." */
+  applyNote?: string | null;
+  protectedSub?: string;
+  itemHref?: (i: ChangeReviewItem) => string | null;
+  discardBody?: string;
 }) {
   const defaults = useMemo(() => reviewDecisions(review.items, {}), [review.items]);
   const [decisions, setDecisions] = useState<Record<string, ReviewAction>>(defaults);
   const [filter, setFilter] = useState<"all" | ChangeReviewItem["change"]>("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const typed = review.items.some((i) => i.type === "test_case" || i.type === "test_condition" || i.type === "test_data");
+  const typeOk = (i: ChangeReviewItem) => typeFilter === "all" || TYPE_FILTERS.find((t) => t.value === typeFilter)?.types.includes(i.type);
   const [busy, setBusy] = useState<"apply" | "discard" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -137,7 +184,20 @@ export function ChangeReview({
             ))}
           </select>
         </label>
-        {!readOnly && (
+        {typed && (
+          <label className="text-body text-fg-strong">
+            <span className="mb-1 block font-medium">Show</span>
+            <select className="min-h-10 rounded-md bg-surface px-3 ring-1 ring-inset ring-line-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <option value="all">All changes</option>
+              {TYPE_FILTERS.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {!readOnly && !viewer && (
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" onClick={() => setDecisions(defaults)}>
               Accept all suggested
@@ -148,22 +208,30 @@ export function ChangeReview({
             <Button variant="ghost" onClick={() => setConfirmDiscard(true)}>
               Discard regeneration
             </Button>
+            {applyNote && <p className="w-full text-right text-small font-medium text-warning-fg">{applyNote}</p>}
           </div>
         )}
       </div>
       {review.gate_effect && <p className="text-small font-medium text-warning-fg">{review.gate_effect}</p>}
       <InlineError error={error} />
       {GROUPS.filter((g) => filter === "all" || filter === g.change).map((g) => {
-        const items = review.items.filter((i) => i.change === g.change);
+        const items = review.items.filter((i) => i.change === g.change && typeOk(i));
         if (items.length === 0) return null;
         return (
           <Card key={g.change} className="p-4">
             <h2 className="mb-3 text-h3 font-semibold text-fg-strong">
-              {g.title} ({items.length}){g.sub ? <span className="font-normal text-fg-muted"> — {g.sub}</span> : null}
+              {g.title} ({items.length}){g.sub ? <span className="font-normal text-fg-muted"> — {g.change === "protected_with_proposal" && protectedSub ? protectedSub : g.sub}</span> : null}
             </h2>
             <div className="space-y-2">
               {items.map((i) => (
-                <Row key={i.lineage_id} item={i} value={decisions[i.lineage_id] ?? i.default_action} onChange={(a) => setDecisions({ ...decisions, [i.lineage_id]: a })} />
+                <Row
+                  key={i.lineage_id}
+                  item={i}
+                  value={decisions[i.lineage_id] ?? i.default_action}
+                  onChange={(a) => setDecisions({ ...decisions, [i.lineage_id]: a })}
+                  viewer={viewer || readOnly}
+                  itemHref={itemHref}
+                />
               ))}
             </div>
           </Card>
@@ -201,7 +269,7 @@ export function ChangeReview({
           }
         }}
       >
-        <p>Version {review.current_version ?? "—"} stays current. Discarded runs stay in the version history, marked “Discarded”.</p>
+        <p>{discardBody ?? `Version ${review.current_version ?? "—"} stays current. Discarded runs stay in the version history, marked “Discarded”.`}</p>
       </ConfirmDialog>
     </div>
   );

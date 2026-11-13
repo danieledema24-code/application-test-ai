@@ -98,5 +98,75 @@
 <section><h2>Risks and contingencies</h2><ul>{% for r in sec.risks_and_contingencies %}<li>{{ r.risk.key }} {{ r.risk.label }}: {{ r.contingency }}</li>{% else %}<li>None</li>{% endfor %}</ul></section>
 {% if c.plan.rules_template_sections %}<p class="muted">Standard wording (rule-generated, edit for this project): {{ c.plan.rules_template_sections|join(', ') }}.</p>{% endif %}
 {% endif %}
+{% if c.report_type == 'test_case_spec' %}
+<section><h2>Scope and method</h2><ul>{% for x in c.scope_and_method %}<li>{{ x }}</li>{% endfor %}</ul>
+  <table><thead><tr><th>Technique</th><th>Definition</th><th>Conditions</th></tr></thead><tbody>
+  {% for t in c.techniques %}<tr><td>{{ t.technique|replace('_', ' ') }}</td><td>{{ t.definition }}</td><td>{{ t.conditions }}</td></tr>{% endfor %}
+  </tbody></table></section>
+<section><h2>Counts</h2><table><tbody>
+  <tr><th>Total</th><td>{{ c.counts.total }}</td></tr>
+  {% for k, v in c.counts.by_status.items() %}<tr><th>{{ k|capitalize }}</th><td>{{ v }}</td></tr>{% endfor %}
+  {% for k, v in c.counts.by_priority.items() %}<tr><th>Priority {{ k }}</th><td>{{ v }}</td></tr>{% endfor %}
+  <tr><th>Open questions</th><td>{{ c.counts.open_questions }}</td></tr>
+  <tr><th>Lint errors / warnings</th><td>{{ c.counts.lint.errors }} / {{ c.counts.lint.warnings }}</td></tr>
+</tbody></table><p class="muted">{{ c.execution_note }}</p></section>
+<section><h2>Test cases</h2>
+{% for feature, groups in c.cases_by_feature.items() %}<h3>{{ feature }}</h3>
+  {% for g in groups %}{% if g.requirement %}<p class="label">{{ g.requirement.label }}</p>{% endif %}
+    {% for tc in g.cases %}<div style="page-break-inside: avoid; margin-bottom: 10px;">
+      <p><strong>{{ tc.key }} {{ tc.title }}</strong> <span class="muted">· {{ tc.status }} · priority {{ tc.priority }}{% if tc.risk_level %} · risk {{ tc.risk_level|replace('_', ' ') }}{% endif %} · {{ tc.technique|replace('_', ' ') }} · {{ tc.test_type }} · {{ tc.test_level }}</span></p>
+      {% if tc.objective %}<p>{{ tc.objective }}</p>{% endif %}
+      {% if tc.preconditions %}<p class="muted">Preconditions: {{ tc.preconditions|join('; ') }}</p>{% endif %}
+      <table><thead><tr><th>#</th><th>Action</th><th>Test data</th><th>Expected</th></tr></thead><tbody>
+      {% for st in tc.steps %}<tr><td>{{ st.n }}</td><td>{{ st.action }}</td><td>{% for d in st.data %}{{ d.label }}{% if not loop.last %}; {% endif %}{% endfor %}</td><td>{{ st.expected }}</td></tr>{% endfor %}
+      </tbody></table>
+      <p><span class="label">Expected result:</span> {% if tc.expected_result_status == "open_question" %}Not decided: {% endif %}{{ tc.expected_result }}{% if tc.open_question %} <span class="band draft">Open question</span>{% endif %}</p>
+      <p class="muted">Design basis: {{ tc.design_basis.explanation }}{% if tc.design_basis.coverage_item %} ({{ tc.design_basis.coverage_item }}){% endif %}.
+        Requirements: {% for r in tc.requirements %}{{ r.key }}{% if not loop.last %}, {% endif %}{% endfor %}{% if tc.acceptance_criteria %}; criteria: {% for a in tc.acceptance_criteria %}{{ a.key }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}.
+        Lint: {% if tc.lint %}{% for i in tc.lint %}{{ i.code }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}clean{% endif %}. Execution: not run.</p>
+    </div>{% endfor %}
+  {% endfor %}
+{% endfor %}</section>
+<section><h2>Appendix: test conditions</h2><table><thead><tr><th>Key</th><th>Condition</th><th>Technique</th><th>Coverage items</th></tr></thead><tbody>
+{% for x in c.conditions %}{% if x.status != 'rejected' %}<tr><td>{{ x.key }}</td><td>{{ x.title }}</td><td>{{ x.technique|replace('_', ' ') }}</td><td>{% for i in x.coverage_items %}{{ i.label }}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>{% endif %}{% endfor %}
+</tbody></table></section>
+<section><h2>Appendix: test data</h2><p class="muted">{{ c.test_data_note }}</p><table><thead><tr><th>Key</th><th>Field</th><th>Kind</th><th>Value</th></tr></thead><tbody>
+{% for d in c.test_data %}{% if d.status == 'active' %}<tr><td>{{ d.key }}</td><td>{{ d.field_label }}</td><td>{{ d.kind|replace('_', ' ') }}</td><td>{% if d.kind == 'secret_ref' %}Uses the saved test credentials "{{ d.secret_ref }}" (value never shown){% elif d.length is not none and d.length > 80 %}{{ d.value[:80] }}… ({{ d.length }} characters){% elif d.value == '' %}(empty){% else %}{{ d.value }}{% endif %}</td></tr>{% endif %}{% endfor %}
+</tbody></table></section>
+{% if c.not_designed %}<section><h2>Not designed</h2><ul>{% for n in c.not_designed %}<li>{{ n.test_type }}: {{ n.reason }}</li>{% endfor %}</ul></section>{% endif %}
+<section><h2>Disclaimer</h2><p class="muted">{{ c.disclaimer }}</p></section>
+{% endif %}
+
+{% if c.report_type == 'rtm' %}
+<section><h2>Based on</h2><table><tbody>{% for g, v in c.based_on.items() %}<tr><th>{{ g }}</th><td>{{ v or 'Not approved yet' }}</td></tr>{% endfor %}</tbody></table></section>
+<section><h2>Coverage</h2><table><tbody>
+  <tr><th>Approved requirements with an approved case</th><td>{{ c.coverage.requirements.with_approved_case }} of {{ c.coverage.requirements.approved }} ({{ c.coverage.requirements.percent_approved_covered }}%)</td></tr>
+  <tr><th>Approved acceptance criteria covered</th><td>{{ c.coverage.acceptance_criteria.covered }} of {{ c.coverage.acceptance_criteria.approved }}</td></tr>
+  <tr><th>High-risk requirements with an approved case</th><td>{{ c.coverage.high_risk_requirements.with_approved_case }} of {{ c.coverage.high_risk_requirements.total }}</td></tr>
+  <tr><th>Test cases without a requirement</th><td>{{ c.coverage.test_cases.orphans }}</td></tr>
+  <tr><th>Execution</th><td>{{ c.phase4_note }}</td></tr>
+</tbody></table></section>
+<section><h2>Forward traceability</h2><table><thead><tr><th>Requirement</th><th>Risk</th><th>Acceptance criteria</th><th>Test cases</th><th>Automation</th><th>Results</th><th>Defects</th></tr></thead><tbody>
+{% for r in c.forward %}<tr><td>{{ r.requirement.label }}</td><td>{{ (r.risk.level|replace('_', ' ')) if r.risk else '' }}</td>
+  <td>{% for a in r.acceptance_criteria %}{{ a.ac.key }}{% if not a.covered %} (not covered){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+  <td>{% for t in r.test_cases %}{{ t.case.key }} ({{ t.status }}){% if not loop.last %}, {% endif %}{% else %}No test case{% endfor %}</td>
+  <td class="muted">{{ c.phase4_note }}</td><td class="muted">{{ c.phase4_note }}</td><td class="muted">{{ c.phase4_note }}</td></tr>{% endfor %}
+</tbody></table></section>
+<section><h2>Backward traceability</h2><table><thead><tr><th>Test case</th><th>Status</th><th>Condition</th><th>Acceptance criteria</th><th>Requirements</th><th>Risks</th></tr></thead><tbody>
+{% for r in c.backward %}<tr><td>{{ r.test_case.label }}</td><td>{{ r.status }}</td><td>{% for x in r.conditions %}{{ x.key }}{% endfor %}</td>
+  <td>{% for x in r.acceptance_criteria %}{{ x.key }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+  <td>{% for x in r.requirements %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}None{% endfor %}</td>
+  <td>{% for x in r.risks %}{{ x.key }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>{% endfor %}
+</tbody></table></section>
+<section><h2>Gaps</h2><ul>
+  <li>Approved requirements without a test case: {% for x in c.gaps.requirements_without_test_cases.none %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Approved requirements without an approved test case: {% for x in c.gaps.requirements_without_test_cases.none_approved %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Test cases without requirements: {% for x in c.gaps.test_cases_without_requirements %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Acceptance criteria without test cases: {% for x in c.gaps.acceptance_criteria_without_test_cases %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Untested high-risk functionality: {% for x in c.gaps.untested_high_risk.open %}{{ x.risk.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}{% if c.gaps.untested_high_risk.accepted %} (accepted: {% for x in c.gaps.untested_high_risk.accepted %}{{ x.risk.key }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}</li>
+  <li>Features without requirements: {% for x in c.gaps.features_without_requirements %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Requirements without execution evidence, failed tests, outdated automation scripts, defects without regression coverage: {{ c.phase4_note }}</li>
+</ul></section>
+{% endif %}
 </body>
 </html>

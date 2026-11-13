@@ -230,9 +230,11 @@ test.describe("project workspace", () => {
     // Phase 2 sections are built now (design P2 §3.2): no phase badge, no "coming in" name.
     await expect(nav.getByRole("link", { name: "Requirements", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "AI QA Analyst", exact: true })).toBeVisible();
-    await expect(nav.getByRole("link", { name: /coming in Phase 2/ })).toHaveCount(0);
-    await nav.getByRole("link", { name: "Test Cases, coming in Phase 3" }).click();
-    await expect(page.getByText("Test Cases: coming in Phase 3")).toBeVisible();
+    await expect(nav.getByRole("link", { name: /coming in Phase [23]/ })).toHaveCount(0);
+    // Phase 3 built Test Cases and Traceability (design P3 §4); Automation is the next unbuilt section.
+    await expect(nav.getByRole("link", { name: "Test Cases", exact: true })).toBeVisible();
+    await nav.getByRole("link", { name: "Automation, coming in Phase 4" }).click();
+    await expect(page.getByText("Automation: coming in Phase 4")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Go to Application Discovery" })).toBeVisible();
   });

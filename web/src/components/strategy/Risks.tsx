@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useState } from "react";
-import { Plus } from "lucide-react";
+import { Fragment, useEffect, useState } from "react";
+import { CircleAlert, Plus } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { Risk, RiskCreate, RiskLevel, RiskMatrix as RiskMatrixT, TestType } from "@/lib/contract";
-import { IMPACT, LEVEL_ABBR, LEVEL_CLASS, LEVEL_TEXT, LIKELIHOOD, TYPE_NAMES, cellName, cellScore, impactText, matrixCells, likelihoodText, riskChecks } from "@/lib/strategy";
+import { IMPACT, LEVEL_ABBR, LEVEL_CLASS, LEVEL_TEXT, LIKELIHOOD, TYPE_NAMES, cellName, cellScore, impactText, matrixCells, likelihoodText, riskChecks, riskCoverageText, riskHasNoApprovedCase } from "@/lib/strategy";
 import { Button, Callout, Card, CardBody, CardHeader, EmptyState, FilterChips, InlineError, Modal, SelectField, TextArea, TextField, useToast } from "@/components/ui";
 import { GeneratedByLabel, ProvenanceLabel } from "@/components/domain/ObservationLabel";
 
@@ -304,7 +304,10 @@ export function RiskRegister({
   generatedBy,
   readOnly,
   onChanged,
+  focusKey,
 }: {
+  /** `?risk=RISK-001` deep link (P3): opens and scrolls to that risk. */
+  focusKey?: string | null;
   projectId: string;
   risks: Risk[];
   matrix: RiskMatrixT | undefined;
@@ -316,11 +319,39 @@ export function RiskRegister({
   const [cell, setCell] = useState<{ l: number; i: number } | null>(null);
   const [level, setLevel] = useState<RiskLevel | "">("");
   const [status, setStatus] = useState<Risk["status"] | "">("");
+  const [coverage, setCoverage] = useState<"" | "none">("");
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [local, setLocal] = useState<Record<string, Risk>>({});
   const all = risks.map((r) => (local[r.id] && local[r.id].version >= r.version ? local[r.id] : r));
-  const rows = all.filter((r) => (!cell || (r.likelihood === cell.l && r.impact === cell.i)) && (!level || r.level === level) && (!status || r.status === status));
+  const rows = all.filter(
+    (r) => (!cell || (r.likelihood === cell.l && r.impact === cell.i)) && (!level || r.level === level) && (!status || r.status === status) && (!coverage || riskHasNoApprovedCase(r)),
+  );
+  const hasCoverage = all.some((r) => r.coverage);
+  const focusId = focusKey ? (all.find((r) => r.key === focusKey)?.id ?? null) : null;
+  useEffect(() => {
+    if (!focusId) return;
+    setOpen(focusId);
+    requestAnimationFrame(() => {
+      const el = Array.from(document.querySelectorAll<HTMLElement>(`[data-risk-id="${focusId}"]`)).find((x) => x.offsetParent !== null);
+      el?.scrollIntoView({ block: "center" });
+      el?.focus();
+    });
+  }, [focusId]);
+  const coverageCell = (r: Risk) => {
+    const c = riskCoverageText(r);
+    if (!c) return <span className="text-fg-muted">—</span>;
+    const text =
+      c.tone === "danger" ? (
+        <span className="inline-flex items-center gap-1 font-medium text-danger-fg">
+          <CircleAlert className="h-4 w-4 shrink-0" aria-hidden />
+          {c.text}
+        </span>
+      ) : (
+        <span className={c.tone === "muted" ? "text-fg-muted" : "text-fg"}>{c.text}</span>
+      );
+    return text;
+  };
   const saved = (r: Risk) => {
     setLocal((x) => ({ ...x, [r.id]: r }));
     onChanged();
@@ -330,6 +361,7 @@ export function RiskRegister({
     ...(cell ? [{ key: "cell", label: `Matrix: L${cell.l} × I${cell.i}` }] : []),
     ...(level ? [{ key: "level", label: `Level: ${LEVEL_TEXT[level]}` }] : []),
     ...(status ? [{ key: "status", label: `Status: ${status[0].toUpperCase()}${status.slice(1)}` }] : []),
+    ...(coverage ? [{ key: "coverage", label: "Test coverage: No approved case" }] : []),
   ];
   const checks = riskChecks(all);
 
@@ -401,6 +433,18 @@ export function RiskRegister({
             ]}
             wrapClassName="w-40"
           />
+          {hasCoverage && (
+            <SelectField
+              label="Test coverage"
+              value={coverage}
+              onChange={(e) => setCoverage(e.target.value as "" | "none")}
+              options={[
+                { value: "", label: "Any" },
+                { value: "none", label: "No approved case" },
+              ]}
+              wrapClassName="w-48"
+            />
+          )}
         </div>
         {!readOnly && (
           <Button variant="secondary" icon={<Plus className="h-4 w-4" aria-hidden />} onClick={() => setAdding(true)}>
@@ -410,11 +454,12 @@ export function RiskRegister({
       </div>
       <FilterChips
         chips={chips}
-        onRemove={(k) => (k === "cell" ? setCell(null) : k === "level" ? setLevel("") : setStatus(""))}
+        onRemove={(k) => (k === "cell" ? setCell(null) : k === "level" ? setLevel("") : k === "coverage" ? setCoverage("") : setStatus(""))}
         onClear={() => {
           setCell(null);
           setLevel("");
           setStatus("");
+          setCoverage("");
         }}
       />
 
@@ -427,7 +472,7 @@ export function RiskRegister({
               <div className="flex items-start justify-between gap-3">
                 <p className="min-w-0 text-body font-medium text-fg-strong">
                   <span className="mr-2 font-mono">{r.key}</span>
-                  <button type="button" aria-expanded={open === r.id} onClick={() => setOpen(open === r.id ? null : r.id)} className="text-left underline-offset-2 hover:underline">
+                  <button type="button" data-risk-id={r.id} aria-expanded={open === r.id} onClick={() => setOpen(open === r.id ? null : r.id)} className="text-left underline-offset-2 hover:underline">
                     {r.title}
                   </button>
                 </p>
@@ -450,6 +495,11 @@ export function RiskRegister({
                 {" · "}
                 <span className="capitalize">{r.status}</span>
               </p>
+              {hasCoverage && (
+                <p className="text-small">
+                  <span className="font-medium text-fg-strong">Test coverage:</span> {coverageCell(r)}
+                </p>
+              )}
             </div>
             {open === r.id && <RiskDetails risk={r} inScopeTypes={inScopeTypes} readOnly={readOnly} onSaved={saved} />}
           </li>
@@ -467,12 +517,13 @@ export function RiskRegister({
                 <th scope="col" className="px-4 py-2.5">Score</th>
                 <th scope="col" className="px-4 py-2.5">Mitigation (test types)</th>
                 <th scope="col" className="px-4 py-2.5">Status</th>
+                {hasCoverage && <th scope="col" className="px-4 py-2.5">Test coverage</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-line bg-surface">
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-body text-fg-muted">
+                  <td colSpan={hasCoverage ? 8 : 7} className="px-4 py-6 text-center text-body text-fg-muted">
                     No risks match these filters.
                   </td>
                 </tr>
@@ -482,7 +533,7 @@ export function RiskRegister({
                   <tr>
                     <td className="px-4 py-3 font-mono text-fg-strong">{r.key}</td>
                     <th scope="row" className="px-4 py-3 text-left font-medium text-fg-strong">
-                      <button type="button" aria-expanded={open === r.id} onClick={() => setOpen(open === r.id ? null : r.id)} className="text-left underline-offset-2 hover:underline">
+                      <button type="button" data-risk-id={r.id} aria-expanded={open === r.id} onClick={() => setOpen(open === r.id ? null : r.id)} className="text-left underline-offset-2 hover:underline">
                         {r.title}
                       </button>
                       {r.features.length > 0 && <span className="block text-caption font-normal text-fg-muted">Features: {r.features.map((f) => f.label || f.key).join(" · ")}</span>}
@@ -496,10 +547,20 @@ export function RiskRegister({
                     </td>
                     <td className="px-4 py-3 text-fg">{r.mitigation.test_types.map((t) => TYPE_NAMES[t]).join(", ") || <span className="text-danger-fg">None</span>}</td>
                     <td className="px-4 py-3 capitalize text-fg">{r.status}</td>
+                    {hasCoverage && (
+                      <td className="px-4 py-3">
+                        {coverageCell(r)}
+                        {r.coverage && r.status !== "accepted" && (
+                          <Link href={`/projects/${projectId}/traceability/${r.key}`} className="block text-caption font-medium text-navy-700 underline underline-offset-2">
+                            Trace {r.key}
+                          </Link>
+                        )}
+                      </td>
+                    )}
                   </tr>
                   {open === r.id && (
                     <tr>
-                      <td colSpan={7} className="p-0">
+                      <td colSpan={hasCoverage ? 8 : 7} className="p-0">
                         <RiskDetails risk={r} inScopeTypes={inScopeTypes} readOnly={readOnly} onSaved={saved} />
                       </td>
                     </tr>
