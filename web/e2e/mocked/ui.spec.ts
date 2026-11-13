@@ -227,8 +227,10 @@ test.describe("project workspace", () => {
     await page.goto("/projects/p1");
     const nav = page.getByRole("navigation", { name: "Project sections" });
     await expect(nav.getByRole("link")).toHaveCount(12);
-    await expect(nav.getByRole("link", { name: "Requirements, coming in Phase 2" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "AI QA Analyst, coming in Phase 2" })).toBeVisible();
+    // Phase 2 sections are built now (design P2 §3.2): no phase badge, no "coming in" name.
+    await expect(nav.getByRole("link", { name: "Requirements", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "AI QA Analyst", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: /coming in Phase 2/ })).toHaveCount(0);
     await nav.getByRole("link", { name: "Test Cases, coming in Phase 3" }).click();
     await expect(page.getByText("Test Cases: coming in Phase 3")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);

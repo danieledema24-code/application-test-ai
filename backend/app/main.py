@@ -17,7 +17,23 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api.errors import AppError, envelope
-from app.api.routers import auth, dashboard, events, evidence, health, projects, reports, scans, workflow
+from app.api.routers import (
+    assistant,
+    auth,
+    dashboard,
+    documents,
+    events,
+    evidence,
+    health,
+    projects,
+    reports,
+    requirements,
+    review,
+    scans,
+    secrets,
+    strategy,
+    workflow,
+)
 from app.config import Settings, get_settings
 from app.context import AppContext, build_context
 from app.db.migrate import prepare_database
@@ -101,6 +117,10 @@ def create_app(
         context = ctx or build_context(settings)
         app.state.ctx = context
         await prepare_database(context.engine, settings)
+        # P2-01 data step: Phase 1 credential rows get kind + non-secret metadata (idempotent; needs the key).
+        from app.services.secrets import backfill
+
+        await backfill(context)
         worker: Worker | None = None
         run_worker = start_worker if start_worker is not None else settings.worker_mode == "inline"
         if run_worker:
@@ -158,13 +178,29 @@ def create_app(
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         # The SSE client (fetch streaming) sends Cache-Control and Last-Event-ID; Accept for text/event-stream.
         allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control", "Last-Event-ID", "X-Request-ID"],
         expose_headers=["X-Request-ID", "Retry-After"],
     )
     app.add_middleware(RequestIdMiddleware)
-    for r in (health, auth, projects, workflow, scans, evidence, reports, events, dashboard):
+    for r in (
+        health,
+        auth,
+        projects,
+        workflow,
+        review,
+        requirements,
+        strategy,
+        secrets,
+        documents,
+        assistant,
+        scans,
+        evidence,
+        reports,
+        events,
+        dashboard,
+    ):
         app.include_router(r.router, prefix="/api/v1")
     return app
 

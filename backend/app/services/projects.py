@@ -29,6 +29,7 @@ from app.orchestrator.orchestrator import Orchestrator
 from app.schemas import api
 from app.security.ssrf import UrlRejected, normalise_url
 from app.services.audit import audit
+from app.services.secrets import metadata_for
 from app.services.url_check import check_url, is_startable
 
 CREDENTIALS_SECRET = "scan_credentials"  # noqa: S105 - secret name, not a value
@@ -194,6 +195,7 @@ async def create_project(ctx: AppContext, principal: Principal, body: api.Projec
                 name=CREDENTIALS_SECRET,
                 ciphertext=ctx.encryptor.encrypt(json.dumps(creds)),
                 created_by=principal.user.id,
+                meta=metadata_for(creds),
             )
             s.add(secret)
             await s.flush()

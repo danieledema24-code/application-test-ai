@@ -6,8 +6,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronsUpDown, CircleHelp, FolderKanban, LayoutDashboard, ScanSearch, Settings, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/hooks";
-import type { Page, ProjectDetail, ProjectSummary } from "@/lib/contract";
-import { PROJECT_SECTIONS, comingLabel, isBuilt, phaseLabel, projectRoute } from "@/lib/sections";
+import type { Page, ProjectDetail, ProjectSummary, Proposal, Workflow } from "@/lib/contract";
+import { PROJECT_SECTIONS, comingLabel, isBuilt, phaseLabel, projectRoute, sectionBadge } from "@/lib/sections";
 import { LoadingBlock } from "@/components/ui";
 import { Topbar } from "./Topbar";
 
@@ -85,6 +85,10 @@ function SwitchProject({ currentId }: { currentId: string }) {
 
 function ProjectNav({ id, section, onNavigate }: { id: string; section: string; onNavigate?: () => void }) {
   const { data: project } = useApi<ProjectDetail>(`/projects/${id}`);
+  // Same SWR keys as the workspace, so these are shared, not extra requests.
+  const { data: workflow } = useApi<Workflow>(`/projects/${id}/workflow`);
+  const { data: proposals } = useApi<Page<Proposal>>(`/projects/${id}/assistant/proposals`, { status: "pending", limit: 100 }, { shouldRetryOnError: false });
+  const pending = proposals?.items?.filter((x) => x.status === "pending").length ?? 0;
   return (
     <div className="mt-6">
       <p className="px-3 text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted">Project</p>
@@ -101,17 +105,23 @@ function ProjectNav({ id, section, onNavigate }: { id: string; section: string; 
             const active = section === s.slug;
             const Icon = s.icon;
             const built = isBuilt(s);
+            const badge = built ? sectionBadge(s.slug, workflow?.stages, pending) : null;
             return (
               <li key={s.slug || "overview"}>
                 <Link
                   href={href}
                   onClick={onNavigate}
                   aria-current={active ? "page" : undefined}
-                  aria-label={built ? undefined : `${s.label}, ${comingLabel(s.phase)}`}
+                  aria-label={built ? (badge ? `${s.label}, ${badge.srText}` : undefined) : `${s.label}, ${comingLabel(s.phase)}`}
                   className={navItemClass(active)}
                 >
                   <Icon className="h-4 w-4 shrink-0" aria-hidden />
                   <span className={`min-w-0 flex-1 truncate ${built || active ? "" : "text-fg-muted"}`}>{s.label}</span>
+                  {badge && (
+                    <span aria-hidden className="rounded-sm bg-warning-bg px-1.5 py-0.5 text-caption font-medium tabular-nums text-warning-fg ring-1 ring-inset ring-warning-line">
+                      {badge.text}
+                    </span>
+                  )}
                   {!built && (
                     <span aria-hidden className="rounded-sm bg-overlay px-1.5 py-0.5 text-caption font-medium text-fg-muted ring-1 ring-inset ring-line-strong">
                       <span className="hidden xl:inline">{phaseLabel(s.phase)}</span>

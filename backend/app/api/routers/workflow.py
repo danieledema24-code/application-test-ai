@@ -78,6 +78,21 @@ async def run_stage(
                 f"Maximum pages is {cap}", details=[{"field": "parameters.max_pages", "message": f"Enter 1–{cap}."}]
             )
         params = settings.model_dump()
+    elif key in (StageKey.requirements, StageKey.test_strategy, StageKey.readiness_criteria) and params:
+        allowed = {"guidance", "include_documents"} if key == StageKey.requirements else {"guidance"}
+        bad = sorted(set(params) - allowed)
+        guidance = params.get("guidance")
+        if bad or (guidance is not None and (not isinstance(guidance, str) or len(guidance) > 1000)):
+            raise ValidationFailed(
+                "Invalid parameters",
+                details=[{"field": f"parameters.{b}", "message": "Not allowed"} for b in bad]
+                or [{"field": "parameters.guidance", "message": "Up to 1000 characters"}],
+            )
+        if "include_documents" in params and not isinstance(params["include_documents"], bool):
+            raise ValidationFailed(
+                "Invalid parameters",
+                details=[{"field": "parameters.include_documents", "message": "Must be true/false"}],
+            )
     retry = ctx.rate_limiter.check(f"stagerun:{project_id}", ctx.settings.rl_stage_runs_per_hour, 3600)
     if retry is not None:
         raise RateLimited("Too many runs for this project in the last hour", retry)
@@ -131,6 +146,7 @@ async def list_runs(
             finished_at=r.finished_at,
             triggered_by=ser.user_ref(users.get(r.triggered_by)) if r.triggered_by else None,
             created_at=r.created_at,
+            review_status=r.review_status.value if r.review_status else "not_required",
         )
         for r in runs
     ]

@@ -3,13 +3,25 @@
 
 import type { GateKey, StageKey, StageState, StageStatus, Workflow } from "./contract";
 
-export type LifecycleStatus = "done" | "running" | "waiting" | "paused" | "failed" | "cancelled" | "not_started" | "later";
+export type LifecycleStatus =
+  | "done"
+  | "running"
+  | "waiting"
+  | "changes_requested"
+  | "paused"
+  | "out_of_date"
+  | "failed"
+  | "cancelled"
+  | "not_started"
+  | "later";
 
 export const STATUS_LABEL: Record<LifecycleStatus, string> = {
   done: "Done",
   running: "Running",
   waiting: "Waiting for your approval",
+  changes_requested: "Changes requested",
   paused: "Paused",
+  out_of_date: "Out of date",
   failed: "Failed",
   cancelled: "Cancelled",
   not_started: "Not started",
@@ -151,8 +163,9 @@ export function fromApiStatus(s: StageState | undefined): LifecycleStatus {
     case "queued":
       return "running";
     case "awaiting_approval":
-    case "changes_requested":
       return "waiting";
+    case "changes_requested":
+      return "changes_requested";
     case "paused":
       return "paused";
     case "failed":
@@ -160,6 +173,7 @@ export function fromApiStatus(s: StageState | undefined): LifecycleStatus {
     case "cancelled":
       return "cancelled";
     case "stale":
+      return "out_of_date";
     case "not_started":
     default:
       return "not_started";
@@ -176,11 +190,14 @@ export type LifecycleStage = LifecycleStageDef & {
   gateStage: StageState | null;
 };
 
-/** First match wins: Failed → Waiting → Paused → Running → Cancelled → Done → Not started / Coming later. */
+/**
+ * First match wins (design P2 §12.1): Failed → Waiting → Changes requested → Paused → Running → Out of date →
+ * Cancelled → Done → Not started / Coming later.
+ */
 export function rollUp(statuses: LifecycleStatus[], gateApproved: boolean, available: boolean): LifecycleStatus {
   if (!available) return "later";
   if (statuses.length === 0) return "not_started";
-  for (const s of ["failed", "waiting", "paused", "running", "cancelled"] as const) if (statuses.includes(s)) return s;
+  for (const s of ["failed", "waiting", "changes_requested", "paused", "running", "out_of_date", "cancelled"] as const) if (statuses.includes(s)) return s;
   if (statuses.every((s) => s === "done") && gateApproved) return "done";
   return "not_started";
 }
@@ -211,7 +228,7 @@ function gateApprovedFor(stages: StageState[], gateKey: GateKey | undefined): { 
   return {
     approved,
     stage,
-    status: approved ? "done" : waiting ? "waiting" : g === "rejected" || g === "changes_requested" ? "failed" : "not_started",
+    status: approved ? "done" : waiting ? "waiting" : g === "changes_requested" ? "changes_requested" : g === "rejected" ? "failed" : "not_started",
   };
 }
 
@@ -233,6 +250,20 @@ export function discoveryStep(stages: StageState[]): number | null {
   return null;
 }
 
+/** Current step within a Phase 2 stage, 1-based (Requirements: 9 derive, 10 criteria, 11 Ready & Done). */
+export function phase2Step(id: string, stages: StageState[]): number | null {
+  const by = (k: StageKey) => stages.find((s) => s.key === k);
+  const working = (s: StageState | undefined) => !!s && (s.status === "running" || s.status === "queued" || s.status === "paused");
+  if (id === "requirements") {
+    if (working(by("readiness_criteria"))) return 3;
+    const req = by("requirements");
+    if (working(req)) return /accept|criteri/i.test(req?.progress?.label ?? "") ? 2 : 1;
+    return null;
+  }
+  if (id === "strategy") return working(by("test_strategy")) ? 1 : null;
+  return null;
+}
+
 export function buildLifecycle(workflow: Workflow | undefined | null): LifecycleStage[] {
   const all = workflow?.stages ?? [];
   return LIFECYCLE.map((def) => {
@@ -246,18 +277,31 @@ export function buildLifecycle(workflow: Workflow | undefined | null): Lifecycle
       ...def,
       stages,
       status,
-      currentStep: def.id === "discovery" && status === "running" ? discoveryStep(stages) : null,
+      currentStep: status !== "running" ? null : def.id === "discovery" ? discoveryStep(stages) : phase2Step(def.id, stages),
       gateStatus: available ? gate.status : null,
       gateStage: gate.stage,
     };
   });
 }
 
-/** Text for the stage's status, e.g. "Running, step 4 of 8" or "Phase 2". */
+/** Text for the stage's status, e.g. "Running, step 4 of 8", "Running, step 10 (2 of 3)" or "Phase 2". */
 export function stageStatusText(stage: LifecycleStage): string {
   if (stage.status === "later") return stage.phaseLabel;
-  if (stage.status === "running" && stage.currentStep) return `Running, step ${stage.currentStep} of ${stage.steps.length}`;
+  if (stage.status === "running" && stage.currentStep) {
+    if (stage.id === "discovery") return `Running, step ${stage.currentStep} of ${stage.steps.length}`;
+    const step = stage.steps[stage.currentStep - 1];
+    return `Running, step ${step?.n ?? stage.currentStep} (${stage.currentStep} of ${stage.steps.length})`;
+  }
   return STATUS_LABEL[stage.status];
+}
+
+/** "After Gate 2" under a Phase 2 stage that is waiting for its upstream gate (design §12.1). */
+export function upstreamGateHint(stage: LifecycleStage, all: LifecycleStage[]): string | null {
+  if (stage.status !== "not_started") return null;
+  const i = all.findIndex((s) => s.id === stage.id);
+  const prev = i > 0 ? all[i - 1] : null;
+  if (!prev?.gate || prev.gateStatus === "done") return null;
+  return `After Gate ${prev.gate.key.slice(1)}`;
 }
 
 /** API stage status → StatusPill key used across the app. */

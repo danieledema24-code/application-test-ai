@@ -109,8 +109,41 @@ export function comingLabel(phase: number | null): string {
   return phase === null ? "coming later" : `coming in Phase ${phase}`;
 }
 
+/** The phase the product has reached: sections up to it are real screens (design P2 §3.2). */
+export const CURRENT_PHASE = 2;
+
 export function isBuilt(s: ProjectSection): boolean {
-  return s.phase === 1;
+  return s.phase !== null && s.phase <= CURRENT_PHASE;
+}
+
+export type SectionBadge = { text: string; srText: string };
+
+/**
+ * One attention badge per built section, in priority order: gate waiting → out of date → proposals
+ * (design P2 §3.2). `workflow` stage statuses come straight from the API.
+ */
+export function sectionBadge(
+  slug: string,
+  stages: { key: string; status: string; gate: { key: string; status: string } | null }[] | undefined,
+  pendingProposals = 0,
+): SectionBadge | null {
+  const by = (k: string) => stages?.find((s) => s.key === k);
+  const gateWaiting = (k: string) => {
+    const s = by(k);
+    const g = s?.gate?.status?.toLowerCase();
+    return !!s && (s.status === "awaiting_approval" || (s.status === "completed" && (g === "pending" || g === "recommended")));
+  };
+  if (slug === "requirements") {
+    if (gateWaiting("readiness_criteria") || gateWaiting("requirements")) return { text: "Review", srText: "Gate 3 waiting for your review" };
+    if (by("requirements")?.status === "stale") return { text: "Out of date", srText: "out of date" };
+  }
+  if (slug === "test-strategy") {
+    if (gateWaiting("test_strategy")) return { text: "Review", srText: "Gate 4 waiting for your review" };
+    if (by("test_strategy")?.status === "stale") return { text: "Out of date", srText: "out of date" };
+  }
+  if (slug === "assistant" && pendingProposals > 0)
+    return { text: String(pendingProposals), srText: `${pendingProposals} proposal${pendingProposals === 1 ? "" : "s"} to review` };
+  return null;
 }
 
 /** "/projects/abc/discovery" → { id: "abc", section: "discovery" }. `/projects/new` is not a project. */

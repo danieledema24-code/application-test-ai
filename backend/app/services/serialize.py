@@ -24,7 +24,17 @@ from app.db.models import (
     UserJourney,
     WorkflowStage,
 )
-from app.domain.enums import GateStatus, PageStatus, ScanStatus, StageKey, StageStatus, UrlRole
+from app.domain.enums import (
+    GateKey,
+    GateStatus,
+    PageStatus,
+    RequirementStatus,
+    ReviewStatus,
+    ScanStatus,
+    StageKey,
+    StageStatus,
+    UrlRole,
+)
 from app.domain.stages import GATE_TITLES, LOCKED_GATES, STAGE_BY_KEY, STAGE_ORDER, merged_policy
 from app.schemas import api
 
@@ -82,6 +92,7 @@ def page_summary(ctx: AppContext, p: DiscoveredPage, evs: dict[uuid.UUID, Eviden
         depth=p.depth,
         page_type=p.page_type.value,
         requires_auth=p.requires_auth,
+        auth_context=p.auth_context.value,
         counts={k: int(v) for k, v in (p.counts or {}).items()},
         screenshot=evidence_link(ctx, shot) if shot else None,
         path=path_of(p.url),
@@ -269,6 +280,7 @@ async def scan_detail(ctx: AppContext, session: AsyncSession, s: ScanSession) ->
         stats=api.ScanStats.model_validate(stats),
         completeness=api.CompletenessOut.model_validate(s.completeness) if s.completeness else None,
         auth_boundaries=[api.AuthBoundary.model_validate(b) for b in s.auth_boundaries or []],
+        auth=s.auth,
         access_gaps=[api.AccessGap.model_validate(g) for g in s.access_gaps or []],
         limitations=list(s.limitations or []),
         blocked_requests=[api.BlockedRequest.model_validate(b) for b in s.blocked_requests or []],
@@ -428,8 +440,20 @@ async def gate_state_for_run(
             users = await users_by_id(session, [d.decided_by])
             decision = decision_out(d, users, run.version)
     status = stage.gate_status.value
+    if stage.status == StageStatus.awaiting_approval and stage.gate_status == GateStatus.approved:
+        status = "pending"  # the stage status is authoritative: waiting means the gate is waiting
     if run is not None and stage.current_stage_run_id != run.id:
         status = "approved" if decision and decision.decision == "approve" else "rejected" if decision else "none"
+    preconditions: list[dict[str, Any]] = []
+    changes = 0
+    if stage.gate_key in (GateKey.G3, GateKey.G4) and (run is None or stage.current_stage_run_id == run.id):
+        from app.services import gates
+
+        preconditions = [p.as_dict() for p in await gates.preconditions(session, project, stage.gate_key)]
+        changes = await gates.changes_since_approval(session, project.id, stage.gate_key)
+        if run is not None and run.finished_at is not None:
+            live = await gates.recommendation(session, project, stage.gate_key)
+            rec = api.GateRecommendation.model_validate(live) if live else rec
     return api.GateState(
         key=stage.gate_key.value,
         policy=policy.value,
@@ -437,6 +461,8 @@ async def gate_state_for_run(
         recommendation=rec,
         title=GATE_TITLES[stage.gate_key],
         decision=decision,
+        preconditions=preconditions,
+        changes_since_approval=changes,
     )
 
 
@@ -452,6 +478,10 @@ def decision_out(d: GateDecision, users: dict[uuid.UUID, User], version: int | N
         gate=d.gate_key.value,
         stage_run_version=version,
         agent_recommendation=d.agent_recommendation,
+        artefact_snapshot={"items": len(dict(d.artefact_snapshot or {}).get("items", [])), "hash": d.snapshot_hash}
+        if d.snapshot_hash
+        else None,
+        stage_run_versions=d.stage_run_versions,
     )
 
 
@@ -499,9 +529,40 @@ async def stage_states(session: AsyncSession, project: Project) -> list[api.Stag
                 progress=progress,
                 partial=run.partial if run else False,
                 error=run.error if run else None,
+                pending_review=await _pending_review(session, st),
+                approved_input=_approved_input(run),
             )
         )
     return out
+
+
+async def _pending_review(session: AsyncSession, st: WorkflowStage) -> dict[str, Any] | None:
+    cand = (
+        await session.execute(
+            select(StageRun)
+            .where(
+                StageRun.workflow_stage_id == st.id,
+                StageRun.review_status == ReviewStatus.pending_review,
+                StageRun.finished_at.is_not(None),
+            )
+            .order_by(StageRun.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if cand is None:
+        return None
+    review = (cand.output or {}).get("review") or {}
+    return {"version": cand.version, "created_at": cand.created_at, "summary": review.get("summary", {})}
+
+
+def _approved_input(run: StageRun | None) -> dict[str, Any] | None:
+    if run is None or not run.approved_input or not run.approved_input.get("g3_hash"):
+        return None
+    return {
+        "stage_key": "requirements",
+        "snapshot_hash": run.approved_input["g3_hash"],
+        "version": int((run.approved_input.get("versions") or {}).get("requirements", 0)),
+    }
 
 
 _PRIORITY = [
@@ -553,6 +614,22 @@ async def project_summary(session: AsyncSession, project: Project) -> api.Projec
     if scan is not None and scan.status == "running" and scan.current:
         activity = f"Visiting {path_of(scan.current.get('url', '/'))}"
     pu = primary_url(urls)
+    requirements = None
+    req_stage = next((x for x in stages if x.stage_key == StageKey.requirements), None)
+    if req_stage is not None and req_stage.current_stage_run_id is not None:
+        from app.db.models import Requirement
+
+        rows = await session.execute(
+            select(Requirement.status, func.count())
+            .where(Requirement.stage_run_id == req_stage.current_stage_run_id)
+            .group_by(Requirement.status)
+        )
+        by_status: dict[str, int] = {row[0]: int(row[1]) for row in rows.all()}
+        requirements = {
+            "total": int(sum(by_status.values())),
+            "approved": int(by_status.get(RequirementStatus.approved, 0)),
+            "draft": int(by_status.get(RequirementStatus.draft, 0)),
+        }
     return api.ProjectSummary(
         id=project.id,
         name=project.name,
@@ -566,6 +643,7 @@ async def project_summary(session: AsyncSession, project: Project) -> api.Projec
         access_gaps=len(scan.access_gaps or []) if scan else 0,
         scans=scans,
         current_activity=activity,
+        requirements=requirements,
     )
 
 

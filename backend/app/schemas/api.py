@@ -249,6 +249,7 @@ class ScanSettings(BaseModel):
     max_depth: int = Field(3, ge=0, le=5)
     include_mobile: bool = True
     respect_robots: bool = True
+    use_credentials: bool = True  # P2-01: sign in with the saved test credentials (ignored when there are none)
 
 
 class AuthorisationAttestation(Req):
@@ -295,6 +296,8 @@ class ProjectSummary(BaseModel):
     access_gaps: int = 0
     scans: int = 0
     current_activity: str | None = None
+    # Phase 2: counts in the current requirement set ({total, approved, draft}); null before requirements exist.
+    requirements: dict[str, int] | None = None
 
 
 class ProjectUrlOut(BaseModel):
@@ -338,6 +341,10 @@ class GateState(BaseModel):
     recommendation: GateRecommendation | None
     title: str = ""
     decision: GateDecisionOut | None = None
+    # Phase 2 (G3/G4): computed on read; blocking unmet ones make the decision endpoint return 409 gate_blocked.
+    preconditions: list[dict[str, Any]] = []
+    # G3/G4: items added, changed or removed since the last approval (0 when never approved).
+    changes_since_approval: int = 0
 
 
 class StageProgress(BaseModel):
@@ -364,6 +371,9 @@ class StageState(BaseModel):
     progress: StageProgress | None
     partial: bool = False
     error: str | None = None
+    # Phase 2: a finished regeneration waiting for review, and which upstream approval the current output used.
+    pending_review: dict[str, Any] | None = None
+    approved_input: dict[str, Any] | None = None
 
 
 class Workflow(BaseModel):
@@ -393,6 +403,8 @@ class GateDecisionOut(BaseModel):
     gate: GateKeyT | None = None  # same as gate_key
     stage_run_version: int | None = None
     agent_recommendation: dict[str, Any] | None = None
+    artefact_snapshot: dict[str, Any] | None = None  # {"items": int, "hash": str}
+    stage_run_versions: dict[str, int] | None = None
 
 
 class ValidationIssueOut(BaseModel):
@@ -411,6 +423,7 @@ class StageRunSummary(BaseModel):
     finished_at: datetime | None
     triggered_by: UserRef | None
     created_at: datetime
+    review_status: str = "not_required"  # pending_review / applied / discarded for regeneration candidates
 
 
 class StageRunDetail(BaseModel):
@@ -515,6 +528,8 @@ class ScanDetail(ScanSummary):
     stats: ScanStats
     completeness: CompletenessOut | None
     auth_boundaries: list[AuthBoundary]
+    # P2-01: {attempted, result, reason_code, login_url, authenticated_pages}; None when no credentials were saved.
+    auth: dict[str, Any] | None = None
     access_gaps: list[AccessGap]
     limitations: list[str]
     blocked_requests: list[BlockedRequest]
@@ -599,6 +614,7 @@ class PageSummary(BaseModel):
     depth: int
     page_type: str
     requires_auth: bool
+    auth_context: Literal["anonymous", "authenticated"] = "anonymous"
     counts: dict[str, int]
     screenshot: EvidenceLink | None
     # Additive:
@@ -708,12 +724,13 @@ class KnowledgeItemOut(BaseModel):
 
 
 class ReportCreate(Req):
-    report_type: Literal["discovery"]
+    report_type: Literal["discovery", "requirements_spec", "test_strategy", "test_plan"]
     scan_id: uuid.UUID | None = None
+    stage_run_version: int | None = None
 
     @classmethod
     def allowed_types(cls) -> set[str]:
-        return {"discovery"}
+        return {"discovery", "requirements_spec", "test_strategy", "test_plan"}
 
 
 class ReportFile(BaseModel):
@@ -740,6 +757,10 @@ class ReportSummary(BaseModel):
     approval_status: Literal["draft", "approved", "changes_requested"] = "draft"
     partial: bool = False
     error: str | None = None
+    # Phase 2 (P2-09):
+    approval: dict[str, Any] | None = None
+    is_latest_source: bool = True
+    frozen: bool = False
 
 
 class ReportDetail(ReportSummary):

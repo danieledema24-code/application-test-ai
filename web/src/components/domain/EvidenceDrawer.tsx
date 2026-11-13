@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Code, Copy, ExternalLink, FileWarning, Image as ImageIcon } from "lucide-react";
-import { ApiError } from "@/lib/api";
+import { ApiError, downloadFile } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { EvidenceDetail, EvidenceLink as EvidenceLinkT, EvidenceRef } from "@/lib/contract";
 import { fmtBytes, fmtDateTime } from "@/lib/format";
@@ -30,8 +30,13 @@ function isText(mime: string | undefined, kind: string | undefined) {
   return !!mime && (mime.startsWith("text/") || mime.includes("json") || mime.includes("xml") || /dom|aria|html/.test(kind ?? ""));
 }
 
+function isDocument(kind: string | undefined) {
+  return kind === "document_text" || kind === "document_file";
+}
+
 function kindLabel(e: { mime?: string; kind?: string } | null | undefined) {
   if (!e) return "Evidence";
+  if (isDocument(e.kind)) return "Document excerpt";
   if (isImage(e.mime, e.kind)) return "Screenshot";
   if (/dom|html/.test(e.kind ?? "") || e.mime === "text/html") return "DOM snippet";
   if (/aria/.test(e.kind ?? "")) return "Accessibility snapshot";
@@ -42,7 +47,7 @@ function kindLabel(e: { mime?: string; kind?: string } | null | undefined) {
  * Text evidence is fetched from its signed URL and rendered as escaped text only: React never
  * interprets it as HTML, so <script> and <a href> in a snippet are inert, unclickable text (§8.3, §19).
  */
-function TextEvidence({ url, excerpt }: { url: string | null; excerpt?: string | null }) {
+export function TextEvidence({ url, excerpt, title = "DOM snippet" }: { url: string | null; excerpt?: string | null; title?: string }) {
   const toast = useToast();
   const [text, setText] = useState<string | null>(excerpt ?? null);
   const [failed, setFailed] = useState(false);
@@ -62,11 +67,11 @@ function TextEvidence({ url, excerpt }: { url: string | null; excerpt?: string |
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <h3 className="text-small font-semibold text-fg-strong">DOM snippet</h3>
+        <h3 className="text-small font-semibold text-fg-strong">{title}</h3>
         <Button
           size="sm"
           variant="ghost"
-          aria-label="Copy DOM snippet"
+          aria-label={`Copy ${title}`}
           icon={<Copy className="h-4 w-4" aria-hidden />}
           onClick={() =>
             void navigator.clipboard
@@ -78,7 +83,7 @@ function TextEvidence({ url, excerpt }: { url: string | null; excerpt?: string |
           Copy
         </Button>
       </div>
-      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-elevated p-3 font-mono text-caption leading-5 text-fg-strong ring-1 ring-line" tabIndex={0} aria-label="DOM snippet, shown as text">
+      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-elevated p-3 font-mono text-caption leading-5 text-fg-strong ring-1 ring-line" tabIndex={0} aria-label={`${title}, shown as text`}>
         {text}
       </pre>
     </div>
@@ -93,6 +98,60 @@ function MissingEvidence() {
   );
 }
 
+/**
+ * Document mode (design P2 §7.3): the cited excerpt as an escaped quote, the document name and page or
+ * section, and the extracted text on request. Document text is untrusted: it is only ever rendered as text.
+ */
+function DocumentExcerpt({ ev, item, subject, meta }: { ev: EvidenceLinkT; item: EvidenceItem; subject: string; meta: Record<string, unknown> }) {
+  const toast = useToast();
+  const [showText, setShowText] = useState(false);
+  const str = (k: string) => (typeof meta[k] === "string" ? (meta[k] as string) : null);
+  const name = str("document_title") ?? str("filename") ?? str("document_key");
+  const uploader = str("uploaded_by_name") ?? str("uploaded_by");
+  const docId = str("document_id");
+  const removed = meta.withdrawn === true || !!str("withdrawn_at");
+  return (
+    <div className="space-y-4">
+      <p className="text-small text-fg-muted">
+        {removed && <span className="font-medium text-warning-fg">Document removed from sources · </span>}
+        {name ?? "Document"}
+        {item.note && <> · {item.note}</>}
+        {uploader && <> · uploaded by {uploader}</>} · <time dateTime={ev.captured_at}>{fmtDateTime(ev.captured_at)}</time>
+      </p>
+      {item.excerpt ? (
+        <blockquote className="whitespace-pre-wrap break-words border-l-4 border-line-strong bg-elevated px-4 py-3 text-body-lg text-fg-strong" aria-label="Document excerpt, shown as text">
+          “{item.excerpt}”
+        </blockquote>
+      ) : (
+        <p className="text-body text-fg-muted">No excerpt was recorded for this citation.</p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {ev.kind === "document_text" && (
+          <Button size="sm" variant="secondary" aria-expanded={showText} onClick={() => setShowText((v) => !v)}>
+            {showText ? "Hide extracted text" : "View in extracted text"}
+          </Button>
+        )}
+        {docId && (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void downloadFile(`/documents/${docId}/download`, name ?? "document").catch(() => toast("Couldn’t download the document. Try again.", "error"))}
+          >
+            Download original
+          </Button>
+        )}
+      </div>
+      {showText && (
+        <div>
+          <p className="mb-2 text-small text-fg-muted">Showing the text we extracted. Formatting, images and tables may be missing.</p>
+          <TextEvidence url={ev.content_url} title="Extracted text" />
+        </div>
+      )}
+      <p className="text-small text-fg-muted">Used by: {subject}</p>
+    </div>
+  );
+}
+
 function EvidenceView({ item, subject }: { item: EvidenceItem; subject: string }) {
   // Always fetch the record: signed content URLs expire after 15 minutes, so a fresh one is needed.
   const { data, error } = useApi<EvidenceDetail>(`/evidence/${item.id}`);
@@ -101,6 +160,7 @@ function EvidenceView({ item, subject }: { item: EvidenceItem; subject: string }
   if (missing) return <MissingEvidence />;
   if (!ev) return error ? <MissingEvidence /> : <Spinner label="Loading evidence…" />;
   const meta = (data?.metadata ?? {}) as Record<string, unknown>;
+  if (isDocument(ev.kind)) return <DocumentExcerpt ev={ev} item={item} subject={subject} meta={meta} />;
   const page = typeof meta.url === "string" ? meta.url : typeof meta.page_url === "string" ? meta.page_url : null;
   const viewport = typeof meta.viewport === "string" ? meta.viewport : null;
   return (

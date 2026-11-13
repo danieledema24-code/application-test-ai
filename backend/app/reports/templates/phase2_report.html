@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ c.title }} · {{ c.project.name }}</title>
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; color: #1D2433; font-size: 11px; line-height: 1.45; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 1px solid #E4E7EC; }
+  h3 { font-size: 12px; margin: 12px 0 4px; }
+  .muted { color: #535D70; } .band { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+  .draft { background: #FFFAEB; color: #B54708; border: 1px solid #FEDF89; }
+  .approved { background: #ECFDF3; color: #067647; border: 1px solid #ABEFC6; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0; } th, td { border: 1px solid #E4E7EC; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #F9FAFB; } .label { font-weight: 600; text-transform: capitalize; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ c.title }}</h1>
+  <p class="muted">{{ c.project.name }} · version {{ c.version }} · generated {{ c.generated_at[:16].replace('T', ' ') }} UTC</p>
+  {% if c.approval.status == 'approved' %}
+    <p><span class="band approved">Approved at {{ c.approval.gate }}</span>
+      {% if c.approval.decided_by %} by {{ c.approval.decided_by.full_name }}{% endif %}
+      {% if c.approval.decided_at %} on {{ c.approval.decided_at[:10] }}{% endif %}</p>
+  {% else %}
+    <p><span class="band draft">DRAFT: not the approved version ({{ c.approval.gate }})</span></p>
+  {% endif %}
+</header>
+
+<section><h2>Summary</h2><p>{{ c.summary }}</p>
+  <p class="muted">Summary written by {{ 'AI' if c.summary_generated_by == 'ai' else 'rules' }}.</p></section>
+
+{% if c.report_type == 'requirements_spec' %}
+<section><h2>Scope and method</h2><ul>{% for x in c.scope_and_method %}<li>{{ x }}</li>{% endfor %}</ul>
+  <h3>Classification legend</h3>
+  <table><tbody>{% for k, v in c.classification_legend.items() %}<tr><td class="label">{{ k }}</td><td>{{ v }}</td></tr>{% endfor %}</tbody></table>
+  <p>{{ c.counts.total }} requirements · {{ c.counts.by_status.approved }} approved ·
+    {{ c.counts.acceptance_criteria.approved }} approved acceptance criteria.</p>
+</section>
+{% for cat, rows in c.requirements_by_category.items() %}
+<section><h2>{{ cat.replace('_', ' ')|capitalize }}</h2>
+  {% for row in rows %}{% set r = row.requirement %}
+  <h3>{{ r.key }} {{ r.title }}</h3>
+  <p class="muted"><span class="label">{{ r.classification }}</span> · confidence {{ (r.confidence * 100)|round|int }}% · {{ r.behaviour_scope }} · {{ r.status.replace('_', ' ') }} · source {{ r.source }}</p>
+  {% if r.description %}<p>{{ r.description }}</p>{% endif %}
+  {% if r.classification_reason %}<p class="muted">Why {{ r.classification }}: {{ r.classification_reason }}</p>{% endif %}
+  <p class="muted">Evidence: {{ r.evidence_keys|join(', ') if r.evidence_keys else 'none' }}</p>
+  {% if r.assumptions %}<p class="muted">Assumptions: {{ r.assumptions|join('; ') }}</p>{% endif %}
+  {% if r.acceptance_criteria %}<table><thead><tr><th>Key</th><th>Given</th><th>When</th><th>Then</th><th>Status</th></tr></thead><tbody>
+    {% for a in r.acceptance_criteria %}{% if a.status != 'rejected' %}<tr><td>{{ a.key }}</td><td>{{ a.given }}</td><td>{{ a.when }}</td><td>{{ a.then }}</td><td>{{ a.status }}</td></tr>{% endif %}{% endfor %}
+  </tbody></table>{% endif %}
+  {% endfor %}
+</section>
+{% endfor %}
+<section><h2>Definition of Ready and Done</h2>
+  <h3>Definition of Ready</h3><ul>{% for x in c.readiness.definition_of_ready %}{% if x.status == 'active' %}<li>{{ x.key }} {{ x.text }}</li>{% endif %}{% endfor %}</ul>
+  <h3>Definition of Done</h3><ul>{% for x in c.readiness.definition_of_done %}{% if x.status == 'active' %}<li>{{ x.key }} {{ x.text }}</li>{% endif %}{% endfor %}</ul>
+</section>
+<section><h2>Open questions</h2><ul>{% for q in c.open_questions %}<li>{{ q.key }} {{ q.label }}</li>{% else %}<li>None</li>{% endfor %}</ul></section>
+<section><h2>Appendix A: Rejected requirements</h2>
+  {% if c.appendix_rejected %}<table><thead><tr><th>Key</th><th>Requirement</th><th>Reason</th></tr></thead><tbody>
+  {% for x in c.appendix_rejected %}<tr><td>{{ x.key }}</td><td>{{ x.title }}</td><td>{{ x.reason }}</td></tr>{% endfor %}
+  </tbody></table>{% else %}<p>None.</p>{% endif %}</section>
+{% if c.source_documents %}<section><h2>Source documents</h2><ul>{% for d in c.source_documents %}<li>{{ d.key }} {{ d.title }} ({{ d.filename }})</li>{% endfor %}</ul></section>{% endif %}
+<section><h2>Limitations</h2><p>{{ c.disclaimer }}</p></section>
+{% endif %}
+
+{% if c.report_type == 'test_strategy' %}{% set sec = c.strategy.sections %}
+<section><h2>Scope</h2><h3>In scope</h3><ul>{% for x in sec.scope_in %}<li>{{ x.text }}</li>{% endfor %}</ul>
+  <h3>Out of scope</h3><ul>{% for x in sec.scope_out %}<li>{{ x.text }}: {{ x.rationale }}</li>{% endfor %}</ul></section>
+<section><h2>Test levels</h2><table><tbody>{% for l in sec.test_levels %}<tr><td>{{ l.level.replace('_', ' ') }}</td><td>{{ 'In scope' if l.in_scope else 'Out of scope' }}</td><td>{{ l.rationale }}</td></tr>{% endfor %}</tbody></table></section>
+<section><h2>Test types</h2><table><tbody>{% for t in sec.test_types %}<tr><td>{{ t.type }}</td><td>{{ 'In scope' if t.in_scope else 'Out of scope' }}</td><td>{{ t.rationale }}{% if t.requires_approval %} Needs separate approval before any test runs; G4 does not authorise it.{% endif %}</td></tr>{% endfor %}</tbody></table>
+  <p class="muted">{{ c.approvals_note }}</p></section>
+<section><h2>Risk register</h2><table><thead><tr><th>Key</th><th>Risk</th><th>L</th><th>I</th><th>Score</th><th>Level</th><th>Mitigation</th><th>Status</th></tr></thead><tbody>
+  {% for r in c.risks %}<tr><td>{{ r.key }}</td><td>{{ r.title }}</td><td>{{ r.likelihood }}</td><td>{{ r.impact }}</td><td>{{ r.score }}</td><td>{{ r.level.replace('_', ' ') }}</td><td>{{ r.mitigation.test_types|join(', ') }}</td><td>{{ r.status }}</td></tr>{% endfor %}
+</tbody></table></section>
+<section><h2>Entry and exit criteria</h2><h3>Entry</h3><ul>{% for x in sec.entry_criteria %}<li>{{ x.text }}</li>{% endfor %}</ul>
+  <h3>Exit</h3><ul>{% for x in sec.exit_criteria %}<li>{{ x.text }} ({{ x.rationale }})</li>{% endfor %}</ul></section>
+<section><h2>Environments</h2><ul>{% for e in sec.environments %}<li>{{ e.name }}: {{ e.url }} · {{ e.browsers|join(', ') }} · {{ e.viewports|join(', ') }}</li>{% endfor %}</ul></section>
+<section><h2>Assumptions, constraints and limitations</h2><ul>{% for x in sec.assumptions + sec.constraints + sec.limitations %}<li>{{ x.text }}</li>{% endfor %}</ul></section>
+{% endif %}
+
+{% if c.report_type == 'test_plan' %}{% set sec = c.plan.sections %}
+<section><h2>Introduction</h2><p>{{ sec.introduction }}</p><p class="muted">Written from Test Strategy version {{ c.strategy_version }}.</p></section>
+{% set ap = c.approach_readable %}{% if ap %}
+<section><h2>Approach</h2>
+  <h3>Test levels</h3><ul>{% for x in ap.test_levels %}<li>{{ x }}</li>{% endfor %}</ul>
+  <h3>Test types</h3><ul>{% for x in ap.test_types %}<li>{{ x }}</li>{% endfor %}</ul>
+  {% if ap.techniques %}<h3>Techniques by feature</h3><ul>{% for x in ap.techniques %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  {% if ap.risk_based %}<h3>Depth by risk</h3><ul>{% for x in ap.risk_based %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+</section>{% endif %}
+<section><h2>Test items</h2><ul>{% for t in sec.test_items %}<li>{{ t.key }} {{ t.label }}</li>{% endfor %}</ul></section>
+<section><h2>Suspension and resumption</h2><h3>Suspend when</h3><ul>{% for x in sec.suspension_criteria %}<li>{{ x }}</li>{% endfor %}</ul>
+  <h3>Resume when</h3><ul>{% for x in sec.resumption_requirements %}<li>{{ x }}</li>{% endfor %}</ul></section>
+<section><h2>Deliverables</h2><table><tbody>{% for d in sec.deliverables %}<tr><td>{{ d.name }}</td><td>Phase {{ d.available_from_phase }}</td><td>{{ 'Exists' if d.exists else 'Not yet' }}</td></tr>{% endfor %}</tbody></table></section>
+<section><h2>Roles</h2><table><tbody>{% for r in sec.roles %}<tr><td>{{ r.role }}</td><td>{{ r.responsibility }}</td><td>{{ r.assignee or 'Not set' }}</td></tr>{% endfor %}</tbody></table></section>
+<section><h2>Schedule</h2><table><tbody>{% for m in sec.schedule %}<tr><td>{{ m.milestone }}</td><td>{{ m.target_date or 'Not set' }}</td></tr>{% endfor %}</tbody></table></section>
+<section><h2>Risks and contingencies</h2><ul>{% for r in sec.risks_and_contingencies %}<li>{{ r.risk.key }} {{ r.risk.label }}: {{ r.contingency }}</li>{% else %}<li>None</li>{% endfor %}</ul></section>
+{% if c.plan.rules_template_sections %}<p class="muted">Standard wording (rule-generated, edit for this project): {{ c.plan.rules_template_sections|join(', ') }}.</p>{% endif %}
+{% endif %}
+</body>
+</html>

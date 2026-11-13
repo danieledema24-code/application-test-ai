@@ -1,4 +1,4 @@
-import { Circle, CircleCheck, CircleDashed, CircleDot, CirclePause, CircleSlash, CircleX, Loader2, UserRoundCheck, type LucideIcon } from "lucide-react";
+import { Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, CirclePause, CircleSlash, CircleX, Loader2, Lock, MessageSquareWarning, RefreshCw, UserRoundCheck, type LucideIcon } from "lucide-react";
 import { humanize } from "@/lib/format";
 
 export type Tone = "green" | "red" | "amber" | "blue" | "grey" | "violet";
@@ -23,6 +23,17 @@ const TONES: Record<string, Tone> = {
   CHANGES_REQUESTED: "amber",
   STALE: "amber",
   DRAFT: "amber",
+  // Phase 2 (design P2 §2)
+  NEEDS_INFO: "amber",
+  REJECTED: "grey",
+  OUT_OF_DATE: "amber",
+  LOCKED: "grey",
+  EXTRACTING: "blue",
+  UPLOADING: "blue",
+  PENDING: "amber",
+  ACCEPTED: "green",
+  MITIGATED: "green",
+  WITHDRAWN: "grey",
   FAILED: "red",
   ERROR: "red",
   BLOCKED: "red",
@@ -101,6 +112,15 @@ const ICONS: Record<string, LucideIcon> = {
   CANCELLED: CircleSlash,
   NOT_STARTED: Circle,
   LATER: CircleDashed,
+  DRAFT: Circle,
+  NEEDS_INFO: CircleHelp,
+  REJECTED: CircleSlash,
+  OUT_OF_DATE: RefreshCw,
+  STALE: RefreshCw,
+  LOCKED: Lock,
+  EXTRACTING: Loader2,
+  UPLOADING: Loader2,
+  CHANGES_REQUESTED: MessageSquareWarning,
 };
 
 function norm(status: string): string {
@@ -137,7 +157,7 @@ export function StatusPill({
   const t = tone || statusTone(status);
   const key = status ? norm(status) : "";
   const Icon = ICONS[key];
-  const spinning = key === "RUNNING" || key === "RENDERING";
+  const spinning = key === "RUNNING" || key === "RENDERING" || key === "EXTRACTING" || key === "UPLOADING";
   return (
     <span
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES[t]} ${className}`}

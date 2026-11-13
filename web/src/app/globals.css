@@ -72,11 +72,26 @@
   --color-info-line: #b2ddff;
   --color-info-solid: #2e90fa;
 
-  /* Evidence labels (not semantic status) */
+  /* Evidence labels (not semantic status). Four provenance styles differ by icon, border style and fill
+     (design P2 §2, §5.4): observed solid ring, inferred dashed, assumed dotted, unverified hollow dashed. */
   --color-observed-fg: #1a2847;
   --color-observed-bg: #eef2f8;
+  --color-observed-line: #b9c6dd;
   --color-inferred-fg: #6b3fa0;
   --color-inferred-bg: #f6f2fc;
+  --color-inferred-line: #6b3fa0;
+  --color-assumed-fg: #0b6670; /* 6.1:1 on assumed-bg */
+  --color-assumed-bg: #ecf7f8;
+  --color-assumed-line: #0b6670;
+  --color-unverified-fg: #535d70; /* 6.6:1 on white */
+  --color-unverified-bg: #ffffff;
+  --color-unverified-line: #858fa1;
+
+  /* Diffs: strike-through / underline carry meaning too, not colour alone */
+  --color-diff-add-bg: #ecfdf3;
+  --color-diff-add-fg: #067647;
+  --color-diff-del-bg: #fef3f2;
+  --color-diff-del-fg: #b42318;
 
   /* Focus */
   --color-focus: #2f6fed;

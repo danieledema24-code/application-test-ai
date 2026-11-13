@@ -6,6 +6,7 @@ import { ApiError } from "@/lib/api";
 import { projectRoute } from "@/lib/sections";
 import { EmptyState, ErrorState, LinkButton } from "@/components/ui";
 import { EvidenceProvider } from "@/components/domain/EvidenceDrawer";
+import { AssistantDrawerProvider } from "@/components/assistant/AssistantDrawer";
 import { LifecycleProgress } from "@/components/domain/LifecycleProgress";
 import { ProjectProvider, useProject } from "@/components/workspace/ProjectContext";
 import { ProjectHeader } from "@/components/workspace/ProjectHeader";
@@ -44,9 +45,11 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
   return (
     <ProjectProvider id={id} onOpenRescan={openRescan} onOpenCancel={openCancel}>
       <EvidenceProvider>
-        <Frame section={section}>{children}</Frame>
-        <RescanDialog open={rescanOpen} onClose={() => setRescanOpen(false)} />
-        <CancelDiscoveryDialog open={cancelOpen} onClose={() => setCancelOpen(false)} />
+        <AssistantDrawerProvider projectId={id}>
+          <Frame section={section}>{children}</Frame>
+          <RescanDialog open={rescanOpen} onClose={() => setRescanOpen(false)} />
+          <CancelDiscoveryDialog open={cancelOpen} onClose={() => setCancelOpen(false)} />
+        </AssistantDrawerProvider>
       </EvidenceProvider>
     </ProjectProvider>
   );

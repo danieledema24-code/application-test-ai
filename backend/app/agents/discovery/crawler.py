@@ -33,6 +33,24 @@ _HERE = Path(__file__).parent
 EXTRACT_JS = (_HERE / "extract.js").read_text(encoding="utf-8")
 RESPONSIVE_JS = (_HERE / "responsive.js").read_text(encoding="utf-8")
 DOM_JS = (_HERE / "dom_snapshot.js").read_text(encoding="utf-8")
+# Signed-in pages often show the account name ("Signed in as …"). Before anything is captured (text, DOM, ARIA,
+# screenshot), each credential value is replaced in text nodes, attributes and input values (P2-01: values never
+# reach evidence).
+MASK_JS = """(values) => {
+  const vs = values.filter((v) => v && v.length >= 3);
+  if (!vs.length) return 0;
+  const esc = (v) => v.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+  const re = new RegExp(vs.map(esc).join('|'), 'gi');
+  let n = 0;
+  const w = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT);
+  while (w.nextNode()) { const t = w.currentNode; if (re.test(t.nodeValue)) { t.nodeValue = t.nodeValue.replace(re, '[redacted]'); n++; } re.lastIndex = 0; }
+  for (const el of document.querySelectorAll('*')) {
+    for (const a of [...el.attributes]) { if (re.test(a.value)) { el.setAttribute(a.name, a.value.replace(re, '[redacted]')); n++; } re.lastIndex = 0; }
+    if ('value' in el && typeof el.value === 'string' && re.test(el.value)) { el.value = el.value.replace(re, '[redacted]'); n++; }
+    re.lastIndex = 0;
+  }
+  return n;
+}"""
 PASSWORD_VALUES_JS = "[...document.querySelectorAll('input[type=password]')].map((i) => i.value)"  # noqa: S105 - JS source, not a secret
 MAX_QUERY_VARIANTS = 20
 SEARCH_TERM = "test"
@@ -193,6 +211,7 @@ class Crawler:
         self.external: set[str] = set()
         self.robots_skipped: list[str] = []
         self.mobile_taken = 0
+        self.mask_values: list[str] = []  # credential values hidden on every captured page (signed-in pass)
 
     # ------------------------------------------------------------------ frontier helpers
 
@@ -361,6 +380,26 @@ class Crawler:
             return
         fr.seen.add(final_key)
         status = resp.status if resp else None
+        await self.capture(page, fr, item, final_url, status, redirected_from, load_ms, console, network)
+
+    async def capture(
+        self,
+        page: Page,
+        fr: Frontier,
+        item: FrontierItem,
+        final_url: str,
+        status: int | None,
+        redirected_from: str | None,
+        load_ms: int,
+        console: list[dict[str, Any]],
+        network: list[dict[str, Any]],
+    ) -> None:
+        """Records the page as currently loaded in `page` (also used for the post-sign-in page, which is the
+        response to the sign-in POST and can't be fetched again with GET)."""
+        final_key = canonical(final_url)
+        if self.mask_values:
+            with contextlib.suppress(Error):
+                await page.evaluate(MASK_JS, self.mask_values)
         if status is not None and status >= 400:
             shot = await _screenshot(page)
             title = ""

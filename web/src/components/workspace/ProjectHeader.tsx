@@ -1,10 +1,12 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, MoreHorizontal } from "lucide-react";
+import { Bot, ExternalLink, MoreHorizontal } from "lucide-react";
 import { fmtDate } from "@/lib/format";
 import { activeStage, gateReview, stageStatusLabel, waitingGateStage } from "@/lib/lifecycle";
 import { Button, StatusPill, useToast } from "@/components/ui";
+import { useAssistantDrawer } from "@/components/assistant/AssistantDrawer";
 import { useProject } from "./ProjectContext";
 
 /** The project's overall status, from the live workflow. */
@@ -16,7 +18,10 @@ function overallStatus(p: ReturnType<typeof useProject>) {
   if (waiting) return { status: "awaiting_approval", label: gateReview(waiting) === "required" ? "Waiting for your approval" : "Ready for your review" };
   const active = activeStage(wf);
   if (wf.project_status === "paused" || active?.status === "paused") return { status: "paused", label: "Discovery paused" };
-  if (active) return { status: active.status, label: `${active.key === "discovery_report" ? "Report" : "Discovery"} ${stageStatusLabel(active.status).toLowerCase()}` };
+  if (active) {
+    const name = active.key === "discovery_report" ? "Report" : active.key === "discovery" ? "Discovery" : active.title;
+    return { status: active.status, label: `${name} ${stageStatusLabel(active.status).toLowerCase()}` };
+  }
   const failed = wf.stages.find((s) => s.status === "failed");
   if (failed) return { status: "failed", label: `${failed.title} failed` };
   const disc = p.discovery;
@@ -28,6 +33,8 @@ function overallStatus(p: ReturnType<typeof useProject>) {
 function MoreMenu() {
   const p = useProject();
   const toast = useToast();
+  const router = useRouter();
+  const assistant = useAssistantDrawer();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -56,8 +63,14 @@ function MoreMenu() {
               Cancel analysis
             </button>
           )}
+          <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), router.push(`/projects/${p.id}/settings`))}>
+            Project settings
+          </button>
           <button role="menuitem" type="button" className={item} disabled={running} onClick={() => (setOpen(false), p.openRescan())}>
             Re-scan site{running ? " (after the current scan)" : ""}
+          </button>
+          <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), assistant.open())}>
+            Ask AI QA Analyst
           </button>
           <button
             role="menuitem"
@@ -82,6 +95,7 @@ function MoreMenu() {
 /** Project header shown on every project section (design spec §3.3). */
 export function ProjectHeader({ asHeading }: { asHeading: boolean }) {
   const p = useProject();
+  const assistant = useAssistantDrawer();
   const project = p.project;
   const st = overallStatus(p);
   const active = activeStage(p.workflow);
@@ -126,6 +140,11 @@ export function ProjectHeader({ asHeading }: { asHeading: boolean }) {
             {p.pausing ? "Pausing…" : "Pause analysis"}
           </Button>
         ) : null}
+        {/* Secondary entry point to the assistant (design P2 §11.6); below md it lives in the ⋯ menu. */}
+        <Button variant="secondary" aria-label="Ask AI QA Analyst" onClick={() => assistant.open()} className="hidden px-2.5 md:inline-flex xl:px-4">
+          <Bot className="h-5 w-5" aria-hidden />
+          <span className="hidden xl:inline">Ask AI QA Analyst</span>
+        </Button>
         <MoreMenu />
       </div>
     </div>

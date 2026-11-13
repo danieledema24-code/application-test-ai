@@ -92,6 +92,45 @@ export function accessGapRows(scan: Pick<ScanDetail, "access_gaps">): AccessGapR
   }));
 }
 
+// ---- Sign-in with test credentials (design P2 §4.3) ----------------------------
+
+const SIGN_IN_REASONS: Record<string, string> = {
+  rejected: "the site rejected the username or password",
+  form_not_found: "no sign-in form was found",
+  captcha: "extra verification required (two-step code or CAPTCHA)",
+  mfa_required: "extra verification required (two-step code or CAPTCHA)",
+  timeout: "still on the sign-in page after submitting",
+  blocked: "the site blocked the sign-in attempt",
+};
+
+export type SignIn = { state: "succeeded"; pages: number } | { state: "failed"; reason: string } | null;
+
+/** What happened with sign-in in this scan; null when no credentials were used. */
+export function scanSignIn(scan: Pick<ScanDetail, "auth">): SignIn {
+  const a = scan.auth;
+  if (!a?.attempted) return null;
+  if (a.result === "succeeded") return { state: "succeeded", pages: a.authenticated_pages };
+  if (a.result !== "failed") return null;
+  const code = a.reason_code ?? "";
+  return { state: "failed", reason: SIGN_IN_REASONS[code] ?? "the site didn’t accept the sign-in" };
+}
+
+/** Access-gap rows about a failed sign-in always add "We tried once…" (design §4.3). */
+export function isSignInGap(reason: string): boolean {
+  return /^sign-in failed|^signed out during/i.test(reason);
+}
+
+/** Access filter for pages (design P2 §4.3): signed-in pages are their own group. */
+export type AccessFilter = "all" | "public" | "auth" | "signed_in";
+
+export function matchesAccess(p: Pick<PageSummary, "requires_auth" | "auth_context">, f: AccessFilter): boolean {
+  const signedIn = p.auth_context === "authenticated";
+  if (f === "signed_in") return signedIn;
+  if (f === "auth") return !signedIn && p.requires_auth;
+  if (f === "public") return !signedIn && !p.requires_auth;
+  return true;
+}
+
 export type FlatNode = { key: string; node: SitemapNode; level: number; parentKey: string | null; hasChildren: boolean; label: string; path: string };
 
 export function nodePath(n: SitemapNode): string {
@@ -114,8 +153,12 @@ export function flattenSitemap(root: SitemapNode | null | undefined, expanded: S
   return out;
 }
 
-/** Status for a sitemap node: "Visited", "Needs credentials", "Couldn't load (HTTP 500)", "Not visited". */
+/**
+ * Status for a sitemap node: "Signed in", "Visited", "Needs credentials", "Couldn't load (HTTP 500)", "Not visited".
+ * A page visited with the test-account session is "Signed in", even if it would need credentials anonymously.
+ */
 export function nodeStatus(n: SitemapNode): { label: string; tone: "green" | "amber" | "red" | "grey" } {
+  if (n.auth_context === "authenticated" && !(n.http_status && n.http_status >= 400)) return { label: "Signed in", tone: "green" };
   if (n.requires_auth) return { label: "Needs credentials", tone: "amber" };
   if (n.http_status && n.http_status >= 400) return { label: `Couldn’t load (HTTP ${n.http_status})`, tone: "red" };
   const s = (n.status ?? "").toLowerCase();

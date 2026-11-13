@@ -12,6 +12,14 @@ import { useOnline } from "@/lib/useOnline";
 import { Button, Callout, Card, CardBody, CardHeader, Disclosure, InlineError, LinkButton, PageHeader, Spinner, TextField, useToast } from "@/components/ui";
 import { AuthorisationConfirm, attestationStatement } from "@/components/domain/AuthorisationConfirm";
 import { ScanSettingsFields, toForm, validateScanSettings, type ScanSettingsErrors, type ScanSettingsForm } from "@/components/domain/ScanSettingsFields";
+import {
+  CredentialsFields,
+  EMPTY_CREDENTIALS,
+  validateCredentials,
+  type CredentialsErrors,
+  type CredentialsFieldsHandle,
+  type CredentialsForm,
+} from "@/components/domain/Credentials";
 
 function NewProject() {
   const router = useRouter();
@@ -36,6 +44,9 @@ function NewProject() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [serverUrlError, setServerUrlError] = useState<string | null>(null);
   const [duplicate, setDuplicate] = useState<DuplicateProject | null>(null);
+  const [creds, setCreds] = useState<CredentialsForm>(EMPTY_CREDENTIALS);
+  const [credErrors, setCredErrors] = useState<CredentialsErrors>({});
+  const credRef = useRef<CredentialsFieldsHandle>(null);
 
   const urlRef = useRef<HTMLInputElement>(null);
   const authRef = useRef<HTMLInputElement>(null);
@@ -120,11 +131,22 @@ function NewProject() {
     }
 
     const host = v?.scopeHost || client.host;
+    // Credentials are optional: all three or none (P1 S16), on the project's host (S17).
+    const ce = validateCredentials(creds, [host], false);
+    setCredErrors(ce);
+    if (Object.keys(ce).length) {
+      setSubmitting(false);
+      setSettingsOpen(true);
+      setTimeout(() => credRef.current?.focusFirstError(ce), 0);
+      return;
+    }
+    const withCreds = !!creds.login_url.trim();
     const body: ProjectCreate = {
       url: v?.finalUrl || client.url,
       name: settings.name.trim() || host,
       authorisation: { attested: true, statement: attestationStatement(host) },
-      scan,
+      scan: withCreds ? { ...scan, use_credentials: true } : scan,
+      ...(withCreds ? { credentials: { login_url: creds.login_url.trim(), username: creds.username, password: creds.password } } : {}),
       start: true,
       ...(confirmDuplicate ? { confirmDuplicate: true } : {}),
     };
@@ -271,6 +293,15 @@ function NewProject() {
                   errors={settingsErrors}
                   showName
                   refs={{ name: nameRef, max_pages: pagesRef, max_depth: depthRef }}
+                  signIn={
+                    <div className="space-y-3">
+                      <p className="text-small text-fg">
+                        Optional. With a dedicated test account, discovery submits the sign-in form only and covers signed-in pages. Leave all three empty to cover public pages only.
+                      </p>
+                      <CredentialsFields ref={credRef} value={creds} onChange={setCreds} errors={credErrors} placeholderHost={scopeHost || undefined} />
+                      <p className="text-small text-fg-muted">Saved encrypted and used only by the discovery browser. You won’t be able to see these values again.</p>
+                    </div>
+                  }
                 />
               </div>
             </Disclosure>

@@ -48,20 +48,31 @@ export async function signIn(page: Page, account: Account): Promise<boolean> {
 }
 
 /**
- * Signs in with the shared e2e account, registering it once if it doesn't exist yet (or no longer
- * works, e.g. after a database reset). Use this unless the test is about sign-up itself.
+ * Signs in with the shared e2e account, registering it only when no account file exists yet. If the saved
+ * account can't sign in (slow server, rate limit, database reset), this fails loudly instead of registering a
+ * new account: that used to overwrite the file and orphan every project made with the old one (BUG-P2-23).
+ * After a database reset, delete playwright/.auth/e2e-account.json yourself and run again.
  */
 export async function useSharedAccount(page: Page): Promise<Account> {
-  let saved: Account | null = null;
+  let raw: string | null = null;
   try {
-    saved = JSON.parse(await readFile(ACCOUNT_FILE, "utf8")) as Account;
+    raw = await readFile(ACCOUNT_FILE, "utf8");
   } catch {
-    saved = null;
+    raw = null;
   }
-  if (saved && (await signIn(page, saved))) return saved;
+  if (raw !== null) {
+    const saved = JSON.parse(raw) as Account;
+    if (await signIn(page, saved)) return saved;
+    throw new Error(
+      `Couldn't sign in with the shared e2e account (${saved.email}) from ${ACCOUNT_FILE}: the dashboard didn't open within 10 s. ` +
+        "No new account was registered and the file was left as it is. Check the API is up and not rate limiting; " +
+        "if the database was reset, delete the file and run again.",
+    );
+  }
   const account = await register(page, { name: "Erin Shared", org: "E2E Shared Org", email: uniqueEmail("shared") });
   await mkdir(path.dirname(ACCOUNT_FILE), { recursive: true });
-  await writeFile(ACCOUNT_FILE, JSON.stringify(account));
+  // "wx": never replace a file another worker wrote in the meantime.
+  await writeFile(ACCOUNT_FILE, JSON.stringify(account), { flag: "wx" });
   return account;
 }
 

@@ -77,6 +77,8 @@ export type MockState = {
   responsiveDiffs: boolean;
   /** POST /auth/register answers 422 with this field error (raw validator text, as the backend sends it). */
   registerFieldError?: { field: string; message: string };
+  /** Phase 2: the scan signed in with saved test credentials ("failed" = the site rejected them). */
+  signIn?: "failed" | "succeeded";
 };
 
 export function newState(over: Partial<MockState> = {}): MockState {
@@ -201,7 +203,8 @@ function scan(s: MockState): ScanDetail {
     completeness: { score: 70, rating: "partial", reasons: ["Signed-in area not observed"] },
     auth_boundaries: [{ url: "https://acme.com/account", kind: "redirect_to_login", evidence_refs: [{ evidence_id: "ev3" }] }],
     // As the backend reports them: the sign-in boundary is one of the gaps (not added again by the UI).
-    access_gaps: running ? [] : ACCESS_GAPS,
+    access_gaps: running ? [] : s.signIn === "failed" ? [...ACCESS_GAPS, { area: "https://acme.com/login", reason: "Sign-in failed: the site rejected the username or password", description: "https://acme.com/login", suggestion: "Replace credentials and re-scan", evidence_refs: [] }] : ACCESS_GAPS,
+    ...(s.signIn ? { auth: { attempted: true, result: s.signIn, reason_code: s.signIn === "failed" ? "rejected" : null, login_url: "https://acme.com/login", authenticated_pages: s.signIn === "failed" ? 0 : 4 } } : {}),
     limitations: ["Public pages only."],
     blocked_requests: [],
     current: running ? { url: "https://acme.com/contact", title: "Contact us" } : null,
@@ -426,9 +429,11 @@ export async function mockApi(page: Page, s: MockState) {
         );
     }
     if (path === "/scans/scan1") return json(route, 200, scan(s));
-    if (path === "/scans/scan1/pages") return json(route, 200, { items: PAGES, next_cursor: null });
+    // After a successful sign-in the account page was visited with the session (the sitemap node still says requires_auth).
+    const signedInPages = s.signIn === "succeeded" ? PAGES.map((x) => (x.id === "pg3" ? { ...x, http_status: 200, auth_context: "authenticated" as const } : { ...x, auth_context: "anonymous" as const })) : PAGES;
+    if (path === "/scans/scan1/pages") return json(route, 200, { items: signedInPages, next_cursor: null });
     if (path === "/scans/scan1/sitemap")
-      return json(route, 200, { url: "https://acme.com/", path: "/", title: "Home", page_id: "pg1", children: [{ path: "/contact", title: "Contact us", page_id: "pg2" }, { path: "/account", title: "My account", requires_auth: true }] });
+      return json(route, 200, { url: "https://acme.com/", path: "/", title: "Home", page_id: "pg1", children: [{ path: "/contact", title: "Contact us", page_id: "pg2" }, { path: "/account", title: "My account", requires_auth: true, ...(s.signIn === "succeeded" ? { page_id: "pg3" } : {}) }] });
     if (path === "/scans/scan1/features") return json(route, 200, FEATURES);
     if (path === "/scans/scan1/journeys") return json(route, 200, JOURNEYS);
     const pg = path.match(/^\/pages\/([^/]+)$/);

@@ -19,6 +19,7 @@ export function Drawer({
   children,
   footer,
   wide = false,
+  narrow = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -28,6 +29,8 @@ export function Drawer({
   footer?: React.ReactNode;
   /** 720px instead of 560px at md+. */
   wide?: boolean;
+  /** 480px at md+ (assistant side panel). */
+  narrow?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -84,7 +87,7 @@ export function Drawer({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`relative flex h-full w-full flex-col bg-surface shadow-lg ring-1 ring-line ${wide ? "md:max-w-[720px]" : "md:max-w-[560px]"} md:rounded-l-xl`}
+        className={`relative flex h-full w-full flex-col bg-surface shadow-lg ring-1 ring-line ${wide ? "md:max-w-[720px]" : narrow ? "md:max-w-[480px]" : "md:max-w-[560px]"} md:rounded-l-xl`}
       >
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">
