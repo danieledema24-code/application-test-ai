@@ -1,4 +1,5 @@
-"""Phase 2 reports (P2-09): Requirements Specification, Test Strategy and Test Plan.
+"""Phase 2 reports (P2-09): Requirements Specification, Test Strategy and Test Plan; Phase 3 (P3-08) adds the
+Test Case Specification and RTM on the same pipeline (content in `phase3_reports`, plus a CSV file).
 
 Content is computed from rows (same numbers as the API). A report is "approved" only when the latest approval of
 its gate has exactly the snapshot the report was generated from. Rendered to JSON, HTML (Jinja2 autoescape) and PDF
@@ -31,16 +32,23 @@ TITLES = {
     ReportType.requirements_spec: "Requirements Specification",
     ReportType.test_strategy: "Test Strategy",
     ReportType.test_plan: "Test Plan",
+    ReportType.test_case_spec: "Test Case Specification",
+    ReportType.rtm: "Requirements Traceability Matrix",
 }
 REPORT_STAGE = {
     ReportType.requirements_spec: StageKey.requirements,
     ReportType.test_strategy: StageKey.test_strategy,
     ReportType.test_plan: StageKey.test_strategy,
+    ReportType.test_case_spec: StageKey.test_design,
+    ReportType.rtm: StageKey.traceability,
 }
+PHASE3 = frozenset({ReportType.test_case_spec, ReportType.rtm})
 GATE_OF = {
     ReportType.requirements_spec: GateKey.G3,
     ReportType.test_strategy: GateKey.G4,
     ReportType.test_plan: GateKey.G4,
+    ReportType.test_case_spec: GateKey.G5,
+    ReportType.rtm: GateKey.G5,
 }
 REQ_DISCLAIMER = "Provisional requirements derived from the observable user interface; backend behaviour not verified."
 APPROVALS_NOTE = "Security, performance and load testing need separate approval; G4 does not authorise them."
@@ -97,6 +105,10 @@ async def build(ctx: AppContext, s: AsyncSession, project: Project, report: QaRe
         return {**base, **await _requirements(ctx, s, project)}
     if report.report_type == ReportType.test_strategy:
         return {**base, **await _strategy(s, project)}
+    if report.report_type in PHASE3:
+        from app.agents.reporting import phase3_reports
+
+        return {**base, **await phase3_reports.build(ctx, s, project, report.report_type)}
     return {**base, **await _plan(s, project)}
 
 
@@ -312,11 +324,16 @@ async def render(ctx: AppContext, s: AsyncSession, report: QaReport) -> QaReport
         pdf = await render_pdf(ctx, html_doc, content)
         files = []
         slug = report.report_type.value.replace("_", "-")
-        for fmt, data, mime in (
+        outputs = [
             ("json", json.dumps(content, indent=2, default=str).encode("utf-8"), "application/json"),
             ("html", html_doc.encode("utf-8"), "text/html; charset=utf-8"),
             ("pdf", pdf, "application/pdf"),
-        ):
+        ]
+        if report.report_type in PHASE3:
+            from app.agents.reporting.phase3_reports import to_csv
+
+            outputs.append(("csv", to_csv(content), "text/csv; charset=utf-8"))
+        for fmt, data, mime in outputs:
             name = f"{slug}-v{report.version}-{content['generated_at'][:10]}.{fmt}"
             ev = await write_evidence(
                 s,
@@ -371,6 +388,10 @@ async def has_source(s: AsyncSession, project_id: Any, report_type: ReportType) 
     if report_type == ReportType.test_strategy:
         _run, strat = await gates.current_strategy(s, project_id)
         return strat is not None
+    if report_type in PHASE3:
+        from app.agents.reporting.phase3_reports import has_design
+
+        return await has_design(s, project_id)
     from app.services.plan import current_plan
 
     return await current_plan(s, project_id) is not None
@@ -387,6 +408,11 @@ async def create(
     if report_type == ReportType.requirements_spec:
         run, _ = await gates.current_requirements(s, project.id)
         stage_run_id = run.id if run else None
+    elif report_type in PHASE3:
+        from app.services.testdesign import current_run
+
+        drun = await current_run(s, project.id)
+        stage_run_id = drun.id if drun else None
     else:
         run2, _strat = await gates.current_strategy(s, project.id)
         stage_run_id = run2.id if run2 else None

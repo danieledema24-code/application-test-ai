@@ -23,6 +23,7 @@ SUPERSEDED = {
     StageKey.requirements: "The requirement set was regenerated; reload to continue",
     StageKey.readiness_criteria: "Definition of Ready/Done was regenerated; reload to continue",
     StageKey.test_strategy: "The test strategy was regenerated; reload to continue",
+    StageKey.test_design: "The test design was regenerated; reload to continue",
 }
 
 

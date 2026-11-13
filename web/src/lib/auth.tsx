@@ -14,6 +14,8 @@ type AuthState = {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (data: RegisterInput) => Promise<void>;
+  /** Accepts an invitation (P3-07): creates the account and signs in. */
+  acceptInvite: (token: string, data: { full_name: string; password: string }) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -45,8 +47,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const accept = useCallback((res: AuthResponse) => {
     setToken(res.token);
-    // Owners and admins can approve gates by default (contract: Roles); /auth/me refines it.
-    setMe({ user: res.user, organisation: res.organisation, role: res.role, can_approve: res.role === "owner" || res.role === "admin" });
+    // Approval rights come from the server, never from the role (design P3 §17.4, check 74); /auth/me confirms them.
+    setMe({ user: res.user, organisation: res.organisation, role: res.role, can_approve: res.can_approve ?? false });
     void api<Me>("/auth/me")
       .then(setMe)
       .catch(() => undefined);
@@ -62,6 +64,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(
     async (data: RegisterInput) => {
       accept(await api<AuthResponse>("/auth/register", { body: data, noAuthRedirect: true }));
+    },
+    [accept],
+  );
+
+  const acceptInvite = useCallback(
+    async (token: string, data: { full_name: string; password: string }) => {
+      accept(await api<AuthResponse>(`/invitations/${encodeURIComponent(token)}/accept`, { body: data, noAuthRedirect: true }));
     },
     [accept],
   );
@@ -87,10 +96,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading,
       login,
       register,
+      acceptInvite,
       logout,
       refresh,
     }),
-    [me, loading, login, register, logout, refresh],
+    [me, loading, login, register, acceptInvite, logout, refresh],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -41,6 +41,13 @@ Intent = Literal[
     "propose_negative_criteria",
     "propose_risk_reassessment",
     "propose_regenerate",
+    "list_test_cases",
+    "explain_test_case",
+    "traceability_for",
+    "propose_negative_cases",
+    "propose_regression_suite",
+    "propose_test_case_update",
+    "propose_missing_test_cases",
     "propose_requirement_update",
     "propose_missing_requirements",
     "propose_risk_update",
@@ -400,7 +407,9 @@ async def get_proposal(proposal_id: uuid.UUID, s: ScopedSession, p: CurrentPrinc
     return await _proposal_out(s, await _proposal(s, proposal_id, p))
 
 
-async def _apply(ctx: Ctx, s: ScopedSession, p: Principal, pr: AssistantProposal) -> list[dict[str, Any]]:
+async def _apply(
+    ctx: Ctx, s: ScopedSession, p: Principal, pr: AssistantProposal, after: list[Any]
+) -> list[dict[str, Any]]:
     from app.api.routers import requirements as req_api
     from app.api.routers import strategy as strat_api
     from app.api.routers import workflow as wf_api
@@ -453,6 +462,10 @@ async def _apply(ctx: Ctx, s: ScopedSession, p: Principal, pr: AssistantProposal
                 pr.project_id, api.StageRunRequest(reason=payload.get("reason") or reason), ctx, s, p, stage=stage
             )
         applied.append({"type": "stage", "id": None, "key": stage, "label": stage, "path": None})
+    elif pr.kind in ("add_test_cases", "set_suite"):
+        from app.services import assistant_p3
+
+        applied += await assistant_p3.apply(ctx, s, p, pr, after)
     else:
         raise ValidationFailed("This proposal can't be applied")
     return applied
@@ -467,10 +480,11 @@ async def accept_proposal(
         raise Forbidden("Only the person who asked for this proposal can accept it")
     if pr.status != ProposalStatus.pending:
         raise Conflict(f"This proposal is already {pr.status.value}")
-    pid, key = pr.id, pr.key
+    pid, key, project_id = pr.id, pr.key, pr.project_id
     token = c.PROPOSAL.set((pid, key))
+    after: list[Any] = []  # gate reopen orchestrators to emit once committed
     try:
-        applied = await _apply(ctx, s, p, pr)
+        applied = await _apply(ctx, s, p, pr, after)
     except Conflict:
         await s.rollback()
         pr = await _proposal(s, pid, p)
@@ -484,6 +498,10 @@ async def accept_proposal(
         pr.status = ProposalStatus.failed
         pr.result = {"applied": [], "error": exc.message}
         await s.commit()
+        raise
+    except Exception:
+        # Unexpected failure: nothing is applied and the proposal stays pending so it can be retried.
+        await s.rollback()
         raise
     finally:
         c.PROPOSAL.reset(token)
@@ -504,8 +522,10 @@ async def accept_proposal(
         metadata={"key": key, "kind": pr.kind},
     )
     await s.commit()
+    for orch in after:
+        await c.after_commit(orch, p.scope, project_id)
     for ref in applied:
-        if ref.get("type") in ("requirement", "acceptance_criterion", "risk"):
+        if ref.get("type") in ("requirement", "acceptance_criterion", "risk", "test_case", "test_data"):
             await ctx.events.emit(
                 org_id=pr.organisation_id,
                 project_id=pr.project_id,

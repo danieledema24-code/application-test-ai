@@ -8,9 +8,11 @@ import { ApiError } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { Page, Proposal, Risk, ScanDetail, SecretMeta } from "@/lib/contract";
 import { fmtDateTime } from "@/lib/format";
-import { activeStage, gateReview } from "@/lib/lifecycle";
+import { activeStage, gateReview, waitingLabel } from "@/lib/lifecycle";
 import { LEVEL_TEXT } from "@/lib/strategy";
 import { attentionRows } from "@/lib/attention";
+import { useAuth } from "@/lib/auth";
+import { useCaseStats, useCoverage, useGaps } from "@/components/testcases/hooks";
 import { Card, CardBody, CardHeader, Skeleton } from "@/components/ui";
 import { gateApproved, requirementsStages, useAllRequirements, useAllRisks } from "@/components/requirements/hooks";
 import { lastSignInText } from "@/components/domain/Credentials";
@@ -108,9 +110,11 @@ function Scope() {
 
 function Attention() {
   const p = useProject();
+  const { canApprove } = useAuth();
   const [all, setAll] = useState(false);
   const stages = requirementsStages(p.workflow);
   const reqs = useAllRequirements(p.id, null, !!stages.req?.current_version);
+  const caseStats = useCaseStats(p.id, !!stages.design?.current_version);
   const proposals = useApi<Page<Proposal>>(`/projects/${p.id}/assistant/proposals`, { status: "pending", limit: 100 }, { shouldRetryOnError: false });
   const secrets = useApi<SecretMeta[]>(`/projects/${p.id}/secrets`, undefined, { shouldRetryOnError: false });
   const cred = secrets.data?.find((x) => x.name === "scan_credentials" || x.kind === "login_credentials");
@@ -121,6 +125,8 @@ function Attention() {
     conflicts: (reqs.data ?? []).filter((r) => r.conflict && r.status !== "rejected").length,
     proposals: proposals.data?.items.length ?? 0,
     drafts: (reqs.data ?? []).filter((r) => r.status === "draft").length,
+    openQuestions: caseStats.data?.open_questions ?? 0,
+    canApprove,
   });
   const shown = all ? rows : rows.slice(0, 5);
   return (
@@ -151,10 +157,10 @@ function Attention() {
   );
 }
 
-function gateLine(st: ReturnType<typeof requirementsStages>["g3"], n: number): string | null {
+function gateLine(st: ReturnType<typeof requirementsStages>["g3"], n: number, canApprove = true): string | null {
   if (!st?.gate) return null;
   const review = gateReview(st);
-  if (review) return `Gate ${n} ${review === "required" ? "waiting for your approval" : "ready for review"}`;
+  if (review) return `Gate ${n} ${review === "required" ? waitingLabel(canApprove).toLowerCase() : "ready for review"}`;
   if (gateApproved(st)) return `Gate ${n} approved`;
   if (st.status === "changes_requested") return `Gate ${n}: changes requested`;
   return null;
@@ -162,6 +168,7 @@ function gateLine(st: ReturnType<typeof requirementsStages>["g3"], n: number): s
 
 function RequirementsGlance() {
   const p = useProject();
+  const { canApprove } = useAuth();
   const stages = requirementsStages(p.workflow);
   const reqs = useAllRequirements(p.id, null, !!stages.req?.current_version);
   const live = (reqs.data ?? []).filter((r) => r.status !== "rejected");
@@ -178,7 +185,7 @@ function RequirementsGlance() {
             <p>
               {live.length} requirements · {live.filter((r) => r.status === "approved").length} approved · {live.filter((r) => r.classification === "assumed" || r.classification === "unverified").length} Assumed or Unverified
             </p>
-            {gateLine(stages.g3, 3) && <p className="text-small text-fg-muted">{gateLine(stages.g3, 3)}</p>}
+            {gateLine(stages.g3, 3, canApprove) && <p className="text-small text-fg-muted">{gateLine(stages.g3, 3, canApprove)}</p>}
           </>
         )}
         <Link href={`/projects/${p.id}/requirements`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
@@ -191,6 +198,7 @@ function RequirementsGlance() {
 
 function StrategyGlance() {
   const p = useProject();
+  const { canApprove } = useAuth();
   const stages = requirementsStages(p.workflow);
   const has = !!stages.strategy?.current_version;
   const risks = useAllRisks(p.id, has);
@@ -210,11 +218,73 @@ function StrategyGlance() {
               {risks.data.length} risks · {count("very_high")} {LEVEL_TEXT.very_high} · {count("high")} {LEVEL_TEXT.high}
             </p>
             {strategy.data && <p>{strategy.data.sections.test_types.filter((t) => t.in_scope).length} test types in scope</p>}
-            {gateLine(stages.g4, 4) && <p className="text-small text-fg-muted">{gateLine(stages.g4, 4)}</p>}
+            {gateLine(stages.g4, 4, canApprove) && <p className="text-small text-fg-muted">{gateLine(stages.g4, 4, canApprove)}</p>}
           </>
         )}
         <Link href={`/projects/${p.id}/test-strategy`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
           Open Test Strategy <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
+function TestCasesGlance() {
+  const p = useProject();
+  const { canApprove } = useAuth();
+  const stages = requirementsStages(p.workflow);
+  const has = !!stages.design?.current_version;
+  const stats = useCaseStats(p.id, has);
+  const d = stats.data;
+  const oq = d?.open_questions ?? 0;
+  return (
+    <Card>
+      <CardHeader title="Test cases at a glance" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!has ? (
+          <p className="text-fg-muted">Starts after Gate 4.</p>
+        ) : !d ? (
+          stats.error ? <p className="text-fg-muted">Couldn’t load the test case counts.</p> : <Skeleton className="h-10" />
+        ) : (
+          <>
+            <p>
+              {d.total} case{d.total === 1 ? "" : "s"} · {d.by_status?.approved ?? 0} approved · {oq} open question{oq === 1 ? "" : "s"}
+            </p>
+            {gateLine(stages.g5, 5, canApprove) && <p className="text-small text-fg-muted">{gateLine(stages.g5, 5, canApprove)}</p>}
+          </>
+        )}
+        <Link href={`/projects/${p.id}/test-cases`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Test Cases <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
+function TraceabilityGlance() {
+  const p = useProject();
+  const stages = requirementsStages(p.workflow);
+  const has = !!stages.design?.current_version;
+  const coverage = useCoverage(p.id, "current", has);
+  const gaps = useGaps(p.id, "current", has);
+  const c = coverage.data;
+  const risks = gaps.data?.untested_high_risk?.open?.length;
+  return (
+    <Card>
+      <CardHeader title="Traceability at a glance" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!has ? (
+          <p className="text-fg-muted">Starts after Gate 4.</p>
+        ) : !c ? (
+          coverage.error ? <p className="text-fg-muted">Couldn’t load coverage.</p> : <Skeleton className="h-10" />
+        ) : (
+          <p>
+            {c.requirements.with_approved_case} of {c.requirements.approved} approved requirements covered
+            {risks !== undefined ? ` · ${risks} untested high risk${risks === 1 ? "" : "s"}` : ""}
+          </p>
+        )}
+        <Link href={`/projects/${p.id}/traceability`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Traceability <ArrowRight className="h-4 w-4" aria-hidden />
         </Link>
       </CardBody>
     </Card>
@@ -230,6 +300,7 @@ export default function ProjectOverviewPage() {
     discovery: reviewHref,
     requirements: `/projects/${p.id}/requirements?view=review`,
     strategy: `/projects/${p.id}/test-strategy?view=review`,
+    "test-design": `/projects/${p.id}/test-cases?view=review`,
   };
   useEffect(() => {
     if (p.project) document.title = `${p.project.name} · QA Analyst`;
@@ -244,7 +315,11 @@ export default function ProjectOverviewPage() {
               variant="full"
               workflow={p.workflow}
               projectId={p.id}
-              onRerun={(id) => (id === "discovery" ? p.openRescan() : router.push(id === "requirements" ? `/projects/${p.id}/requirements` : `/projects/${p.id}/test-strategy`))}
+              onRerun={(id) =>
+                id === "discovery"
+                  ? p.openRescan()
+                  : router.push(id === "requirements" ? `/projects/${p.id}/requirements` : id === "test-design" ? `/projects/${p.id}/test-cases` : `/projects/${p.id}/test-strategy`)
+              }
               onReviewGate={(id) => router.push(stageHref[id] ?? reviewHref)}
             />
           ) : (
@@ -269,6 +344,8 @@ export default function ProjectOverviewPage() {
           <Glance projectId={p.id} running={running} />
           <RequirementsGlance />
           <StrategyGlance />
+          <TestCasesGlance />
+          <TraceabilityGlance />
           <Scope />
         </div>
       </div>

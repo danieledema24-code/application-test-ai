@@ -86,8 +86,8 @@ export async function sendAssistantMessage(
   throw new ApiError(502, "ai_error", "The answer stopped before it finished. Try again.");
 }
 
-/** ID-like tokens the citation guard knows (roadmap P2-10). */
-export const CITATION_TOKEN = /\b(?:REQ|AC|FEAT|JRN|EV|RISK|DOR|DOD|DOC|SCAN|PROP|TC|RUN|DEF)-\d{2,}\b|\bG[1-9]\b/g;
+/** ID-like tokens the citation guard knows (roadmap P2-10; P3-06 adds TCOND- and TD-). */
+export const CITATION_TOKEN = /\b(?:REQ|AC|FEAT|JRN|EV|RISK|DOR|DOD|DOC|SCAN|PROP|TCOND|TC|TD|RUN|DEF)-\d{2,}\b|\bG[1-9]\b/g;
 
 export type ContentPart = { kind: "text"; text: string } | { kind: "token"; text: string };
 

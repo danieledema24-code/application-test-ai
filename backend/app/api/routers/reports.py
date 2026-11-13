@@ -92,7 +92,10 @@ async def create_report(
         raise ValidationFailed(
             "Unknown report type",
             details=[
-                {"field": "report_type", "message": "Use discovery, requirements_spec, test_strategy or test_plan."}
+                {
+                    "field": "report_type",
+                    "message": "Use discovery, requirements_spec, test_strategy, test_plan, test_case_spec or rtm.",
+                }
             ],
         )
     req = api.ReportCreate.model_validate(body)
@@ -100,11 +103,14 @@ async def create_report(
     if req.report_type != "discovery":
         rtype = ReportType(req.report_type)
         if not await phase2_reports.has_source(s, project_id, rtype):
+            if rtype in phase2_reports.PHASE3:
+                raise GateBlocked("Design test cases first")
             raise GateBlocked(f"Generate the {phase2_reports.TITLES[rtype].lower()} first")
         if req.stage_run_version is not None:
-            current = (await phase2_reports.stamp(s, project_id, rtype)).get(
-                "requirements" if rtype == ReportType.requirements_spec else "test_strategy"
+            source_key = {ReportType.requirements_spec: "requirements"}.get(
+                rtype, "test_design" if rtype in phase2_reports.PHASE3 else "test_strategy"
             )
+            current = (await phase2_reports.stamp(s, project_id, rtype)).get(source_key)
             if current is not None and current != req.stage_run_version:
                 raise Conflict("Reports are generated from the current version; reload and try again")
         p2report = await phase2_reports.create(s, project, rtype, user_id=p.user.id)
@@ -192,9 +198,14 @@ async def download(
     ctx: Ctx,
     s: ScopedSession,
     _p: CurrentPrincipal,
-    format: str = Query("pdf", pattern="^(pdf|html|json)$"),
+    format: str = Query("pdf", pattern="^(pdf|html|json|csv)$"),
 ) -> RedirectResponse:
     r = await _load(s, report_id)
+    if format == "csv" and r.report_type not in phase2_reports.PHASE3:
+        raise ValidationFailed(
+            "CSV is available for the Test Case Specification and RTM only",
+            details=[{"field": "format", "message": "Use pdf, html or json for this report."}],
+        )
     if r.status == ReportStatus.rendering:
         raise Conflict("The report is still being generated")
     f = next((x for x in r.files or [] if x["format"] == format), None)

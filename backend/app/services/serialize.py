@@ -35,7 +35,7 @@ from app.domain.enums import (
     StageStatus,
     UrlRole,
 )
-from app.domain.stages import GATE_TITLES, LOCKED_GATES, STAGE_BY_KEY, STAGE_ORDER, merged_policy
+from app.domain.stages import DERIVED_STAGES, GATE_TITLES, LOCKED_GATES, STAGE_BY_KEY, STAGE_ORDER, merged_policy
 from app.schemas import api
 
 
@@ -446,7 +446,7 @@ async def gate_state_for_run(
         status = "approved" if decision and decision.decision == "approve" else "rejected" if decision else "none"
     preconditions: list[dict[str, Any]] = []
     changes = 0
-    if stage.gate_key in (GateKey.G3, GateKey.G4) and (run is None or stage.current_stage_run_id == run.id):
+    if stage.gate_key in (GateKey.G3, GateKey.G4, GateKey.G5) and (run is None or stage.current_stage_run_id == run.id):
         from app.services import gates
 
         preconditions = [p.as_dict() for p in await gates.preconditions(session, project, stage.gate_key)]
@@ -496,8 +496,12 @@ async def stage_states(session: AsyncSession, project: Project) -> list[api.Stag
         else {}
     )
     out: list[api.StageState] = []
+    by_key = {st.stage_key: st for st in stages}
     for st in sorted(stages, key=lambda x: STAGE_ORDER[x.stage_key]):
         d = STAGE_BY_KEY[st.stage_key]
+        if st.stage_key in DERIVED_STAGES:
+            out.append(_derived_state(st, by_key.get(DERIVED_STAGES[st.stage_key]), runs))
+            continue
         run = runs.get(st.current_stage_run_id) if st.current_stage_run_id else None
         progress = None
         if st.stage_key == StageKey.discovery and run is not None:
@@ -555,7 +559,48 @@ async def _pending_review(session: AsyncSession, st: WorkflowStage) -> dict[str,
     return {"version": cand.version, "created_at": cand.created_at, "summary": review.get("summary", {})}
 
 
+def derived_status(source: WorkflowStage | None) -> StageStatus:
+    """P3-00: traceability mirrors test design: completed with a current output, stale when design is stale."""
+    if source is None or source.current_stage_run_id is None:
+        return StageStatus.not_started
+    if source.status == StageStatus.stale:
+        return StageStatus.stale
+    if source.status in (StageStatus.not_started, StageStatus.queued) and source.current_stage_run_id is None:
+        return StageStatus.not_started
+    return StageStatus.completed
+
+
+def _derived_state(st: WorkflowStage, source: WorkflowStage | None, runs: dict[uuid.UUID, StageRun]) -> api.StageState:
+    d = STAGE_BY_KEY[st.stage_key]
+    status = derived_status(source)
+    src_run = runs.get(source.current_stage_run_id) if source and source.current_stage_run_id else None
+    if src_run is not None and src_run.finished_at is None:
+        status = StageStatus.not_started  # the first design run is still in progress
+    return api.StageState(
+        key=st.stage_key.value,
+        title=d.title,
+        phase=d.phase,
+        available=d.available,
+        status=status.value,
+        current_version=None,
+        gate=None,
+        started_at=None,
+        finished_at=src_run.finished_at if src_run and status != StageStatus.not_started else None,
+        stale_reason=(source.stale_reason if source else None) if status == StageStatus.stale else None,
+        progress=None,
+    )
+
+
 def _approved_input(run: StageRun | None) -> dict[str, Any] | None:
+    if run is not None and run.approved_input and run.approved_input.get("strategy_snapshot_hash"):
+        versions = run.approved_input.get("versions") or {}
+        return {
+            "stage_key": "test_strategy",
+            "snapshot_hash": run.approved_input["strategy_snapshot_hash"],
+            "version": int(versions.get("test_strategy", 0)),
+            "requirements_snapshot_hash": run.approved_input.get("requirements_snapshot_hash"),
+            "requirements_version": int(versions.get("requirements", 0)),
+        }
     if run is None or not run.approved_input or not run.approved_input.get("g3_hash"):
         return None
     return {
@@ -579,7 +624,7 @@ async def project_summary(session: AsyncSession, project: Project) -> api.Projec
     stages = list(
         (await session.execute(select(WorkflowStage).where(WorkflowStage.project_id == project.id))).scalars().all()
     )
-    available = [s for s in stages if STAGE_BY_KEY[s.stage_key].available]
+    available = [s for s in stages if STAGE_BY_KEY[s.stage_key].available and s.stage_key not in DERIVED_STAGES]
     current = None
     for status in _PRIORITY:
         current = next(

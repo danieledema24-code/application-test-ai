@@ -20,6 +20,9 @@ export function ChangeReviewScreen({
   backLabel,
   afterApplyHref,
   onDone,
+  versionNoun = "Version",
+  reviewProps,
+  banner,
 }: {
   run: number | null;
   /** e.g. `/projects/{id}/stages/requirements/runs/5/review` or `/projects/{id}/test-plan/changes/3`. */
@@ -29,6 +32,10 @@ export function ChangeReviewScreen({
   backLabel: string;
   afterApplyHref: string;
   onDone: () => void;
+  /** "Design run" instead of "Version" in the header and toasts. */
+  versionNoun?: string;
+  reviewProps?: Pick<React.ComponentProps<typeof ChangeReview>, "viewer" | "applyNote" | "protectedSub" | "itemHref" | "discardBody">;
+  banner?: React.ReactNode;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -49,7 +56,7 @@ export function ChangeReviewScreen({
         </h1>
         {r && (
           <p className="text-body text-fg-muted">
-            {r.current_version ? `Version ${r.current_version} (current) → ` : ""}proposed version {r.candidate_version}
+            {r.current_version ? `${versionNoun} ${r.current_version} (current) → ` : ""}proposed {versionNoun.toLowerCase()} {r.candidate_version}
           </p>
         )}
       </div>
@@ -91,7 +98,9 @@ export function ChangeReviewScreen({
           action={<LinkButton href={backHref}>{`Back to ${backLabel}`}</LinkButton>}
         />
       )}
+      {banner}
       <ChangeReview
+        {...reviewProps}
         review={r}
         readOnly={done}
         onApply={async (decisions: Record<string, ReviewAction>) => {
@@ -103,7 +112,7 @@ export function ChangeReviewScreen({
             if (err instanceof ApiError && err.status === 409) throw new Error("These results can’t be applied: they were already handled or a newer version exists. Reload the page.");
             throw new Error(`Couldn’t apply the changes. Nothing was changed. ${err instanceof Error ? err.message : ""}`.trim());
           }
-          toast(`Version ${r.candidate_version} applied: ${n} change${n === 1 ? "" : "s"}.`);
+          toast(`${versionNoun} ${r.candidate_version} applied: ${n} change${n === 1 ? "" : "s"}.`);
           onDone();
           router.push(afterApplyHref);
         }}

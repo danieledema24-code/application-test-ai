@@ -424,6 +424,7 @@ class StageRunSummary(BaseModel):
     triggered_by: UserRef | None
     created_at: datetime
     review_status: str = "not_required"  # pending_review / applied / discarded for regeneration candidates
+    superseded: bool = False  # an older run replaced by the current version; `status` then reads "superseded"
 
 
 class StageRunDetail(BaseModel):
@@ -724,17 +725,17 @@ class KnowledgeItemOut(BaseModel):
 
 
 class ReportCreate(Req):
-    report_type: Literal["discovery", "requirements_spec", "test_strategy", "test_plan"]
+    report_type: Literal["discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm"]
     scan_id: uuid.UUID | None = None
     stage_run_version: int | None = None
 
     @classmethod
     def allowed_types(cls) -> set[str]:
-        return {"discovery", "requirements_spec", "test_strategy", "test_plan"}
+        return {"discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm"}
 
 
 class ReportFile(BaseModel):
-    format: Literal["pdf", "html", "json"]
+    format: Literal["pdf", "html", "json", "csv"]
     size: int
     sha256: str
     filename: str

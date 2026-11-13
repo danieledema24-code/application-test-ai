@@ -7,10 +7,12 @@ type ToastKind = "success" | "error" | "info";
 export type ToastOptions = {
   /** One action button, e.g. [Undo] (design P2 §13). Pressing it dismisses the toast. */
   action?: { label: string; onClick: () => void };
+  /** A second action, e.g. [Show skipped] next to [Undo] (design P3 §6.3). */
+  secondary?: { label: string; onClick: () => void };
   /** Milliseconds before it disappears. Default 6 s (8 s for errors). */
   duration?: number;
 };
-type ToastItem = { id: number; kind: ToastKind; message: string; action?: ToastOptions["action"] };
+type ToastItem = { id: number; kind: ToastKind; message: string; action?: ToastOptions["action"]; secondary?: ToastOptions["secondary"] };
 type ToastFn = (message: string, kind?: ToastKind, opts?: ToastOptions) => void;
 
 const ToastContext = createContext<{ toast: ToastFn } | null>(null);
@@ -23,7 +25,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const toast = useCallback<ToastFn>(
     (message, kind = "success", opts) => {
       const id = ++counter;
-      setItems((xs) => [...xs, { id, kind, message, action: opts?.action }]);
+      setItems((xs) => [...xs, { id, kind, message, action: opts?.action, secondary: opts?.secondary }]);
       setTimeout(() => dismiss(id), opts?.duration ?? (kind === "error" ? 8000 : 6000));
     },
     [dismiss],
@@ -37,23 +39,27 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             role={t.kind === "error" ? "alert" : "status"}
-            className="pointer-events-auto flex items-start gap-2.5 rounded-lg bg-surface px-3.5 py-3 text-body text-fg-strong shadow-lg ring-1 ring-line-strong"
+            className="pointer-events-auto flex flex-wrap items-start gap-2.5 rounded-lg bg-surface px-3.5 py-3 text-body text-fg-strong shadow-lg ring-1 ring-line-strong"
           >
             {t.kind === "success" && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-fg" aria-hidden />}
             {t.kind === "error" && <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger-fg" aria-hidden />}
             {t.kind === "info" && <Info className="mt-0.5 h-4 w-4 shrink-0 text-info-fg" aria-hidden />}
             <p className="flex-1">{t.message}</p>
-            {t.action && (
-              <button
-                type="button"
-                onClick={() => {
-                  t.action?.onClick();
-                  dismiss(t.id);
-                }}
-                className="rounded px-1 text-body font-semibold text-navy-700 underline underline-offset-2 hover:text-navy-900"
-              >
-                {t.action.label}
-              </button>
+            {[t.action, t.secondary].map(
+              (a) =>
+                a && (
+                  <button
+                    key={a.label}
+                    type="button"
+                    onClick={() => {
+                      a.onClick();
+                      dismiss(t.id);
+                    }}
+                    className="rounded px-1 text-body font-semibold text-navy-700 underline underline-offset-2 hover:text-navy-900"
+                  >
+                    {a.label}
+                  </button>
+                ),
             )}
             <button type="button" onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="rounded p-0.5 text-fg-muted hover:text-fg-strong">
               <X className="h-4 w-4" aria-hidden />

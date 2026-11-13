@@ -46,6 +46,7 @@ ARTEFACT = {
     StageKey.requirements: "requirements",
     StageKey.readiness_criteria: "readiness_criteria",
     StageKey.test_strategy: "test_strategy",
+    StageKey.test_design: "test_design",
 }
 REVIEW_STAGES = frozenset(ARTEFACT)
 
@@ -188,6 +189,8 @@ async def apply(
             )
             await review.carry_missing(s, READINESS, current_rows=cur, candidate_run_id=run.id)
         diff = _diff(res)
+    elif st.stage_key == StageKey.test_design:
+        diff = await _apply_test_design(s, project, run, items, decisions, user_id, prev_id)
     else:
         diff = await _apply_strategy(s, project, run, items, decisions, user_id, prev_id)
     prev_version = None
@@ -402,6 +405,67 @@ async def _apply_strategy(
     diff = _diff(res)
     diff["changed"] += changed
     diff["kept_current"] += kept
+    from app.services import testdesign as tds
+
+    await s.flush()
+    await tds.recompute_priorities(s, project.id)  # P3-05: derived case priority follows the applied risks
+    return diff
+
+
+async def _apply_test_design(
+    s: AsyncSession,
+    project: Project,
+    run: StageRun,
+    items: list[dict[str, Any]],
+    decisions: dict[str, str],
+    user_id: uuid.UUID,
+    prev_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    """Conditions, then data, then cases (P3-01b). Links are by lineage, so kept rows stay connected."""
+    from app.services import testdesign as tds
+    from app.services.adapters import (
+        TEST_CASE,
+        TEST_CONDITION,
+        TEST_DATA,
+        reject_case,
+        reject_condition,
+        retire_data,
+    )
+
+    org_id, pid = project.organisation_id, project.id
+    note = "No longer produced by the test design"
+    results = [
+        await review.apply_rows(
+            s, TEST_CONDITION, items, decisions, org_id=org_id, project_id=pid, user_id=user_id,
+            reject=reject_condition, rejected_note=note,
+        ),
+        await review.apply_rows(
+            s, TEST_DATA, items, decisions, org_id=org_id, project_id=pid, user_id=user_id,
+            reject=retire_data, rejected_note=note,
+        ),
+        await review.apply_rows(
+            s, TEST_CASE, items, decisions, org_id=org_id, project_id=pid, user_id=user_id,
+            reject=reject_case, rejected_note=note,
+        ),
+    ]  # fmt: skip
+    if prev_id is not None:
+        for adapter, rows in (
+            (TEST_CONDITION, await tds.conditions_of(s, prev_id)),
+            (TEST_DATA, await tds.data_of(s, prev_id)),
+            (TEST_CASE, await tds.cases_of(s, prev_id)),
+        ):
+            await review.carry_missing(s, adapter, current_rows=rows, candidate_run_id=run.id)
+    parents = await tds.ac_parents(s, pid)
+    for cond in await tds.conditions_of(s, run.id):
+        await tds.link_condition(s, cond, parents)
+    for case in await tds.cases_of(s, run.id):
+        await tds.link_case(s, case, parents)
+    await s.flush()
+    await tds.refresh_derived(s, pid, run.id)
+    diff = _diff(results[0])
+    for res in results[1:]:
+        for k, v in _diff(res).items():
+            diff[k] = [*diff[k], *v]
     return diff
 
 
@@ -413,4 +477,5 @@ GATE_FOR_STAGE = {
     StageKey.requirements: GateKey.G3,
     StageKey.readiness_criteria: GateKey.G3,
     StageKey.test_strategy: GateKey.G4,
+    StageKey.test_design: GateKey.G5,
 }

@@ -1,4 +1,4 @@
-"""Phase 2 gate rules (P2-00, P2-05, P2-06): G3/G4 preconditions, approved snapshots and rule recommendations.
+"""Gate rules (P2-00, P2-05, P2-06, P3-02): G3/G4/G5 preconditions, approved snapshots and rule recommendations.
 
 Every number here is computed from rows. Recommendations are advisory; blockers are enforced by the decision
 endpoint (409 `gate_blocked`).
@@ -156,6 +156,10 @@ async def snapshot_for(
         return await g3_snapshot(s, project_id)
     if gate == GateKey.G4:
         return await g4_snapshot(s, project_id)
+    if gate == GateKey.G5:
+        from app.services import testdesign
+
+        return await testdesign.g5_snapshot(s, project_id)
     return [], {}
 
 
@@ -370,6 +374,10 @@ async def preconditions(s: AsyncSession, project: Project, gate: GateKey) -> lis
         return await g3_preconditions(s, project)
     if gate == GateKey.G4:
         return await g4_preconditions(s, project)
+    if gate == GateKey.G5:
+        from app.services import testdesign
+
+        return await testdesign.g5_preconditions(s, project)
     return []
 
 
@@ -379,6 +387,10 @@ def blockers(items: list[Precondition]) -> list[Precondition]:
 
 async def recommendation(s: AsyncSession, project: Project, gate: GateKey) -> dict[str, Any] | None:
     """Rule recommendation (advisory) built from the coded checks plus coverage facts."""
+    if gate == GateKey.G5:
+        from app.services import testdesign
+
+        return await testdesign.g5_recommendation(s, project)
     if gate not in (GateKey.G3, GateKey.G4):
         return None
     pre = await preconditions(s, project, gate)

@@ -25,6 +25,7 @@ from app.api.routers import (
     events,
     evidence,
     health,
+    members,
     projects,
     reports,
     requirements,
@@ -32,6 +33,8 @@ from app.api.routers import (
     scans,
     secrets,
     strategy,
+    testdesign,
+    traceability,
     workflow,
 )
 from app.config import Settings, get_settings
@@ -121,6 +124,10 @@ def create_app(
         from app.services.secrets import backfill
 
         await backfill(context)
+        # P3-00 data step (decision D1): G5 becomes a required sign-off on existing projects (idempotent).
+        from app.services.projects import require_g5_signoff
+
+        await require_g5_signoff(context)
         worker: Worker | None = None
         run_worker = start_worker if start_worker is not None else settings.worker_mode == "inline"
         if run_worker:
@@ -186,12 +193,15 @@ def create_app(
     app.add_middleware(RequestIdMiddleware)
     for r in (
         health,
+        members,
         auth,
         projects,
         workflow,
         review,
         requirements,
         strategy,
+        testdesign,
+        traceability,
         secrets,
         documents,
         assistant,

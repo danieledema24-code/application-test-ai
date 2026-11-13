@@ -172,7 +172,7 @@ Rules:
 | G2 Discovery completeness | recommended | yes | Requirements (if set to required) |
 | G3 Requirements review | required | yes | Strategy |
 | G4 Strategy approval | required | yes | Test design; performance branch |
-| G5 Test case quality | recommended (automated lint always runs) | yes | Automation |
+| G5 Test case quality | required (user decision D1, Phase 3; `can_approve`, same as G3/G4; automated lint always runs) | yes | Automation |
 | G6 Script validation | required (static validation always runs) | yes (human part only) | Execution |
 | G7 Execution authorisation | required | **No** | Any execution against the target |
 | G8 Defect review | required | **No** (spec §11: human confirms application defects) | Defect status `verified` |

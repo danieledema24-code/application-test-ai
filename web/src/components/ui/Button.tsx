@@ -6,8 +6,8 @@ type Variant = "primary" | "secondary" | "ghost" | "danger" | "success";
 type Size = "sm" | "md" | "lg";
 
 const VARIANTS: Record<Variant, string> = {
-  primary: "bg-accent text-on-accent font-semibold hover:bg-accent-hover active:bg-navy-900 shadow-xs disabled:bg-overlay disabled:text-fg-muted disabled:shadow-none",
-  secondary: "bg-surface text-fg-strong ring-1 ring-inset ring-line-input hover:bg-overlay disabled:text-fg-muted disabled:hover:bg-surface",
+  primary: "bg-accent text-on-accent font-semibold hover:bg-accent-hover active:bg-navy-900 shadow-xs disabled:bg-overlay disabled:text-fg-muted disabled:shadow-none aria-disabled:bg-overlay aria-disabled:text-fg-muted aria-disabled:shadow-none aria-disabled:hover:bg-overlay",
+  secondary: "bg-surface text-fg-strong ring-1 ring-inset ring-line-input hover:bg-overlay disabled:text-fg-muted disabled:hover:bg-surface aria-disabled:text-fg-muted aria-disabled:hover:bg-surface",
   ghost: "text-fg-strong hover:bg-overlay disabled:text-fg-muted",
   danger: "bg-danger-solid text-white font-semibold hover:bg-danger-fg shadow-xs disabled:opacity-50 disabled:hover:bg-danger-solid",
   success: "bg-success-solid text-white font-semibold hover:bg-success-fg shadow-xs disabled:opacity-50 disabled:hover:bg-success-solid",
@@ -19,7 +19,7 @@ const SIZES: Record<Size, string> = {
 };
 
 export function buttonClass(variant: Variant = "primary", size: Size = "md", className = "") {
-  return `inline-flex items-center justify-center rounded-md font-medium transition-colors duration-150 ease-out disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${VARIANTS[variant]} ${SIZES[size]} ${className}`;
+  return `inline-flex items-center justify-center rounded-md font-medium transition-colors duration-150 ease-out disabled:cursor-not-allowed aria-disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${VARIANTS[variant]} ${SIZES[size]} ${className}`;
 }
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {

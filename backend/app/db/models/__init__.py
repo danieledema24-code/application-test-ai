@@ -12,7 +12,7 @@ from app.db.models.discovery import (
     UserJourney,
     feature_pages,
 )
-from app.db.models.identity import AuditLog, Membership, Organisation, PasswordResetToken, User, UserSession
+from app.db.models.identity import AuditLog, Invitation, Membership, Organisation, PasswordResetToken, User, UserSession
 from app.db.models.projects import (
     GateDecision,
     Project,
@@ -30,8 +30,18 @@ from app.db.models.requirements import (
     requirement_features,
 )
 from app.db.models.strategy import Risk, TestPlan, TestStrategy, risk_features, risk_requirements
+from app.db.models.testdesign import (
+    NO_AC,
+    TestCase,
+    TestCondition,
+    TestData,
+    condition_requirements,
+    test_case_data,
+    test_case_requirements,
+)
 
 __all__ = [
+    "NO_AC",
     "AcceptanceCriterion",
     "AgentEvent",
     "AgentTask",
@@ -44,6 +54,7 @@ __all__ = [
     "EntityRevision",
     "Evidence",
     "GateDecision",
+    "Invitation",
     "Job",
     "KnowledgeItem",
     "Membership",
@@ -60,6 +71,9 @@ __all__ = [
     "ScanSession",
     "SourceDocument",
     "StageRun",
+    "TestCase",
+    "TestCondition",
+    "TestData",
     "TestPlan",
     "TestStrategy",
     "User",
@@ -67,8 +81,11 @@ __all__ = [
     "UserSession",
     "WorkerHeartbeat",
     "WorkflowStage",
+    "condition_requirements",
     "feature_pages",
     "requirement_features",
     "risk_features",
     "risk_requirements",
+    "test_case_data",
+    "test_case_requirements",
 ]

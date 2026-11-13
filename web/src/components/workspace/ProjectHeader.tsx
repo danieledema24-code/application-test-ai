@@ -4,18 +4,19 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Bot, ExternalLink, MoreHorizontal } from "lucide-react";
 import { fmtDate } from "@/lib/format";
-import { activeStage, gateReview, stageStatusLabel, waitingGateStage } from "@/lib/lifecycle";
+import { activeStage, gateReview, stageStatusLabel, waitingGateStage, waitingLabel } from "@/lib/lifecycle";
+import { useAuth } from "@/lib/auth";
 import { Button, StatusPill, useToast } from "@/components/ui";
 import { useAssistantDrawer } from "@/components/assistant/AssistantDrawer";
 import { useProject } from "./ProjectContext";
 
 /** The project's overall status, from the live workflow. */
-function overallStatus(p: ReturnType<typeof useProject>) {
+function overallStatus(p: ReturnType<typeof useProject>, canApprove: boolean) {
   const wf = p.workflow;
   if (!wf) return null;
   if (wf.project_status === "archived") return { status: "archived", label: "Archived" };
   const waiting = waitingGateStage(wf);
-  if (waiting) return { status: "awaiting_approval", label: gateReview(waiting) === "required" ? "Waiting for your approval" : "Ready for your review" };
+  if (waiting) return { status: "awaiting_approval", label: gateReview(waiting) === "required" ? waitingLabel(canApprove) : "Ready for your review" };
   const active = activeStage(wf);
   if (wf.project_status === "paused" || active?.status === "paused") return { status: "paused", label: "Discovery paused" };
   if (active) {
@@ -97,7 +98,8 @@ export function ProjectHeader({ asHeading }: { asHeading: boolean }) {
   const p = useProject();
   const assistant = useAssistantDrawer();
   const project = p.project;
-  const st = overallStatus(p);
+  const { canApprove } = useAuth();
+  const st = overallStatus(p, canApprove);
   const active = activeStage(p.workflow);
   const paused = p.workflow?.project_status === "paused" || active?.status === "paused";
   const runningNow = active && (active.status === "running" || active.status === "queued") && !paused;

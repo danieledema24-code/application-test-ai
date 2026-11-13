@@ -312,3 +312,43 @@ def list_filter(status: str | None) -> list[Any]:
         )
         return [Project.archived_at.is_(None), Project.id.in_(waiting)]
     return [or_(Project.archived_at.is_(None), Project.archived_at.is_not(None))]
+
+
+async def require_g5_signoff(ctx: AppContext) -> int:
+    """Startup data step (P3-00, decision D1): existing projects storing `G5: recommended` switch to `required`.
+
+    Projects whose audit log shows G5 was set through `PATCH /projects/{id}` keep their choice. Runs across
+    organisations (system task, tenant filter bypassed) and only touches projects still storing `recommended`, so a
+    second start changes nothing.
+    """
+    from app.db.models import AuditLog
+    from app.db.tenant import BYPASS
+
+    n = 0
+    async with ctx.session_factory() as s:
+        projects = (await s.execute(select(Project).execution_options(**BYPASS))).scalars().all()
+        candidates = [p for p in projects if (p.approval_policy or {}).get("G5") == "recommended"]
+        if not candidates:
+            return 0
+        explicit: set[uuid.UUID] = set()
+        rows = (
+            await s.execute(
+                select(AuditLog.project_id, AuditLog.meta)
+                .where(
+                    AuditLog.action == "project.updated",
+                    AuditLog.project_id.in_([p.id for p in candidates]),
+                )
+                .execution_options(**BYPASS)
+            )
+        ).all()
+        for pid, meta in rows:
+            if pid is not None and "G5" in ((meta or {}).get("approval_policy") or {}):
+                explicit.add(pid)
+        for p in candidates:
+            if p.id in explicit:
+                continue
+            p.approval_policy = {**(p.approval_policy or {}), "G5": "required"}
+            n += 1
+        if n:
+            await s.commit()
+    return n

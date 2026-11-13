@@ -28,6 +28,18 @@ export const STATUS_LABEL: Record<LifecycleStatus, string> = {
   later: "Coming later",
 };
 
+/**
+ * Waiting copy depends on who is looking (design P3 §4.3): people who can approve gates read "Waiting for your
+ * approval"; everyone else reads "Waiting for approval by someone who can approve gates".
+ */
+export function waitingLabel(canApprove: boolean): string {
+  return canApprove ? "Waiting for your approval" : "Waiting for approval by someone who can approve gates";
+}
+
+export function statusLabel(status: LifecycleStatus, canApprove = true): string {
+  return status === "waiting" ? waitingLabel(canApprove) : STATUS_LABEL[status];
+}
+
 export type LifecycleStageDef = {
   id: string;
   label: string;
@@ -95,7 +107,7 @@ export const LIFECYCLE: LifecycleStageDef[] = [
     apiStages: ["test_design", "traceability"],
     steps: [
       { n: 13, name: "Test conditions & test cases", agent: "Test Design Agent" },
-      { n: 14, name: "Traceability matrix", agent: "Test Design Agent" },
+      { n: 14, name: "Traceability matrix", agent: "Computed, no agent" },
     ],
     gate: { key: "G5", name: "Test case quality", position: "after" },
   },
@@ -261,6 +273,8 @@ export function phase2Step(id: string, stages: StageState[]): number | null {
     return null;
   }
   if (id === "strategy") return working(by("test_strategy")) ? 1 : null;
+  // Test design: step 13 is the agent; step 14 (traceability) is computed and never "Running" (design P3 §4.3).
+  if (id === "test-design") return working(by("test_design")) ? 1 : null;
   return null;
 }
 
@@ -270,7 +284,11 @@ export function buildLifecycle(workflow: Workflow | undefined | null): Lifecycle
     const stages = def.apiStages.map((k) => all.find((s) => s.key === k)).filter((s): s is StageState => !!s);
     const available = stages.length > 0 ? stages.some((s) => s.available) : false;
     const gate = gateApprovedFor(stages, def.gate?.key);
-    const statuses = stages.filter((s) => s.available).map(fromApiStatus);
+    // Traceability mirrors test design: a computed step never reads "Running" on its own.
+    const design = stages.find((s) => s.key === "test_design");
+    const statuses = stages
+      .filter((s) => s.available)
+      .map((s) => (s.key === "traceability" && (s.status === "running" || s.status === "queued") ? fromApiStatus(design) : fromApiStatus(s)));
     if (gate.status === "waiting") statuses.push("waiting");
     const status = rollUp(statuses, gate.approved, available);
     return {
@@ -286,13 +304,18 @@ export function buildLifecycle(workflow: Workflow | undefined | null): Lifecycle
 
 /** Text for the stage's status, e.g. "Running, step 4 of 8", "Running, step 10 (2 of 3)" or "Phase 2". */
 export function stageStatusText(stage: LifecycleStage): string {
+  return stageStatusTextFor(stage, true);
+}
+
+/** As stageStatusText, with the role-aware waiting copy. */
+export function stageStatusTextFor(stage: LifecycleStage, canApprove: boolean): string {
   if (stage.status === "later") return stage.phaseLabel;
   if (stage.status === "running" && stage.currentStep) {
     if (stage.id === "discovery") return `Running, step ${stage.currentStep} of ${stage.steps.length}`;
     const step = stage.steps[stage.currentStep - 1];
     return `Running, step ${step?.n ?? stage.currentStep} (${stage.currentStep} of ${stage.steps.length})`;
   }
-  return STATUS_LABEL[stage.status];
+  return statusLabel(stage.status, canApprove);
 }
 
 /** "After Gate 2" under a Phase 2 stage that is waiting for its upstream gate (design §12.1). */
@@ -305,7 +328,7 @@ export function upstreamGateHint(stage: LifecycleStage, all: LifecycleStage[]): 
 }
 
 /** API stage status → StatusPill key used across the app. */
-export function stageStatusLabel(s: StageStatus | null | undefined): string {
+export function stageStatusLabel(s: StageStatus | null | undefined, canApprove = true): string {
   switch (s) {
     case "queued":
       return "Queued";
@@ -314,7 +337,7 @@ export function stageStatusLabel(s: StageStatus | null | undefined): string {
     case "paused":
       return "Paused";
     case "awaiting_approval":
-      return "Waiting for your approval";
+      return waitingLabel(canApprove);
     case "approved":
       return "Approved";
     case "changes_requested":
@@ -341,4 +364,18 @@ export function activeStage(workflow: Workflow | undefined | null): StageState |
 /** The stage waiting for a gate decision, if any. */
 export function waitingGateStage(workflow: Workflow | undefined | null): StageState | null {
   return workflow?.stages.find((s) => gateReview(s) !== null) ?? null;
+}
+
+/**
+ * True when test design was started by the Gate 4 approval itself (design P3 §4, check 5): the run began within
+ * two minutes after the G4 approval decision. While running right after an approval with no decision time
+ * known, it is treated the same way.
+ */
+export function autoStartedAfterG4(design: StageState | null | undefined, strategy: StageState | null | undefined): boolean {
+  const d = strategy?.gate?.decision;
+  if (!design || (d?.decision !== "approve" && strategy?.gate?.status !== "approved")) return false;
+  const at = d?.decided_at ?? d?.created_at;
+  if (!at || !design.started_at) return design.status === "running" && strategy?.gate?.status === "approved";
+  const diff = Date.parse(design.started_at) - Date.parse(at);
+  return diff >= 0 && diff <= 120_000;
 }

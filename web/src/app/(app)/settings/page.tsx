@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/hooks";
 import type { Health, Role } from "@/lib/contract";
 import { Card, CardBody, CardHeader, PageHeader } from "@/components/ui";
+import { SettingsTabs } from "@/components/settings/SettingsTabs";
 
 const ROLE_LABEL: Record<Role, string> = { owner: "Owner", admin: "Admin", member: "Member", viewer: "Viewer" };
 
@@ -30,7 +31,8 @@ export default function SettingsPage() {
   }, []);
   return (
     <>
-      <PageHeader title="Settings" description="Your profile and organisation." />
+      <PageHeader title="Settings" description="Your profile, organisation and the people in this workspace." />
+      <SettingsTabs current="profile" />
       <div className="grid max-w-4xl gap-6 md:grid-cols-2">
         <Card>
           <CardHeader title="Your profile" />

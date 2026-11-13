@@ -25,15 +25,18 @@ const TYPE_NAME: Partial<Record<ArtefactRef["type"], string>> = {
   strategy_section: "Strategy section",
   plan_section: "Plan section",
   stage: "Stage",
+  test_condition: "Condition",
+  test_case: "Test case",
+  test_data: "Test data",
 };
 
 /**
  * A cited item (design P2 §11.3). Requirements, risks and gates navigate; evidence and documents open the
- * evidence drawer. The accessible name is the full name. A cited id that no longer exists is plain text.
+ * evidence drawer. The accessible name is the full name. A cited id that doesn't exist is plain text, "TC-0999 (not found)" (P3 §16.1).
  */
 export function CitationChip({ refItem, token }: { refItem: ArtefactRef | null; token: string }) {
   const openEvidence = useEvidence();
-  if (!refItem) return <span className="font-mono">{token} (no longer exists)</span>;
+  if (!refItem) return <span className="font-mono">{token} (not found)</span>;
   const name = `${TYPE_NAME[refItem.type] ?? "Item"} ${refItem.key}${refItem.label && refItem.label !== refItem.key ? `: ${refItem.label}` : ""}`;
   const cls =
     "mx-0.5 inline-flex min-h-6 items-center rounded-sm bg-accent-soft px-1.5 font-mono text-small font-medium text-navy-700 ring-1 ring-inset ring-navy-200 hover:bg-navy-100 hover:text-navy-900";
@@ -143,12 +146,19 @@ export function MessageBody({ content, citations }: { content: string; citations
   return <div className="space-y-2 text-body text-fg">{blocks}</div>;
 }
 
-const STAGE_LABEL: Partial<Record<StageKey, string>> = { discovery: "Scan", requirements: "Requirements v", test_strategy: "Strategy v", readiness_criteria: "Ready & Done v" };
+const STAGE_LABEL: Partial<Record<StageKey, string>> = {
+  discovery: "Scan",
+  requirements: "Requirements v",
+  test_strategy: "Strategy v",
+  readiness_criteria: "Ready & Done v",
+  test_design: "Test design run ",
+};
 
 function changedText(k: StageKey, n: number): string {
   if (k === "discovery") return `the latest scan is Scan ${n}`;
   if (k === "requirements") return `Requirements are now v${n}`;
   if (k === "test_strategy") return `Strategy is now v${n}`;
+  if (k === "test_design") return `the current test design run is ${n}`;
   return `Ready & Done is now v${n}`;
 }
 
