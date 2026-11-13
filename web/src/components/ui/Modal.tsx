@@ -76,7 +76,7 @@ export function Modal({
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden onClick={onClose} />
+      <div className="absolute inset-0 bg-scrim" aria-hidden onClick={onClose} />
       <div
         ref={ref}
         role="dialog"
@@ -84,15 +84,15 @@ export function Modal({
         aria-labelledby={titleId}
         aria-describedby={description ? descId : undefined}
         tabIndex={-1}
-        className={`relative flex max-h-[92vh] w-full ${widths[size]} flex-col rounded-t-xl bg-surface shadow-2xl shadow-black/60 ring-1 ring-line sm:rounded-xl`}
+        className={`relative flex max-h-[92vh] w-full ${widths[size]} flex-col rounded-t-xl bg-surface shadow-xl ring-1 ring-line sm:rounded-xl`}
       >
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>
-            <h2 id={titleId} className="text-base font-semibold text-fg-strong">
+            <h2 id={titleId} className="text-h2 font-semibold text-fg-strong">
               {title}
             </h2>
             {description && (
-              <p id={descId} className="mt-0.5 text-sm text-fg-muted">
+              <p id={descId} className="mt-0.5 text-body text-fg-muted">
                 {description}
               </p>
             )}
@@ -100,8 +100,8 @@ export function Modal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-fg-muted hover:bg-overlay hover:text-fg"
-            aria-label="Close dialog"
+            className="rounded-md p-1.5 text-fg-muted hover:bg-overlay hover:text-fg-strong"
+            aria-label="Close"
           >
             <X className="h-5 w-5" aria-hidden />
           </button>
@@ -121,6 +121,7 @@ export function ConfirmDialog({
   title,
   children,
   confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
   danger,
   loading,
 }: {
@@ -130,6 +131,7 @@ export function ConfirmDialog({
   title: string;
   children: React.ReactNode;
   confirmLabel?: string;
+  cancelLabel?: string;
   danger?: boolean;
   loading?: boolean;
 }) {
@@ -142,7 +144,7 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
-            Cancel
+            {cancelLabel}
           </Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading}>
             {confirmLabel}
@@ -150,7 +152,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      <div className="text-sm text-fg">{children}</div>
+      <div className="space-y-3 text-body text-fg">{children}</div>
     </Modal>
   );
 }

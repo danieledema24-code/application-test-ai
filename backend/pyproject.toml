@@ -1,0 +1,71 @@
+[project]
+name = "qa-analyst-backend"
+version = "0.1.0"
+description = "Autonomous AI QA Analyst Platform backend (FastAPI, Phase 1: foundation and application discovery)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "alembic>=1.20.1",
+    "anthropic>=2.8.0",
+    "argon2-cffi>=25.1.0",
+    "cryptography>=50.0.2",
+    "email-validator>=2.3.0",
+    "fastapi>=0.162.5",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "playwright==1.65.1",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+    "sqlalchemy[asyncio]>=2.1.8",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.17.5",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "BLE", "UP", "S", "ASYNC", "RUF", "SIM", "C4"]
+ignore = [
+    "S101",   # assert is fine in tests and for type narrowing
+    "S311",   # random is not used for security
+    "RUF001", "RUF002", "RUF003",  # typographic characters in user-facing copy are intentional
+    "E501",   # `ruff format` owns line length; long user-facing strings are kept whole
+    "UP046",  # Generic[T] kept for Pydantic/SQLAlchemy generic classes (mypy plugin compatibility)
+    "ASYNC109",  # explicit timeout parameters on test-helper coroutines are intentional
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S603", "S607", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["app"]
+
+[[tool.mypy.overrides]]
+module = ["argon2.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+    "demo_shop: needs the demo shop running on http://localhost:4100",
+]

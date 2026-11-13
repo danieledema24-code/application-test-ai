@@ -3,22 +3,23 @@ import { Loader2 } from "lucide-react";
 import { forwardRef } from "react";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger" | "success";
-type Size = "sm" | "md";
+type Size = "sm" | "md" | "lg";
 
 const VARIANTS: Record<Variant, string> = {
-  primary: "bg-accent text-on-accent font-semibold hover:bg-accent-hover shadow-sm disabled:bg-overlay disabled:text-fg-subtle disabled:shadow-none",
-  secondary: "bg-elevated text-fg ring-1 ring-inset ring-line-strong hover:bg-overlay hover:text-fg-strong disabled:text-fg-subtle disabled:hover:bg-elevated",
-  ghost: "text-fg hover:bg-overlay disabled:text-fg-subtle",
-  danger: "bg-red-600 text-white hover:bg-red-700 shadow-sm disabled:opacity-50 disabled:hover:bg-red-600",
-  success: "bg-emerald-500 text-on-accent font-semibold hover:bg-emerald-400 shadow-sm disabled:opacity-50 disabled:hover:bg-emerald-500",
+  primary: "bg-accent text-on-accent font-semibold hover:bg-accent-hover active:bg-navy-900 shadow-xs disabled:bg-overlay disabled:text-fg-muted disabled:shadow-none",
+  secondary: "bg-surface text-fg-strong ring-1 ring-inset ring-line-input hover:bg-overlay disabled:text-fg-muted disabled:hover:bg-surface",
+  ghost: "text-fg-strong hover:bg-overlay disabled:text-fg-muted",
+  danger: "bg-danger-solid text-white font-semibold hover:bg-danger-fg shadow-xs disabled:opacity-50 disabled:hover:bg-danger-solid",
+  success: "bg-success-solid text-white font-semibold hover:bg-success-fg shadow-xs disabled:opacity-50 disabled:hover:bg-success-solid",
 };
 const SIZES: Record<Size, string> = {
-  sm: "h-8 px-2.5 text-xs gap-1.5",
-  md: "h-9 px-3.5 text-sm gap-2",
+  sm: "h-8 px-2.5 text-small gap-1.5 pointer-coarse:min-h-11",
+  md: "h-10 px-4 text-body gap-2 pointer-coarse:min-h-11",
+  lg: "h-12 px-5 text-body-lg gap-2",
 };
 
 export function buttonClass(variant: Variant = "primary", size: Size = "md", className = "") {
-  return `inline-flex items-center justify-center rounded-md font-medium transition-colors disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${VARIANTS[variant]} ${SIZES[size]} ${className}`;
+  return `inline-flex items-center justify-center rounded-md font-medium transition-colors duration-150 ease-out disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${VARIANTS[variant]} ${SIZES[size]} ${className}`;
 }
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -41,7 +42,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       aria-busy={loading || undefined}
       {...rest}
     >
-      {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : icon}
+      {loading ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : icon}
       {children}
     </button>
   );

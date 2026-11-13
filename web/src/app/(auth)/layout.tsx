@@ -1,38 +1,44 @@
-import { CheckCircle2, FlaskConical } from "lucide-react";
+import { CircleCheck, ScanSearch } from "lucide-react";
+
+const POINTS = [
+  "Explores your site and maps every page, form and journey",
+  "Labels every finding Observed or Inferred, with evidence",
+  "You approve each quality gate before the next stage",
+];
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-canvas">
-      <aside className="hidden w-[44%] max-w-xl flex-col justify-between relative overflow-hidden border-r border-line bg-surface p-10 text-fg-strong lg:flex">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-accent/10 blur-3xl"
-        />
-        <div className="relative flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent text-on-accent">
-            <FlaskConical className="h-5 w-5" aria-hidden />
+      <aside className="hidden w-[44%] max-w-xl flex-col justify-between bg-navy-800 p-10 text-white lg:flex">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-md bg-white text-navy-800">
+            <ScanSearch className="h-5 w-5" aria-hidden />
           </span>
-          <span className="font-semibold">Application Test AI</span>
+          <span className="text-h3 font-semibold">QA Analyst</span>
         </div>
-        <div className="relative">
-          <h2 className="text-3xl font-semibold leading-tight tracking-tight">Quality assurance you can audit.</h2>
-          <ul className="mt-6 space-y-3 text-sm text-fg-muted">
-            {[
-              "Test management, Playwright automation and API testing in one place",
-              "AI drafts test cases and analyses failures — clearly labelled as hypotheses",
-              "Recorded results, evidence and defects remain the source of truth",
-            ].map((t) => (
-              <li key={t} className="flex gap-2">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
+        <div>
+          <p className="text-display font-semibold tracking-[-0.02em]">Your senior QA analyst, on demand.</p>
+          <ul className="mt-6 space-y-3 text-body-lg text-navy-50">
+            {POINTS.map((t) => (
+              <li key={t} className="flex gap-2.5">
+                <CircleCheck className="mt-1 h-4 w-4 shrink-0 text-white" aria-hidden />
                 {t}
               </li>
             ))}
           </ul>
         </div>
-        <p className="relative text-xs text-fg-subtle">Only test applications you are authorised to test.</p>
+        <p className="text-small text-navy-100">Only analyse sites you’re authorised to test.</p>
       </aside>
-      <main className="flex flex-1 items-center justify-center px-4 py-12">
-        <div className="w-full max-w-sm">{children}</div>
+      <main id="main" className="flex flex-1 items-center justify-center px-4 py-12">
+        <div className="w-full max-w-[400px] rounded-xl bg-surface p-8 shadow-sm ring-1 ring-line">
+          <div className="mb-6 flex items-center gap-2 text-fg-strong">
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-accent text-on-accent">
+              <ScanSearch className="h-4.5 w-4.5" aria-hidden />
+            </span>
+            <span className="text-body font-semibold">QA Analyst</span>
+          </div>
+          {children}
+        </div>
       </main>
     </div>
   );
