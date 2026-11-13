@@ -17,7 +17,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     (message: string, kind: ToastKind = "success") => {
       const id = ++counter;
       setItems((xs) => [...xs, { id, kind, message }]);
-      setTimeout(() => dismiss(id), kind === "error" ? 7000 : 4000);
+      setTimeout(() => dismiss(id), kind === "error" ? 8000 : 6000);
     },
     [dismiss],
   );
@@ -30,13 +30,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             role={t.kind === "error" ? "alert" : "status"}
-            className="pointer-events-auto flex items-start gap-2.5 rounded-lg bg-elevated px-3.5 py-3 text-sm text-fg shadow-lg shadow-black/50 ring-1 ring-line-strong"
+            className="pointer-events-auto flex items-start gap-2.5 rounded-lg bg-surface px-3.5 py-3 text-body text-fg-strong shadow-lg ring-1 ring-line-strong"
           >
-            {t.kind === "success" && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" aria-hidden />}
-            {t.kind === "error" && <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" aria-hidden />}
-            {t.kind === "info" && <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" aria-hidden />}
+            {t.kind === "success" && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-fg" aria-hidden />}
+            {t.kind === "error" && <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger-fg" aria-hidden />}
+            {t.kind === "info" && <Info className="mt-0.5 h-4 w-4 shrink-0 text-info-fg" aria-hidden />}
             <p className="flex-1">{t.message}</p>
-            <button type="button" onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="text-fg-muted hover:text-fg">
+            <button type="button" onClick={() => dismiss(t.id)} aria-label="Dismiss notification" className="rounded p-0.5 text-fg-muted hover:text-fg-strong">
               <X className="h-4 w-4" aria-hidden />
             </button>
           </div>

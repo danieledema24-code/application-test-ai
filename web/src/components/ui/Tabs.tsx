@@ -31,7 +31,7 @@ export function Tabs({
     }
   }
   return (
-    <div className="scrollbar-thin -mx-1 overflow-x-auto border-b border-line">
+    <div className="scrollbar-thin relative -mx-1 overflow-x-auto border-b border-line">
       <div role="tablist" aria-label={label} className="flex min-w-max gap-1 px-1">
         {tabs.map((t, i) => {
           const selected = t.id === value;
@@ -49,7 +49,7 @@ export function Tabs({
               tabIndex={selected ? 0 : -1}
               onClick={() => onChange(t.id)}
               onKeyDown={(e) => onKeyDown(e, i)}
-              className={`relative -mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+              className={`relative -mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-body font-medium transition-colors ${
                 selected
                   ? "border-accent text-fg-strong"
                   : "border-transparent text-fg-muted hover:border-line-strong hover:text-fg-strong"
@@ -57,7 +57,7 @@ export function Tabs({
             >
               {t.label}
               {t.count !== undefined && (
-                <span className="ml-1.5 rounded-full bg-overlay px-1.5 py-0.5 text-xs text-fg-muted">{t.count}</span>
+                <span className="ml-1.5 rounded-full bg-overlay px-1.5 py-0.5 text-caption tabular-nums text-fg-muted">{t.count}</span>
               )}
             </button>
           );
@@ -96,7 +96,7 @@ export function Segmented<T extends string | number>({
   label: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex rounded-md bg-elevated p-0.5 ring-1 ring-inset ring-line">
+    <div role="radiogroup" aria-label={label} className="inline-flex rounded-md bg-overlay p-0.5">
       {options.map((o) => (
         <button
           key={String(o.value)}
@@ -104,8 +104,8 @@ export function Segmented<T extends string | number>({
           role="radio"
           aria-checked={o.value === value}
           onClick={() => onChange(o.value)}
-          className={`rounded px-2.5 py-1 text-xs font-medium ${
-            o.value === value ? "bg-accent font-semibold text-on-accent shadow-sm" : "text-fg-muted hover:text-fg-strong"
+          className={`min-h-8 rounded-sm px-3 py-1 text-small font-medium ${
+            o.value === value ? "bg-surface font-semibold text-fg-strong shadow-xs ring-1 ring-line-strong" : "text-fg-muted hover:text-fg-strong"
           }`}
         >
           {o.label}

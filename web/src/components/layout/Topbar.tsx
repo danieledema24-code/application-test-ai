@@ -1,15 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useId, useRef, useState } from "react";
-import { Bell, Bug, ChevronDown, CircleHelp, FileCheck2, FolderKanban, LogOut, Menu, PlayCircle, Search, User } from "lucide-react";
-import { api } from "@/lib/api";
+import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, CircleHelp, LogOut, Menu, Settings } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/hooks";
-import { timeAgo } from "@/lib/format";
-import type { Notification, SearchResults } from "@/lib/types";
-import { Spinner } from "@/components/ui";
+import type { ProjectDetail } from "@/lib/contract";
+import { projectRoute, sectionBySlug } from "@/lib/sections";
 
 /** Close a popover when clicking outside / pressing Escape. */
 function useDismiss(open: boolean, close: () => void, ref: React.RefObject<HTMLElement | null>) {
@@ -30,243 +28,66 @@ function useDismiss(open: boolean, close: () => void, ref: React.RefObject<HTMLE
   }, [open, close, ref]);
 }
 
-type SearchItem = { href: string; label: string; sub: string; icon: React.ReactNode };
+type Crumb = { label: string; href?: string };
 
-function GlobalSearch() {
-  const router = useRouter();
-  const [q, setQ] = useState("");
-  const [results, setResults] = useState<SearchResults | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(-1);
-  const ref = useRef<HTMLDivElement>(null);
-  const listId = useId();
-  useDismiss(open, () => setOpen(false), ref);
+const STATIC_CRUMBS: Record<string, Crumb[]> = {
+  "/dashboard": [{ label: "Dashboard" }],
+  "/projects": [{ label: "Projects" }],
+  "/projects/new": [{ label: "Projects", href: "/projects" }, { label: "Start QA analysis" }],
+  "/settings": [{ label: "Settings" }],
+  "/help": [{ label: "Help" }],
+};
 
-  useEffect(() => {
-    const term = q.trim();
-    if (term.length < 2) {
-      setResults(null);
-      return;
-    }
-    const ctrl = new AbortController();
-    const t = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const r = await api<SearchResults>("/search", { query: { q: term }, signal: ctrl.signal });
-        setResults(r);
-        setOpen(true);
-        setActive(-1);
-      } catch {
-        if (!ctrl.signal.aborted) setResults({ projects: [], testCases: [], defects: [], runs: [] });
-      } finally {
-        if (!ctrl.signal.aborted) setLoading(false);
-      }
-    }, 250);
-    return () => {
-      clearTimeout(t);
-      ctrl.abort();
-    };
-  }, [q]);
-
-  const items: SearchItem[] = results
-    ? [
-        ...(results.projects || []).map((p) => ({
-          href: `/projects/${p.id}`,
-          label: p.name,
-          sub: "Project",
-          icon: <FolderKanban className="h-4 w-4" aria-hidden />,
-        })),
-        ...(results.testCases || []).map((c) => ({
-          href: `/test-cases/${c.id}`,
-          label: `${c.key} · ${c.title}`,
-          sub: "Test case",
-          icon: <FileCheck2 className="h-4 w-4" aria-hidden />,
-        })),
-        ...(results.runs || []).map((r) => ({
-          href: `/test-runs/${r.id}`,
-          label: `${r.key} · ${r.name}`,
-          sub: "Test run",
-          icon: <PlayCircle className="h-4 w-4" aria-hidden />,
-        })),
-        ...(results.defects || []).map((d) => ({
-          href: `/defects/${d.id}`,
-          label: `${d.key} · ${d.title}`,
-          sub: "Defect",
-          icon: <Bug className="h-4 w-4" aria-hidden />,
-        })),
-      ]
-    : [];
-
-  function go(item: SearchItem) {
-    setOpen(false);
-    setQ("");
-    router.push(item.href);
+function Breadcrumb() {
+  const pathname = usePathname();
+  const project = projectRoute(pathname);
+  const { data } = useApi<ProjectDetail>(project ? `/projects/${project.id}` : null);
+  let crumbs: Crumb[] = STATIC_CRUMBS[pathname] ?? [];
+  if (project) {
+    const base = `/projects/${project.id}`;
+    const section = sectionBySlug(project.section);
+    crumbs = [{ label: "Projects", href: "/projects" }, { label: data?.name ?? "Project", href: section && section.slug ? base : undefined }];
+    if (section && section.slug) crumbs.push({ label: section.label, href: pathname.split("/").length > 4 ? `${base}/${section.slug}` : undefined });
+    if (pathname.endsWith("/reports/discovery")) crumbs.push({ label: "Application Discovery Report" });
   }
-
-  function onKeyDown(e: React.KeyboardEvent) {
-    if (!open || items.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActive((a) => (a + 1) % items.length);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive((a) => (a - 1 + items.length) % items.length);
-    } else if (e.key === "Enter" && active >= 0) {
-      e.preventDefault();
-      go(items[active]);
-    }
-  }
-
+  if (crumbs.length === 0) return <div className="min-w-0 flex-1" />;
   return (
-    <div ref={ref} className="relative w-full max-w-md">
-      <label htmlFor="global-search" className="sr-only">
-        Search projects, test cases, runs and defects
-      </label>
-      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-muted" aria-hidden />
-      <input
-        id="global-search"
-        type="search"
-        role="combobox"
-        aria-expanded={open}
-        aria-controls={listId}
-        aria-autocomplete="list"
-        aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
-        autoComplete="off"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        onFocus={() => results && setOpen(true)}
-        onKeyDown={onKeyDown}
-        placeholder="Search…"
-        className="block h-9 w-full rounded-md border-0 bg-elevated pl-9 pr-3 text-sm text-fg-strong ring-1 ring-inset ring-line placeholder:text-fg-subtle focus:bg-canvas focus:outline-none focus:ring-2 focus:ring-accent"
-      />
-      {loading && (
-        <span className="absolute right-3 top-1/2 -translate-y-1/2">
-          <Spinner label="" />
-        </span>
-      )}
-      {open && results && (
-        <div className="absolute left-0 right-0 top-11 z-40 overflow-hidden rounded-lg bg-elevated shadow-xl shadow-black/50 ring-1 ring-line-strong">
-          {items.length === 0 ? (
-            <p className="px-4 py-3 text-sm text-fg-muted">No matches for “{q}”.</p>
-          ) : (
-            <ul id={listId} role="listbox" aria-label="Search results" className="max-h-80 overflow-y-auto py-1">
-              {items.map((it, i) => (
-                <li
-                  key={it.href}
-                  id={`${listId}-${i}`}
-                  role="option"
-                  aria-selected={i === active}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    go(it);
-                  }}
-                  onMouseEnter={() => setActive(i)}
-                  className={`flex cursor-pointer items-center gap-3 px-3 py-2 text-sm ${i === active ? "bg-accent-soft" : ""}`}
-                >
-                  <span className="text-fg-muted">{it.icon}</span>
-                  <span className="min-w-0 flex-1 truncate text-fg-strong">{it.label}</span>
-                  <span className="text-xs text-fg-muted">{it.sub}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Notifications() {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, () => setOpen(false), ref);
-  const { data, error, mutate } = useApi<Notification[]>("/notifications", undefined, { refreshInterval: 60000 });
-  const unread = (data || []).filter((n) => !n.read).length;
-
-  async function markAll() {
-    try {
-      await api("/notifications/read-all", { method: "POST" });
-      await mutate();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        aria-haspopup="true"
-        aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`}
-        className="relative rounded-md p-2 text-fg-muted hover:bg-overlay hover:text-fg-strong"
-      >
-        <Bell className="h-5 w-5" aria-hidden />
-        {unread > 0 && (
-          <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
-            {unread > 9 ? "9+" : unread}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div className="absolute right-0 top-11 z-40 w-80 overflow-hidden rounded-lg bg-elevated shadow-xl shadow-black/50 ring-1 ring-line-strong">
-          <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-            <p className="text-sm font-semibold text-fg-strong">Notifications</p>
-            {unread > 0 && (
-              <button type="button" onClick={markAll} className="text-xs font-medium text-fg-strong hover:underline">
-                Mark all read
-              </button>
-            )}
-          </div>
-          <div className="max-h-96 overflow-y-auto">
-            {error && <p className="px-4 py-3 text-sm text-red-400">Couldn’t load notifications.</p>}
-            {!error && !data && <p className="px-4 py-3 text-sm text-fg-muted">Loading…</p>}
-            {data && data.length === 0 && <p className="px-4 py-6 text-center text-sm text-fg-muted">You’re all caught up.</p>}
-            {data?.map((n) => {
-              const body = (
-                <>
-                  <div className="flex items-start gap-2">
-                    {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-fg-strong">{n.title}</p>
-                      {n.body && <p className="mt-0.5 line-clamp-2 text-xs text-fg-muted">{n.body}</p>}
-                      <p className="mt-1 text-xs text-fg-muted">{timeAgo(n.createdAt)}</p>
-                    </div>
-                  </div>
-                </>
-              );
-              return n.link ? (
-                <Link
-                  key={n.id}
-                  href={n.link}
-                  onClick={() => setOpen(false)}
-                  className="block border-b border-line px-4 py-3 hover:bg-overlay"
-                >
-                  {body}
+    <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
+      <ol className="flex min-w-0 items-center gap-1.5 text-body">
+        {crumbs.map((c, i) => {
+          const last = i === crumbs.length - 1;
+          return (
+            <li key={`${c.label}-${i}`} className={`flex min-w-0 items-center gap-1.5 ${i < crumbs.length - 2 ? "hidden sm:flex" : ""}`}>
+              {i > 0 && (
+                <span aria-hidden className="text-fg-subtle">
+                  /
+                </span>
+              )}
+              {c.href && !last ? (
+                <Link href={c.href} className="truncate text-fg-muted hover:text-fg-strong hover:underline">
+                  {c.label}
                 </Link>
               ) : (
-                <div key={n.id} className="border-b border-line px-4 py-3">
-                  {body}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
+                <span aria-current={last ? "page" : undefined} className={`truncate ${last ? "font-medium text-fg-strong" : "text-fg-muted"}`}>
+                  {c.label}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
 function UserMenu() {
-  const { user, logout } = useAuth();
+  const { user, organisation, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(open, () => setOpen(false), ref);
-  const initials = (user?.fullName || "?")
+  const initials = (user?.full_name || "?")
     .split(/\s+/)
-    .map((s) => s[0])
+    .map((s: string) => s[0])
     .slice(0, 2)
     .join("")
     .toUpperCase();
@@ -277,39 +98,37 @@ function UserMenu() {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="flex items-center gap-2 rounded-md p-1 pr-2 hover:bg-overlay"
+        className="flex min-h-10 items-center gap-2 rounded-md p-1 pr-2 hover:bg-overlay"
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-overlay text-xs font-semibold text-fg-strong ring-1 ring-line-strong">
+        <span aria-hidden className="flex h-8 w-8 items-center justify-center rounded-full bg-navy-50 text-caption font-semibold text-navy-800 ring-1 ring-navy-100">
           {initials}
         </span>
-        <span className="hidden text-left md:block">
-          <span className="block text-sm font-medium leading-tight text-fg-strong">{user?.fullName}</span>
-          <span className="block text-xs leading-tight text-fg-muted">{user?.role === "ADMIN" ? "Admin" : "Member"}</span>
-        </span>
-        <ChevronDown className="hidden h-4 w-4 text-fg-muted md:block" aria-hidden />
-        <span className="sr-only">Open user menu</span>
+        <span className="hidden text-left text-body font-medium text-fg-strong md:block">{user?.full_name}</span>
+        <ChevronDown className="h-4 w-4 text-fg-muted" aria-hidden />
+        <span className="sr-only">Account menu</span>
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 top-11 z-40 w-56 overflow-hidden rounded-lg bg-elevated py-1 shadow-xl shadow-black/50 ring-1 ring-line-strong">
+        <div role="menu" className="absolute right-0 top-12 z-40 w-64 overflow-hidden rounded-lg bg-surface py-1 shadow-lg ring-1 ring-line-strong">
           <div className="border-b border-line px-4 py-2.5">
-            <p className="truncate text-sm font-medium text-fg-strong">{user?.fullName}</p>
-            <p className="truncate text-xs text-fg-muted">{user?.email}</p>
+            <p className="truncate text-body font-semibold text-fg-strong">{user?.full_name}</p>
+            <p className="truncate text-small text-fg-muted">{user?.email}</p>
+            {organisation && <p className="truncate text-small text-fg-muted">{organisation.name}</p>}
           </div>
           <Link
             role="menuitem"
             href="/settings"
             onClick={() => setOpen(false)}
-            className="flex items-center gap-2 px-4 py-2 text-sm text-fg hover:bg-overlay"
+            className="flex min-h-10 items-center gap-2 px-4 py-2 text-body text-fg-strong hover:bg-overlay"
           >
-            <User className="h-4 w-4" aria-hidden /> Profile & settings
+            <Settings className="h-4 w-4" aria-hidden /> Settings
           </Link>
           <button
             role="menuitem"
             type="button"
             onClick={() => void logout()}
-            className="flex w-full items-center gap-2 px-4 py-2 text-sm text-fg hover:bg-overlay"
+            className="flex min-h-10 w-full items-center gap-2 px-4 py-2 text-body text-fg-strong hover:bg-overlay"
           >
-            <LogOut className="h-4 w-4" aria-hidden /> Log out
+            <LogOut className="h-4 w-4" aria-hidden /> Sign out
           </button>
         </div>
       )}
@@ -317,34 +136,32 @@ function UserMenu() {
   );
 }
 
-export function Topbar({ onOpenNav }: { onOpenNav: () => void }) {
-  const { organisation } = useAuth();
+export function Topbar({
+  onOpenNav,
+  navOpen,
+  hamburgerRef,
+}: {
+  onOpenNav: () => void;
+  navOpen: boolean;
+  hamburgerRef: React.RefObject<HTMLButtonElement | null>;
+}) {
   return (
-    <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-canvas/85 px-4 backdrop-blur sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-surface px-4 sm:px-6 lg:px-8">
       <button
+        ref={hamburgerRef}
         type="button"
         onClick={onOpenNav}
-        className="rounded-md p-2 text-fg hover:bg-overlay lg:hidden"
+        className="rounded-md p-2 text-fg-strong hover:bg-overlay lg:hidden"
         aria-label="Open navigation"
+        aria-expanded={navOpen}
       >
         <Menu className="h-5 w-5" aria-hidden />
       </button>
-      <GlobalSearch />
+      <Breadcrumb />
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
-        {organisation && (
-          <span className="hidden max-w-[12rem] truncate rounded-md bg-overlay px-2.5 py-1 text-xs font-medium text-fg xl:inline" title="Workspace">
-            {organisation.name}
-          </span>
-        )}
-        <Link
-          href="/help"
-          className="rounded-md p-2 text-fg-muted hover:bg-overlay hover:text-fg-strong"
-          aria-label="Help"
-          title="Help"
-        >
+        <Link href="/help" className="rounded-md p-2 text-fg-muted hover:bg-overlay hover:text-fg-strong" aria-label="Help">
           <CircleHelp className="h-5 w-5" aria-hidden />
         </Link>
-        <Notifications />
         <UserMenu />
       </div>
     </header>

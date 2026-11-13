@@ -1,86 +1,124 @@
+import { Circle, CircleCheck, CircleDashed, CircleDot, CirclePause, CircleSlash, CircleX, Loader2, UserRoundCheck, type LucideIcon } from "lucide-react";
 import { humanize } from "@/lib/format";
 
-export type Tone = "green" | "red" | "amber" | "blue" | "grey" | "rose" | "violet";
+export type Tone = "green" | "red" | "amber" | "blue" | "grey" | "violet";
 
-// Single source of truth for status colours across the app.
+// Single source of truth for status colours (design spec §2.1). Colour is never the only signal:
+// every pill carries an icon or dot plus its text.
 const TONES: Record<string, Tone> = {
-  // results / runs
-  PASSED: "green",
-  COMPLETED: "green",
+  // lifecycle / stage / scan statuses (QA Analyst API)
   DONE: "green",
+  COMPLETED: "green",
+  APPROVED: "green",
+  READY: "green",
+  ACTIVE: "blue",
+  RUNNING: "blue",
+  QUEUED: "blue",
+  LIVE: "blue",
+  RENDERING: "blue",
+  AWAITING_APPROVAL: "amber",
+  WAITING: "amber",
+  PAUSED: "amber",
+  PARTIAL: "amber",
+  CHANGES_REQUESTED: "amber",
+  STALE: "amber",
+  DRAFT: "amber",
   FAILED: "red",
   ERROR: "red",
-  BLOCKED: "amber",
-  NOT_EXECUTED: "grey",
-  QUEUED: "blue",
-  RUNNING: "blue",
-  IN_PROGRESS: "blue",
+  BLOCKED: "red",
   CANCELLED: "grey",
-  // test cases
-  DRAFT: "grey",
-  APPROVED: "green",
-  READY: "blue",
+  NOT_STARTED: "grey",
+  LATER: "grey",
+  ARCHIVED: "grey",
+  // legacy screens (kept until P1-16)
+  PASSED: "green",
+  NOT_EXECUTED: "grey",
+  IN_PROGRESS: "blue",
   DEPRECATED: "grey",
-  // defects
   OPEN: "red",
   REOPENED: "red",
   FIXED: "green",
   RETEST_REQUIRED: "amber",
   CLOSED: "grey",
-  // severity / priority
   CRITICAL: "red",
-  HIGH: "rose",
+  HIGH: "red",
   MEDIUM: "amber",
   LOW: "grey",
-  // assistant / misc
   NEEDS_CONFIRMATION: "amber",
   CONNECTED: "green",
   DISCONNECTED: "grey",
   AUTH_FAILED: "red",
   UNREACHABLE: "amber",
   BLOCKED_TARGET: "red",
-  ACTIVE: "green",
   INACTIVE: "grey",
-  // environments
   PRODUCTION: "red",
   STAGING: "amber",
   DEVELOPMENT: "blue",
 };
 
-// Status tones are tinted for the dark theme. Orange is deliberately absent: it is the
-// call-to-action colour, so "high" severity uses rose and "running/info" uses sky.
-const TONE_CLASSES: Record<Tone, string> = {
-  green: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30",
-  red: "bg-red-500/10 text-red-300 ring-red-500/30",
-  amber: "bg-amber-500/10 text-amber-300 ring-amber-500/30",
-  rose: "bg-pink-500/10 text-pink-300 ring-pink-500/30",
-  blue: "bg-sky-500/10 text-sky-300 ring-sky-500/30",
-  grey: "bg-white/5 text-fg-muted ring-white/10",
-  violet: "bg-violet-500/10 text-violet-300 ring-violet-500/30",
+/** Exported for components that build their own chips (lifecycle, gate checklist). */
+export const TONE_CLASSES: Record<Tone, string> = {
+  green: "bg-success-bg text-success-fg ring-success-line",
+  red: "bg-danger-bg text-danger-fg ring-danger-line",
+  amber: "bg-warning-bg text-warning-fg ring-warning-line",
+  blue: "bg-info-bg text-info-fg ring-info-line",
+  grey: "bg-overlay text-fg-muted ring-line-strong",
+  violet: "bg-inferred-bg text-inferred-fg ring-inferred-fg/40",
+};
+
+export const TONE_TEXT: Record<Tone, string> = {
+  green: "text-success-fg",
+  red: "text-danger-fg",
+  amber: "text-warning-fg",
+  blue: "text-info-fg",
+  grey: "text-fg-muted",
+  violet: "text-inferred-fg",
 };
 
 const DOT: Record<Tone, string> = {
-  green: "bg-emerald-400",
-  red: "bg-red-400",
-  amber: "bg-amber-400",
-  rose: "bg-pink-400",
-  blue: "bg-sky-400",
+  green: "bg-success-solid",
+  red: "bg-danger-solid",
+  amber: "bg-warning-solid",
+  blue: "bg-info-solid",
   grey: "bg-fg-subtle",
-  violet: "bg-violet-400",
+  violet: "bg-inferred-fg",
 };
+
+/** Icons per normalised status (design spec §7.1 status vocabulary). */
+const ICONS: Record<string, LucideIcon> = {
+  DONE: CircleCheck,
+  COMPLETED: CircleCheck,
+  APPROVED: CircleCheck,
+  READY: CircleCheck,
+  RUNNING: Loader2,
+  QUEUED: CircleDot,
+  RENDERING: Loader2,
+  AWAITING_APPROVAL: UserRoundCheck,
+  WAITING: UserRoundCheck,
+  PAUSED: CirclePause,
+  FAILED: CircleX,
+  ERROR: CircleX,
+  CANCELLED: CircleSlash,
+  NOT_STARTED: Circle,
+  LATER: CircleDashed,
+};
+
+function norm(status: string): string {
+  return status.toUpperCase().replace(/[\s-]+/g, "_");
+}
 
 export function statusTone(status: string | null | undefined): Tone {
   if (!status) return "grey";
-  const key = status.toUpperCase();
-  return TONES[key] || TONES[key.split(/[\s(]/)[0]] || "grey";
+  const key = norm(status);
+  return TONES[key] || TONES[key.split(/[_(]/)[0]] || "grey";
 }
 
-/** Hex colours for charts, aligned with the pill tones. */
+/** Hex colours for legacy charts, aligned with the pill tones. */
 export const STATUS_HEX = {
-  passed: "#10b981",
-  failed: "#ef4444",
-  blocked: "#f59e0b",
-  other: "#737373",
+  passed: "#079455",
+  failed: "#D92D20",
+  blocked: "#DC6803",
+  other: "#667085",
 };
 
 export function StatusPill({
@@ -97,12 +135,21 @@ export function StatusPill({
   className?: string;
 }) {
   const t = tone || statusTone(status);
-  const running = status === "RUNNING" || status === "QUEUED";
+  const key = status ? norm(status) : "";
+  const Icon = ICONS[key];
+  const spinning = key === "RUNNING" || key === "RENDERING";
   return (
     <span
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${TONE_CLASSES[t]} ${className}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES[t]} ${className}`}
     >
-      {dot && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${DOT[t]} ${running ? "animate-pulse" : ""}`} />}
+      {Icon ? (
+        <>
+          <Icon className={`h-3.5 w-3.5 ${spinning ? "animate-spin motion-reduce:hidden" : ""}`} aria-hidden />
+          {spinning && <CircleDot className="hidden h-3.5 w-3.5 motion-reduce:inline" aria-hidden />}
+        </>
+      ) : (
+        dot && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${DOT[t]}`} />
+      )}
       {label ?? (status ? humanize(status) : "None")}
     </span>
   );
@@ -122,7 +169,7 @@ export function Badge({
   return (
     <span
       title={title}
-      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-medium ring-1 ring-inset ${TONE_CLASSES[tone]} ${className}`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES[tone]} ${className}`}
     >
       {children}
     </span>

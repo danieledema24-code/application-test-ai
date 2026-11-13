@@ -2,70 +2,146 @@
 
 @theme inline {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /*
- * Colour tokens — dark theme with orange calls-to-action.
- * Every neutral/accent colour in the UI comes from these tokens. Status colours use
- * Tailwind's palette directly: emerald = passed, red = failed/critical,
- * amber = blocked/warning, sky = informational/running. Orange is reserved for
- * CTAs, links, selection and focus — never for status pills.
+ * Colour tokens — light theme with a deep navy primary (docs/design/P1-qa-analyst-phase1.md §2.1).
+ * Token *names* are unchanged from the old dark theme so every ui/ component re-skins without class
+ * changes. Navy is for action and selection only; status always uses the semantic tones below.
  *
- * Contrast (WCAG 2.2 AA) measured on surface #141414 / elevated #1c1c1c:
- *   fg-strong #fafafa ≈ 18:1 · fg #e5e5e5 ≈ 15:1 · fg-muted #a3a3a3 ≈ 7:1
- *   fg-subtle #8f8f8f ≈ 5.3:1 · accent #f97316 used as text ≈ 6.4:1
- *   on-accent #0a0a0a on accent #f97316 ≈ 7.6:1, on hover #ea580c ≈ 5.9:1
- *   (white on #f97316 is ≈ 2.8:1 and fails, so CTA text is near-black).
+ * Contrast (WCAG 2.2 AA) on surface #FFFFFF / canvas #F6F7F9:
+ *   fg-strong #0E1730 ≈ 17:1 · fg #2A3448 ≈ 12.5:1 · fg-muted #535D70 ≈ 6.6:1 (5.9:1 on overlay)
+ *   fg-subtle #667085 ≈ 5.0:1 white, 4.6:1 canvas (never on overlay for meaningful text)
+ *   white on accent #1A2847 ≈ 14.6:1, on accent-hover #243659 ≈ 12:1
+ *   line-input #858FA1 ≈ 3.3:1 on white (form control borders, WCAG 1.4.11)
+ *   semantic *-fg on *-bg ≥ 5:1 · focus #2F6FED ≈ 4.5:1 on white
  */
 @theme {
+  /* Navy primary scale */
+  --color-navy-50: #eef2f8;
+  --color-navy-100: #dce3ef;
+  --color-navy-200: #b9c6dd;
+  --color-navy-300: #8ea1c3;
+  --color-navy-400: #6079a3;
+  --color-navy-500: #415a86;
+  --color-navy-600: #2f466f;
+  --color-navy-700: #243659; /* hover on primary, link text */
+  --color-navy-800: #1a2847; /* PRIMARY */
+  --color-navy-900: #121c35; /* pressed */
+  --color-navy-950: #0b1224; /* modal scrim base */
+
   /* Surfaces, back to front */
-  --color-canvas: #0a0a0a; /* page background, sidebar */
-  --color-surface: #141414; /* cards, top bar, modals, inputs */
-  --color-elevated: #1c1c1c; /* table headers, hovered rows, nested panels */
-  --color-overlay: #262626; /* chips, segmented-control track, hover on elevated */
+  --color-canvas: #f6f7f9; /* app background */
+  --color-surface: #ffffff; /* cards, sidebar, top bar, inputs, modals */
+  --color-elevated: #f9fafb; /* table headers, nested panels, code blocks */
+  --color-overlay: #eef1f5; /* chips, segmented track, row hover */
 
   /* Lines */
-  --color-line: #2a2a2a;
-  --color-line-strong: #3d3d3d;
+  --color-line: #e3e7ed; /* card borders, dividers (decorative) */
+  --color-line-strong: #cdd3dc; /* table/section dividers */
+  --color-line-input: #858fa1; /* form control borders */
 
   /* Text */
-  --color-fg-strong: #fafafa; /* headings, key figures */
-  --color-fg: #e5e5e5; /* body text */
-  --color-fg-muted: #a3a3a3; /* secondary text, labels */
-  --color-fg-subtle: #8f8f8f; /* placeholders, disabled, tertiary */
+  --color-fg-strong: #0e1730;
+  --color-fg: #2a3448;
+  --color-fg-muted: #535d70;
+  --color-fg-subtle: #667085;
 
-  /* Accent: CTAs, links, active nav/tab, selected toggles, focus */
-  --color-accent: #f97316;
-  --color-accent-hover: #ea580c;
-  --color-accent-bright: #fdba74; /* unused: links use text colours */
-  --color-accent-soft: #2b1709; /* subtle tint for selected/active states */
-  --color-on-accent: #0a0a0a; /* text/icons on accent backgrounds */
+  /* Primary (keeps the "accent" names so existing components re-skin) */
+  --color-accent: #1a2847;
+  --color-accent-hover: #243659;
+  --color-accent-soft: #eef2f8;
+  --color-on-accent: #ffffff;
+
+  /* Semantic: fg is text/icon, bg is tint, line is 1px ring, solid is a filled control */
+  --color-success-fg: #067647;
+  --color-success-bg: #ecfdf3;
+  --color-success-line: #abefc6;
+  --color-success-solid: #079455;
+  --color-warning-fg: #b54708;
+  --color-warning-bg: #fffaeb;
+  --color-warning-line: #fedf89;
+  --color-warning-solid: #dc6803;
+  --color-danger-fg: #b42318;
+  --color-danger-bg: #fef3f2;
+  --color-danger-line: #fecdca;
+  --color-danger-solid: #d92d20;
+  --color-info-fg: #175cd3;
+  --color-info-bg: #eff8ff;
+  --color-info-line: #b2ddff;
+  --color-info-solid: #2e90fa;
+
+  /* Evidence labels (not semantic status) */
+  --color-observed-fg: #1a2847;
+  --color-observed-bg: #eef2f8;
+  --color-inferred-fg: #6b3fa0;
+  --color-inferred-bg: #f6f2fc;
+
+  /* Focus */
+  --color-focus: #2f6fed;
+
+  /* Scrim */
+  --color-scrim: rgb(11 18 36 / 0.45);
+
+  /* Type scale (§2.2) */
+  --text-display: 1.875rem;
+  --text-display--line-height: 2.375rem;
+  --text-h1: 1.5rem;
+  --text-h1--line-height: 2rem;
+  --text-h2: 1.125rem;
+  --text-h2--line-height: 1.75rem;
+  --text-h3: 0.9375rem;
+  --text-h3--line-height: 1.375rem;
+  --text-body-lg: 1rem;
+  --text-body-lg--line-height: 1.625rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.375rem;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.25rem;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+
+  /* Radii (§2.3) */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Shadows: cool, low, navy-tinted */
+  --shadow-xs: 0 1px 2px rgb(16 24 40 / 0.05);
+  --shadow-sm: 0 1px 3px rgb(16 24 40 / 0.08), 0 1px 2px rgb(16 24 40 / 0.04);
+  --shadow-md: 0 4px 8px -2px rgb(16 24 40 / 0.08), 0 2px 4px -2px rgb(16 24 40 / 0.04);
+  --shadow-lg: 0 12px 16px -4px rgb(16 24 40 / 0.08), 0 4px 6px -2px rgb(16 24 40 / 0.03);
+  --shadow-xl: 0 20px 24px -4px rgb(16 24 40 / 0.1), 0 8px 8px -4px rgb(16 24 40 / 0.04);
 }
 
-/* Base styles live in the base layer so Tailwind utilities (e.g. focus:outline-none) can override them. */
+/* Base styles live in the base layer so Tailwind utilities can override them. */
 @layer base {
   html {
-    color-scheme: dark;
+    color-scheme: light;
+    /* Keeps focused items clear of the sticky 64px top bar (WCAG 2.4.11). */
+    scroll-padding-top: 80px;
+    scrollbar-color: var(--color-line-strong) var(--color-canvas);
   }
 
   body {
     background: var(--color-canvas);
     color: var(--color-fg);
+    font-feature-settings: "cv11", "ss01";
   }
 
   ::selection {
-    background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    background: var(--color-navy-100);
     color: var(--color-fg-strong);
   }
 
-  /* Visible, consistent focus ring for keyboard users (WCAG 2.2 focus appearance) */
+  /* One visible focus ring everywhere: 2px focus-blue, 2px offset (§2.3). */
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--color-focus);
     outline-offset: 2px;
   }
 
-  /* Native checkboxes, radios, range sliders and progress bars pick up the accent. */
   input[type="checkbox"],
   input[type="radio"],
   input[type="range"],
@@ -73,16 +149,6 @@
     accent-color: var(--color-accent);
   }
 
-  select option,
-  select optgroup {
-    background: var(--color-surface);
-    color: var(--color-fg);
-  }
-
-  /* Scrollbars */
-  html {
-    scrollbar-color: var(--color-line-strong) var(--color-canvas);
-  }
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: var(--color-line-strong) transparent;
@@ -90,4 +156,20 @@
   .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--color-line-strong); border-radius: 4px; }
+}
+
+/* Coarse pointers get 44px targets for small and default controls (§2.3). */
+@media (pointer: coarse) {
+  .touch-target {
+    min-height: 2.75rem;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
 }

@@ -66,7 +66,14 @@ function heuristic(ev: FailureEvidence): FailureAnalysis {
     return { ...base, classification: "FLAKY", confidence: "LOW", summary: "This test has both passed and failed in recent runs, which suggests instability.",
       possibleCauses: ["Timing-dependent assertions", "Shared or changing test data", "Intermittent backend errors"],
       suggestedNextSteps: ["Re-run the test to confirm", "Replace fixed waits with web-first assertions", "Check whether test data is shared between runs"] };
-  if (ev.kind === "script" || /locator|strict mode violation|is not a function|SyntaxError|ReferenceError|TypeError/i.test(msg))
+  // A failed `expect(...)` means the script ran and the page did not behave as expected: that points at the
+  // application, not the script. (Playwright assertion text mentions "locator", so this must come before the script rule.)
+  const assertion = ev.kind === "assertion" || (ev.kind !== "script" && /expect\([^)]*\)\.\w+\([^)]*\) failed|^\s*Expected:.*\n\s*(Received|Timeout):/im.test(msg));
+  if (assertion && !/strict mode violation/i.test(msg))
+    return { ...base, classification: "APPLICATION", confidence: "MEDIUM", summary: "The test ran to the end, but the page did not behave as the check expects. This is most likely a real problem in the application.",
+      possibleCauses: ["The application behaves differently from the expected result (a defect)", "The expected result is out of date because the application changed on purpose"],
+      suggestedNextSteps: ["Look at the final screenshot and video to see what the page actually did", "Repeat the steps by hand to confirm", "Raise a defect if the behaviour is wrong, or update the check if the change was intended"] };
+  if (ev.kind === "script" || /strict mode violation|is not a function|SyntaxError|ReferenceError|TypeError/i.test(msg))
     return { ...base, classification: "SCRIPT", confidence: "MEDIUM", summary: "The failure looks like a problem in the automation script rather than the application.",
       possibleCauses: ["A selector no longer matches the page", "The script has a coding error", "The step order does not match the current UI"],
       suggestedNextSteps: ["Compare the final screenshot with the selector used in the failed step", "Edit the script and re-run", "Run the case manually to confirm the application behaviour"] };
