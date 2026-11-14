@@ -121,14 +121,14 @@ export function Gate5Review({
         recommendation={recommendation}
         changesSinceApproval={
           stage.gate?.changes_since_approval
-            ? { count: stage.gate.changes_since_approval, compareHref: listHref({ changed: "1" }), compareLabel: "Compare with approved set", note: "Phase 4 will use the last approved set until Gate 5 is approved again." }
+            ? { count: stage.gate.changes_since_approval, compareHref: listHref({ changed: "1" }), compareLabel: "Compare with approved set", note: "Automation and test runs use the last approved set until Gate 5 is approved again." }
             : null
         }
         approveLabel="Approve test cases"
         approvedToast="Gate 5 approved."
         afterApproveCopy={
           <>
-            <p>Test cases approved. The approved Test Case Specification and Traceability Matrix were saved. Automation starts in Phase 4.</p>
+            <p>Test cases approved. The approved Test Case Specification and Traceability Matrix were saved. Automation starts now: suitability is assessed and scripts are written.</p>
             <p className="mt-2 flex flex-wrap gap-3">
               <Link href={`${base}/traceability`} className="font-medium text-navy-700 underline underline-offset-2">
                 Open traceability

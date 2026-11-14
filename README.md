@@ -1,122 +1,66 @@
-# Application Test AI — MVP
+# Application Test AI: QA Analyst platform
 
-AI-assisted QA platform: application discovery, AI test-case generation, manual and Playwright
-automated testing, API testing, defect management, PDF/CSV reporting and an AI assistant that acts
-through real platform functions.
+An AI-assisted QA analyst that follows the testing life cycle with a person deciding at each gate: application
+discovery, requirements, test strategy and plan, test design, automation (Playwright), authorised test runs,
+failure analysis, defects, traceability and reports. Every step has a rule-based path, so the platform works with
+AI off; AI output is labelled and never changes a recorded result.
 
 ```
-web/   Next.js + Tailwind frontend (port 3000)
-api/   Fastify + TypeScript API, Prisma, Playwright execution workers (port 4000)
-docs/  API.md — REST contract
+backend/     FastAPI + SQLAlchemy (SQLite) + Playwright: API, workflow, agents, job worker (port 8200)
+web/         Next.js 15 + Tailwind frontend (port 3002)
+automation/  Trusted Node toolkit that validates and runs the generated Playwright tests
+demo-shop/   Small application under test with deliberate bugs (port 4100)
+docs/        Architecture, contracts, design specs, product backlog and QA verification
 ```
+
+The old Fastify product was retired in Phase 4 (decision D16). It remains on `main`:
+`git worktree add ../application-test-ai-main main`.
 
 ## Quick start
 
-Requires Node 22+.
+Requires Python 3.12 with [uv](https://docs.astral.sh/uv/) and Node 22.6+.
 
 ```bash
-cd api
-npm install
-npx playwright install chromium
-cp .env.example .env            # then set JWT_SECRET and ENCRYPTION_KEY (see comments)
-npx prisma db push
-npm run dev                      # API on http://localhost:4000
+cd automation && npm install && npx playwright install chromium && cd ..
+
+cd backend
+uv sync
+uv run playwright install chromium
+ALLOW_PRIVATE_TARGETS=true uv run uvicorn app.main:app --port 8200   # API on http://localhost:8200
 ```
 
 ```bash
 cd web
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8200
 npm install
-npm run dev                      # UI on http://localhost:3000
+npx next dev -p 3002         # UI on http://localhost:3002
 ```
 
-Optional, a demo application to test against (has deliberate bugs):
+Optional, the demo application to test against:
 
 ```bash
-cd api && npm run demo-target    # http://localhost:4100
+cd demo-shop && npm start    # http://localhost:4100 (no dependencies)
 ```
 
-Login `qa.tester@example.com` / `Passw0rd!demo`, API bearer token `demo-token-7f3a9c`,
-OpenAPI spec at `http://localhost:4100/openapi.json`.
+Its test login is in `demo-shop/demo-login.mjs`. `ALLOW_PRIVATE_TARGETS=true` (development only) lets the backend
+analyse a site on localhost; see `backend/README.md`.
 
 ### Enabling Claude
 
-Set `ANTHROPIC_API_KEY` in `api/.env`. Without it every AI feature still works through clearly
-labelled rule-based fallbacks (heuristic test generation, failure classification, script
-generation, and a limited command mode for the assistant). Model: `claude-opus-5-5`
-(override with `AI_MODEL`). Requests use server-side refusal fallbacks.
+Set `ANTHROPIC_API_KEY` in `backend/.env`. Without it every agent uses its rule-based path and the assistant answers
+its built-in questions.
 
-## Playwright automation
-
-Every automated test case is stored as a standard **Playwright Test** spec
-(`import { test, expect } from "../fixtures"`). The in-app runner writes them into a temporary
-Playwright project and runs `playwright test`, so the same files run anywhere:
-
-- **Download a project:** *Test cases → Download Playwright project* (or
-  `GET /api/projects/:id/playwright-export`) gives a zip with `package.json`, `playwright.config.ts`,
-  `fixtures.ts`, `tests/*.spec.ts` and `.env.example`. Run it with `npm install && npx playwright test`.
-- **Remote browser grid:** set *Remote Playwright endpoint* (`wss://…`) on an environment and
-  runs execute on that browser server instead of local Chromium. Exported projects use `PW_WS_ENDPOINT`.
-- **Live view:** while an automated run is in progress, the run page streams what each browser is showing.
-  Set *Slow motion* on the environment (e.g. 500 ms per action) to make it easy to follow. Local browsers only.
-- **Evidence:** a full video of every test (set `recordVideo` to `"failures"` to keep failed ones only), a masked
-  final screenshot, console and network logs; failed tests also keep a Playwright trace.
-- **Readable test cases:** every case has an objective, preconditions, numbered steps with the exact test data
-  and an expected result per step, and an overall pass criterion.
-- **Exports:** test cases as CSV (*Test cases → Export CSV*); run and project reports as PDF/CSV.
-
-### Rule-based tests that find bugs
-
-Without AI, scripts come from a rule-based translator of the plain-English steps. Verify steps become
-real checks, never a bare "page loaded" assertion:
-
-| Step wording | Check |
-|---|---|
-| *Verify the form is not accepted* (or *validation message*) | Still on the form or an error is shown, and no success message |
-| *Verify an error message about invalid credentials is displayed* | An error/alert is visible |
-| *Verify the user is signed in* | No password field and no error message remain |
-| *Verify a confirmation message is shown* | A success/thank-you message and no error |
-| *Verify no server error is shown* | No server error, exception or stack trace text |
-| *Verify "text" is displayed* | That exact text is visible |
-
-Wording it doesn't recognise becomes a `TODO` that fails loudly instead of passing silently. Generated
-forms also get **assumed-required** cases for fields the page doesn't mark as required (labelled as an
-assumption to confirm). On DemoShop this catches the empty-message bug, and API cases catch the price
-returned as a string. Failures read as *Step "…" failed: <expected behaviour>. The page showed "…" at /path*,
-and defect drafts are titled after the failing check.
-
-## End-to-end check
-
-With the API and demo target running:
+## Checks
 
 ```bash
-cd api && node test/e2e-journey.mjs
+cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
+cd automation && npm test && npm run typecheck && npm run lint
+cd web && npx tsc --noEmit && npm run lint && npx playwright test --project=unit --project=ui-mocked --workers=2
 ```
 
-This walks the full MVP journey (spec §8) and the acceptance criteria AC-001–AC-015: register →
-project → authorise environment → discovery → generate & approve cases → automated run with
-evidence → Playwright project & CSV export → manual run → defect → OpenAPI import & API run → PDF/CSV reports → dashboard →
-assistant → workspace isolation → password reset.
+Real-stack journeys (backend on 8200, web on 3002, demo shop on 4100):
+`cd web && npx playwright test --project=e2e e2e/phase4-journey.spec.ts` (also `phase2-journey`, `phase3-journey`).
+The Phase 4 journey invites a member (no gate approval) into the shared e2e account's organisation once and keeps
+it in `web/playwright/.auth/e2e-member.json` (gitignored).
 
-## Architecture notes and deviations from the recommended stack
-
-| Spec recommendation | MVP implementation | Path to production |
-|---|---|---|
-| FastAPI (Python) | Fastify + TypeScript | One language across UI, API and Playwright scripts |
-| PostgreSQL | Prisma + SQLite | Change `provider` to `postgresql` in `api/prisma/schema.prisma` and set `DATABASE_URL`; JSON is stored as text for portability |
-| Redis queue | In-process bounded worker pool (`services/queue.ts`); job state lives in the DB, interrupted runs are recovered on restart | Replace `enqueue`/pump with BullMQ; handlers are unchanged |
-| Docker workers | Each automated run is one Playwright Test child process (`services/runner.ts`) with a scrubbed environment and the network policy in `fixtures.ts`. Every spec is checked before it is saved, exported or run (`lib/spec-guard.ts`): no imports besides the fixtures, no Node globals, prototype escapes, private Playwright internals or host file paths, and only `process.env.NAME` reads. The browser can only open http(s) pages | Run the runner in a per-job container or VM with egress firewall rules, especially for multi-tenant hosting: the spec guard is a safeguard, not an OS sandbox |
-| S3 storage | Local filesystem, keys namespaced by `org/project/...` (`lib/storage.ts`) | Swap `putObject/getObject` for an S3 client |
-| Managed auth | bcrypt + JWT sessions (revocable, 12 h), password reset tokens (dev mode returns the link, since no SMTP is configured) | Plug in a managed IdP |
-
-### Safeguards (spec §13)
-- **Authorisation before testing**: discovery, automated and API runs are refused until a user
-  confirms authorisation for the environment; changing the URL withdraws it. Recorded in the audit log.
-- **SSRF / approved domains**: cloud metadata endpoints are always blocked; private networks are blocked unless
-  `ALLOW_PRIVATE_TARGETS=true` (dev only). Browsers may only navigate to the approved host.
-- **Production**: production environments are read-only by default (no write API requests).
-  Write requests always need explicit confirmation. Assistant runs against production need confirmation.
-- **Secrets**: credentials are AES-256-GCM encrypted at rest, write-only in the API, injected
-  only at execution time, redacted from logs, evidence, reports and AI prompts, and password fields are masked in screenshots.
-- **AI honesty**: AI output is labelled (hypothesis / AI-generated / rule-based), never changes
-  recorded statuses, and AI-generated cases start as DRAFT and must be approved before execution.
-- **Isolation**: every query is scoped to the caller's organisation; cross-workspace access returns 404.
+More detail: `backend/README.md`, `automation/README.md`, `demo-shop/README.md` and `docs/architecture/README.md`.

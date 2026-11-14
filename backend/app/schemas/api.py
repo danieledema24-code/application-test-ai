@@ -113,6 +113,15 @@ class BrowserHealth(BaseModel):
     available: bool
 
 
+class AutomationHealth(BaseModel):
+    """P4-01: the automation/ Node toolkit. Fields are null when it isn't installed."""
+
+    node: str | None = None
+    toolkit: str | None = None
+    playwright: str | None = None
+    browsers: list[str] = Field(default_factory=list)
+
+
 class Health(BaseModel):
     status: Literal["ok", "degraded"]
     db: bool
@@ -124,6 +133,7 @@ class Health(BaseModel):
     # True only when the dev-only ALLOW_PRIVATE_TARGETS flag is on (never in production): loopback targets such as
     # http://localhost:4100 can be analysed. LAN/link-local addresses stay blocked either way.
     allow_private_targets: bool = False
+    automation: AutomationHealth = Field(default_factory=AutomationHealth)
 
 
 # ---------------------------------------------------------------- auth
@@ -298,6 +308,8 @@ class ProjectSummary(BaseModel):
     current_activity: str | None = None
     # Phase 2: counts in the current requirement set ({total, approved, draft}); null before requirements exist.
     requirements: dict[str, int] | None = None
+    # Phase 4: the latest finished test run ({key, status, tests, totals, finished_at}); null before any run.
+    last_run: dict[str, Any] | None = None
 
 
 class ProjectUrlOut(BaseModel):
@@ -725,13 +737,19 @@ class KnowledgeItemOut(BaseModel):
 
 
 class ReportCreate(Req):
-    report_type: Literal["discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm"]
+    report_type: Literal[
+        "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect"
+    ]
     scan_id: uuid.UUID | None = None
     stage_run_version: int | None = None
+    # P4-11: the run a Test Execution Report covers; omitted = "latest result per test case".
+    run_key: str | None = Field(default=None, max_length=40)
 
     @classmethod
     def allowed_types(cls) -> set[str]:
-        return {"discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm"}
+        return {
+            "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect"
+        }  # fmt: skip
 
 
 class ReportFile(BaseModel):
@@ -762,6 +780,8 @@ class ReportSummary(BaseModel):
     approval: dict[str, Any] | None = None
     is_latest_source: bool = True
     frozen: bool = False
+    # Phase 4 (P4-11): the run of a Test Execution Report (null = latest result per test case).
+    run_key: str | None = None
 
 
 class ReportDetail(ReportSummary):

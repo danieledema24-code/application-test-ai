@@ -12,7 +12,7 @@ import type { LintItem, RequirementDetail, RequirementSummary, Revision, TestCas
 import { fieldChanges } from "@/lib/diff";
 import { fmtDateTime } from "@/lib/format";
 import {
-  AUTOMATION_TEXT,
+  automationValueText,
   PRELIMINARY_TEXT,
   automationReasonText,
   LINT_DEFS,
@@ -47,6 +47,7 @@ import { newRow, type ChecklistRow } from "@/components/ui/ChecklistEditor";
 import { ProvenanceLabel } from "@/components/domain/ObservationLabel";
 import { EvidenceLinks, linksToItems } from "@/components/domain/EvidenceDrawer";
 import { DiffView } from "@/components/domain/DiffView";
+import { ResultStatus } from "@/components/domain/ExecutionLabels";
 import { RevisionHistory } from "@/components/domain/RevisionHistory";
 import { useAssistantDrawer } from "@/components/assistant/AssistantDrawer";
 import { noteGateReopened, useAllRequirements } from "@/components/requirements/hooks";
@@ -281,6 +282,8 @@ function undecidedFields(d: Detail): string[] {
  * Test case detail, edit and new (design P3 §8). Every spec §7 field is shown with a label; empty ones say
  * "None". No execution controls exist anywhere. Approve with blockers stays focusable and explains why.
  */
+const EXEC_STATUS_TEXT: Record<string, string> = { passed: "Passed", failed: "Failed", error: "Error", flaky: "Flaky (passed on retry)", blocked: "Blocked", skipped: "Skipped" };
+
 export function TestCaseDetailView({
   projectId,
   caseKey,
@@ -455,6 +458,9 @@ export function TestCaseDetailView({
   const snapshot = olderVersion && revisions.data ? revisions.data.find((x) => x.version === olderVersion)?.snapshot : null;
   const shown: Detail | undefined = d && snapshot ? ({ ...d, ...(snapshot as Partial<Detail>) } as Detail) : d;
   const readOnly = !canEdit || !!olderVersion;
+  // [Run this test…] (design P4 §6.6): members and approvers, approved cases the assessment says can be automated.
+  const runnable =
+    role !== "viewer" && role !== null && !olderVersion && d?.status === "approved" && d?.automation_suitability?.value === "suitable" && d?.automation_suitability?.assessed === "assessed";
   const g5Note = (wasApproved: boolean) => noteGateReopened(projectId, "G5", g5Approved && wasApproved, toast);
 
   async function refreshAll() {
@@ -1033,16 +1039,42 @@ export function TestCaseDetailView({
         </Row>
         <Row label="Expected result label">{oq ? <NotDecided /> : <ProvenanceLabel provenance={shown.classification ?? null} />}</Row>
         <Row label="Last result">
-          <span className="text-fg-muted">Not run yet</span>
-          <span className="block text-small text-fg-muted">Execution arrives in Phase 4.</span>
+          {d?.last_result ? (
+            <ul className="space-y-1">
+              {d.last_result.results.map((x) => (
+                <li key={x.result_key} className="flex flex-wrap items-center gap-2">
+                  <ResultStatus status={x.status} />
+                  <span className="text-small text-fg">
+                    {x.browser.charAt(0).toUpperCase() + x.browser.slice(1)} {x.viewport === "390x844" ? "mobile" : "desktop"} · {d.last_result!.run_key} · {fmtDateTime(d.last_result!.at)}
+                  </span>
+                  <Link href={`/projects/${projectId}/execution/${d.last_result!.run_key}/results/${x.result_key}`} className="text-small font-medium text-navy-700 underline underline-offset-2">
+                    Open result<span className="sr-only"> {x.result_key}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="text-fg-muted">Not run yet</span>
+          )}
+          {runnable && (
+            <Link href={`/projects/${projectId}/execution?new=1&cases=${shown.key}`} className="mt-1 inline-flex text-small font-medium text-navy-700 underline underline-offset-2">
+              Run this test…
+            </Link>
+          )}
         </Row>
-        <Row label="Execution status">Not run (read-only)</Row>
+        <Row label="Execution status">{d?.last_result ? `${EXEC_STATUS_TEXT[d.last_result.status] ?? d.last_result.status} (computed, read-only)` : "Not run (read-only)"}</Row>
         <Row label="Automation">
           {shown.automation_suitability ? (
             <>
-              {AUTOMATION_TEXT[shown.automation_suitability.value] ?? shown.automation_suitability.value} ({shown.automation_suitability.assessed === "assessed" ? "assessed" : "preliminary"})
+              {automationValueText(shown.automation_suitability)}
               {automationReasonText(shown.automation_suitability.reason) && <span className="block text-small text-fg">{automationReasonText(shown.automation_suitability.reason)}</span>}
-              {shown.automation_suitability.assessed !== "assessed" && <span className="block text-small text-fg-muted">{PRELIMINARY_TEXT}</span>}
+              {shown.automation_suitability.assessed !== "assessed" ? (
+                <span className="block text-small text-fg-muted">{PRELIMINARY_TEXT}</span>
+              ) : (
+                <Link href={`/projects/${projectId}/automation`} className="block text-small font-medium text-navy-700 underline underline-offset-2">
+                  Open Automation
+                </Link>
+              )}
             </>
           ) : (
             <span className="text-fg-muted">None. {PRELIMINARY_TEXT}</span>
@@ -1050,7 +1082,7 @@ export function TestCaseDetailView({
         </Row>
         <Row label="Side effects">
           {(shown.side_effects ?? []).length ? shown.side_effects.map((s) => SIDE_EFFECT_TEXT[s] ?? s).join(", ") : <span className="text-fg-muted">None</span>}
-          <span className="block text-small text-fg-muted">Labels only. Nothing runs in Phase 3.</span>
+          <span className="block text-small text-fg-muted">What a run of this test may do on the site. Risky actions need their own approval before a run.</span>
         </Row>
         <Row label="Evidence">{(shown.evidence ?? []).length ? <EvidenceLinks items={linksToItems(shown.evidence)} subject={`${shown.key} ${shown.title}`} /> : <span className="text-fg-muted">None</span>}</Row>
       </dl>

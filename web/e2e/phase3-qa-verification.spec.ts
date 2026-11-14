@@ -764,7 +764,7 @@ test("R2a open question: requirement page, focusable disabled Approve, write exp
   saveState({
     r2ApproveDisabled: JSON.stringify({ disabled: await approve.isDisabled(), aria: await approve.getAttribute("aria-disabled"), focused: await approve.evaluate((el) => el === document.activeElement) }),
     r2NotDecided: ((await page.locator("main").innerText()).match(/[^\n]*Not decided[^\n]*/g) ?? []).join(" | "),
-    r2Preliminary: String(((await page.locator("main").innerText()).match(/Preliminary: assessed in Phase 4/g) ?? []).length),
+    r2Preliminary: String(((await page.locator("main").innerText()).match(/Preliminary: (?:assessed in Phase 4|confirmed by the automation assessment)/g) ?? []).length),
     r2StepMissing: String(await page.getByText("Missing expected result").count()),
   });
   await approve.press("Enter");
@@ -1007,7 +1007,7 @@ test("R3 copy and web fixes: pending regenerate, readable change review, check 5
   await page.goto(`${base}/test-cases/TC-0006`);
   await page.getByRole("heading", { level: 1 }).waitFor({ timeout: 60_000 });
   await page.waitForTimeout(1500);
-  out.preliminary = ((await page.locator("main").innerText()).match(/Preliminary: assessed in Phase 4/g) ?? []).length;
+  out.preliminary = ((await page.locator("main").innerText()).match(/Preliminary: (?:assessed in Phase 4|confirmed by the automation assessment)/g) ?? []).length;
   await shot(page, R3("tc0006-preliminary"));
   // Accepted negative case steps on the page.
   await page.goto(`${base}/test-cases/TC-0045`);

@@ -3,7 +3,7 @@ empty-Message bug gets a case whose expected result is an open question (decisio
 approved requirement (including the HTTPS one linked to a high risk) gets a case, so the rule output plus the answer
 to the open question is enough to approve G5.
 
-Start the shop first: `cd api && npx tsx src/demo/target-app.ts`. Skipped when it is not running.
+Start the shop first: `cd demo-shop && npm start`. Skipped when it is not running.
 """
 
 from __future__ import annotations

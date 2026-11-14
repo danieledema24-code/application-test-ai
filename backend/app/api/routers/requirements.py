@@ -23,6 +23,7 @@ from app.db.models import (
     StageRun,
     requirement_features,
 )
+from app.db.touch import touch_project
 from app.db.types import utcnow
 from app.domain.enums import (
     AcKind,
@@ -265,7 +266,7 @@ async def _detail(ctx: Ctx, s: ScopedSession, row: Requirement) -> dict[str, Any
 
 async def _finish(ctx: Ctx, s: ScopedSession, p: MemberPrincipal, project: Project, reopen: bool, reason: str) -> None:
     orch = await c.reopen_if_approved(ctx, s, project, GateKey.G3, reason, p.user.id) if reopen else None
-    project.updated_at = utcnow()
+    await touch_project(s, project)
     await s.commit()
     await c.after_commit(orch, p.scope, project.id)
 

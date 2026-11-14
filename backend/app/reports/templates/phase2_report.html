@@ -150,7 +150,9 @@
 {% for r in c.forward %}<tr><td>{{ r.requirement.label }}</td><td>{{ (r.risk.level|replace('_', ' ')) if r.risk else '' }}</td>
   <td>{% for a in r.acceptance_criteria %}{{ a.ac.key }}{% if not a.covered %} (not covered){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
   <td>{% for t in r.test_cases %}{{ t.case.key }} ({{ t.status }}){% if not loop.last %}, {% endif %}{% else %}No test case{% endfor %}</td>
-  <td class="muted">{{ c.phase4_note }}</td><td class="muted">{{ c.phase4_note }}</td><td class="muted">{{ c.phase4_note }}</td></tr>{% endfor %}
+  <td>{% for t in r.test_cases %}{% if t.script %}{{ t.script.state }} v{{ t.script.version }}{% else %}No script{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+  <td>{% for t in r.test_cases %}{% if t.result %}{{ t.result.status }} ({{ t.result.result_key }}){% else %}Not run{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+  <td>{% for t in r.test_cases %}{% for d in t.defects or [] %}{{ d.key }}{% if not loop.last %}, {% endif %}{% endfor %}{% endfor %}</td></tr>{% endfor %}
 </tbody></table></section>
 <section><h2>Backward traceability</h2><table><thead><tr><th>Test case</th><th>Status</th><th>Condition</th><th>Acceptance criteria</th><th>Requirements</th><th>Risks</th></tr></thead><tbody>
 {% for r in c.backward %}<tr><td>{{ r.test_case.label }}</td><td>{{ r.status }}</td><td>{% for x in r.conditions %}{{ x.key }}{% endfor %}</td>
@@ -165,7 +167,16 @@
   <li>Acceptance criteria without test cases: {% for x in c.gaps.acceptance_criteria_without_test_cases %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
   <li>Untested high-risk functionality: {% for x in c.gaps.untested_high_risk.open %}{{ x.risk.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}{% if c.gaps.untested_high_risk.accepted %} (accepted: {% for x in c.gaps.untested_high_risk.accepted %}{{ x.risk.key }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}</li>
   <li>Features without requirements: {% for x in c.gaps.features_without_requirements %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
-  <li>Requirements without execution evidence, failed tests, outdated automation scripts, defects without regression coverage: {{ c.phase4_note }}</li>
+  {% set ev = c.gaps.requirements_without_execution_evidence %}
+  {% if ev is mapping and ev.available is not defined %}
+  <li>Requirements without execution evidence: {% for x in ev.automated_not_run + ev.manual_only %}{{ x.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Failed tests: {% for x in c.gaps.failed_tests %}{{ x.case.key }} ({{ x.result_key }}){% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Flaky tests (counted separately): {% for x in c.gaps.flaky_tests or [] %}{{ x.case.key }} ({{ x.result_key }}){% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Outdated automation scripts: {% for x in c.gaps.outdated_automation_scripts %}{{ x.case.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  <li>Defects without regression coverage: {% for x in c.gaps.defects_without_regression_coverage %}{{ x.defect.key }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</li>
+  {% else %}
+  <li>Requirements without execution evidence, failed tests, outdated automation scripts, defects without regression coverage: not recorded in this version</li>
+  {% endif %}
 </ul></section>
 {% endif %}
 </body>

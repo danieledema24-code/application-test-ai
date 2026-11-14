@@ -4,7 +4,7 @@ import { Fragment } from "react";
 import type { ReportSummary, RtmContent, TestCaseDetail, TestCaseSpecContent, TestDataItem } from "@/lib/contract";
 import { fmtDate } from "@/lib/format";
 import {
-  AUTOMATION_TEXT,
+  automationValueText,
   automationReasonText,
   CASE_STATUS_TEXT,
   KIND_TEXT,
@@ -22,7 +22,7 @@ import {
   openQuestionText,
   techniqueInfo,
 } from "@/lib/testcases";
-import { GAP_EMPTY, PHASE4_SR, coverageTiles } from "@/lib/traceability";
+import { GAP_EMPTY, PHASE4_SR, coverageTiles, isAvailable } from "@/lib/traceability";
 import { GeneratedByLabel, ProvenanceLabel } from "@/components/domain/ObservationLabel";
 import { BackwardMatrix, ForwardMatrix } from "@/components/traceability/Traceability";
 import { ReportToc, type TocSection } from "./ReportDocument";
@@ -47,7 +47,8 @@ export const RTM_TOC: TocSection[] = [
   { id: "backward", n: "5", title: "Backward matrix" },
 ];
 
-export const RTM_DISCLAIMER = "No tests have been run. Execution, script and defect columns are filled from Phase 4.";
+/** Fallback for RTM versions saved before execution data was recorded (newer content carries `phase4_note`). */
+export const RTM_DISCLAIMER = "This version was saved before test results were recorded, so it has no script, result or defect data.";
 export const UNLINKED_TEXT = "Not linked to a requirement";
 export const TCS_DATA_NOTICE = "Synthetic data only. Saved logins are named, never shown.";
 
@@ -107,7 +108,7 @@ function CaseBlock({ c }: { c: TestCaseDetail }) {
           ["Condition", c.condition?.key ?? "—"],
           ["Risks", keys(c.risks)],
           ["Side effects", (c.side_effects ?? []).map((s) => SIDE_EFFECT_TEXT[s] ?? s).join(", ") || "None"],
-          ["Automation", c.automation_suitability?.value ? `${AUTOMATION_TEXT[c.automation_suitability.value] ?? c.automation_suitability.value}${c.automation_suitability.assessed ? ` (${c.automation_suitability.assessed})` : ""}${automationReasonText(c.automation_suitability.reason) ? `: ${automationReasonText(c.automation_suitability.reason)}` : ""}` : "—"],
+          ["Automation", c.automation_suitability?.value ? `${automationValueText(c.automation_suitability)}${automationReasonText(c.automation_suitability.reason) ? `: ${automationReasonText(c.automation_suitability.reason)}` : ""}` : "—"],
           ["Execution status", "Not run"],
         ]}
       />
@@ -253,7 +254,7 @@ function TestCaseSpec({ c }: { c: TestCaseSpecContent }) {
         Gate 5 record
       </H2>
       <p className="text-body text-fg">{approvalLine(c.approval as Record<string, unknown>)}</p>
-      <p className="text-body text-fg">{c.execution_note || "Execution status: Not run. Test execution arrives in Phase 4."}</p>
+      <p className="text-body text-fg">{c.execution_note && !c.execution_note.includes("Phase 4") ? c.execution_note : "Execution status: see Test Execution and the Test Execution Report for results."}</p>
       <H2 id="conditions" n="A">
         Conditions
       </H2>
@@ -293,6 +294,24 @@ function TestCaseSpec({ c }: { c: TestCaseSpecContent }) {
   );
 }
 
+/** The execution gap lists of an RTM version (P4-12); "not recorded" for versions saved before execution existed. */
+export function execGapRows(g: RtmContent["gaps"] | undefined): [string, string][] {
+  const keys = (l: { key?: string }[]) => (l.length ? l.map((x) => x.key ?? "").filter(Boolean).join(", ") : "None");
+  const ev = g?.requirements_without_execution_evidence;
+  const failed = g?.failed_tests;
+  const outdated = g?.outdated_automation_scripts;
+  const regress = g?.defects_without_regression_coverage;
+  const flaky = g?.flaky_tests ?? [];
+  const na = `Not available, ${PHASE4_SR}`;
+  return [
+    ["Requirements without execution evidence", isAvailable(ev) ? keys([...ev.automated_not_run, ...ev.manual_only]) : na],
+    ["Failed tests", isAvailable(failed) ? keys(failed.map((x) => x.case)) : na],
+    ["Flaky tests (counted separately)", isAvailable(failed) ? keys(flaky.map((x) => x.case)) : na],
+    ["Outdated automation scripts", isAvailable(outdated) ? keys(outdated.map((x) => x.case)) : na],
+    ["Defects without regression coverage", isAvailable(regress) ? keys(regress.map((x) => x.defect)) : na],
+  ];
+}
+
 function Rtm({ c, projectId }: { c: RtmContent; projectId: string }) {
   const tiles = c.coverage ? coverageTiles(c.coverage, () => "", () => "") : [];
   const g = c.gaps;
@@ -307,7 +326,7 @@ function Rtm({ c, projectId }: { c: RtmContent; projectId: string }) {
     : [];
   return (
     <>
-      <p className="text-body font-medium text-fg">{RTM_DISCLAIMER}</p>
+      <p className="text-body font-medium text-fg">{c.phase4_note && !c.phase4_note.includes("Phase 4") ? c.phase4_note : RTM_DISCLAIMER}</p>
       <H2 id="basis" n="1">
         Basis
       </H2>
@@ -326,14 +345,7 @@ function Rtm({ c, projectId }: { c: RtmContent; projectId: string }) {
         Gap lists
       </H2>
       <Dl rows={gapRows.map(([label, all, empty]) => [label, all.filter(Boolean), empty] as const).map(([label, ks, empty]) => [`${label} (${ks.length})`, ks.length ? ks.join(", ") : empty] as [string, string])} />
-      <Dl
-        rows={[
-          ["Requirements without execution evidence", `Not available, ${PHASE4_SR}`],
-          ["Failed tests", `Not available, ${PHASE4_SR}`],
-          ["Outdated automation scripts", `Not available, ${PHASE4_SR}`],
-          ["Defects without regression coverage", `Not available, ${PHASE4_SR}`],
-        ]}
-      />
+      <Dl rows={execGapRows(g)} />
       <H2 id="forward" n="4">
         Forward matrix
       </H2>

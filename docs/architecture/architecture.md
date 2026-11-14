@@ -173,7 +173,7 @@ Rules:
 | G3 Requirements review | required | yes | Strategy |
 | G4 Strategy approval | required | yes | Test design; performance branch |
 | G5 Test case quality | required (user decision D1, Phase 3; `can_approve`, same as G3/G4; automated lint always runs) | yes | Automation |
-| G6 Script validation | required (static validation always runs) | yes (human part only) | Execution |
+| G6 Script validation | hybrid (user decision D10, Phase 4): static validation (spec-guard, tsc, eslint, secret scan, tags, locator check) always blocks; rule-written scripts that pass need no human sign-off; AI-written scripts need a `can_approve` review | yes (human part only; static validation can never be relaxed) | Execution |
 | G7 Execution authorisation | required | **No** | Any execution against the target |
 | G8 Defect review | required | **No** (spec §11: human confirms application defects) | Defect status `verified` |
 | G9 Release readiness | required | **No** | Release recommendation becoming `final` |

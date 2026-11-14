@@ -6,17 +6,27 @@ import { Bot, ExternalLink, MoreHorizontal } from "lucide-react";
 import { fmtDate } from "@/lib/format";
 import { activeStage, gateReview, stageStatusLabel, waitingGateStage, waitingLabel } from "@/lib/lifecycle";
 import { useAuth } from "@/lib/auth";
+import { ApiError, downloadFile } from "@/lib/api";
+import { exportFileName, exportPath } from "@/lib/automation";
+import { hostOf } from "@/lib/url";
 import { Button, StatusPill, useToast } from "@/components/ui";
 import { useAssistantDrawer } from "@/components/assistant/AssistantDrawer";
+import { useExecSummary } from "@/components/execution/hooks";
+import type { ExecSummary } from "@/lib/execution";
 import { useProject } from "./ProjectContext";
 
 /** The project's overall status, from the live workflow. */
-function overallStatus(p: ReturnType<typeof useProject>, canApprove: boolean) {
+function overallStatus(p: ReturnType<typeof useProject>, canApprove: boolean, x: ExecSummary | null) {
   const wf = p.workflow;
   if (!wf) return null;
   if (wf.project_status === "archived") return { status: "archived", label: "Archived" };
   const waiting = waitingGateStage(wf);
   if (waiting) return { status: "awaiting_approval", label: gateReview(waiting) === "required" ? waitingLabel(canApprove) : "Ready for your review" };
+  // Test runs and defect drafts (design P4 §4.3).
+  if (x?.running) return { status: "running", label: `Test run ${x.running} running` };
+  if (x?.waiting.length)
+    return { status: "awaiting_approval", label: `${x.waiting[0]} waiting for ${canApprove ? "your authorisation" : "authorisation by someone who can approve gates"}` };
+  if (x?.drafts) return { status: "awaiting_approval", label: `${x.drafts} defect draft${x.drafts === 1 ? "" : "s"} to review` };
   const active = activeStage(wf);
   if (wf.project_status === "paused" || active?.status === "paused") return { status: "paused", label: "Discovery paused" };
   if (active) {
@@ -51,6 +61,8 @@ function MoreMenu() {
   }, [open]);
   const active = activeStage(p.workflow);
   const running = !!active;
+  const { role } = useAuth();
+  const scripted = !!p.workflow?.stages.find((x) => x.key === "automation")?.current_version;
   const item = "flex min-h-10 w-full items-center px-4 py-2 text-left text-body text-fg-strong hover:bg-overlay disabled:text-fg-muted";
   return (
     <div ref={ref} className="relative">
@@ -70,6 +82,27 @@ function MoreMenu() {
           <button role="menuitem" type="button" className={item} disabled={running} onClick={() => (setOpen(false), p.openRescan())}>
             Re-scan site{running ? " (after the current scan)" : ""}
           </button>
+          {scripted && role !== "viewer" && role !== null && (
+            <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), router.push(`/projects/${p.id}/execution?new=1`))}>
+              Run tests…
+            </button>
+          )}
+          {scripted && role !== "viewer" && role !== null && (
+            <button
+              role="menuitem"
+              type="button"
+              className={item}
+              onClick={() => {
+                setOpen(false);
+                const v = p.workflow?.stages.find((x) => x.key === "automation")?.current_version ?? 1;
+                void downloadFile(exportPath(p.id, v, true), exportFileName(hostOf(p.project?.primary_url) || "site", v)).catch((e: unknown) =>
+                  toast(e instanceof ApiError ? e.message : "Couldn’t download the project. Try again.", "error"),
+                );
+              }}
+            >
+              Download Playwright project
+            </button>
+          )}
           <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), assistant.open())}>
             Ask AI QA Analyst
           </button>
@@ -99,7 +132,8 @@ export function ProjectHeader({ asHeading }: { asHeading: boolean }) {
   const assistant = useAssistantDrawer();
   const project = p.project;
   const { canApprove } = useAuth();
-  const st = overallStatus(p, canApprove);
+  const exec = useExecSummary(p.id, p.workflow);
+  const st = overallStatus(p, canApprove, exec);
   const active = activeStage(p.workflow);
   const paused = p.workflow?.project_status === "paused" || active?.status === "paused";
   const runningNow = active && (active.status === "running" || active.status === "queued") && !paused;

@@ -7,11 +7,12 @@ import { api, ApiError, downloadFile } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { ReportDetail, ReportSummary } from "@/lib/contract";
 import { fmtDateTime } from "@/lib/format";
-import { approvedBand, downloadFailedText, downloadFormats, draftBand, isPhase3Report, phase2ReportFileName, preparingText, reportBySlug, type DownloadFormat } from "@/lib/reports";
+import { HYPOTHESIS_BAND, approvedBand, defectDraftBand, downloadFailedText, downloadFormats, draftBand, isPhase3Report, isPhase4Report, phase2ReportFileName, preparingText, reportBySlug, type DownloadFormat } from "@/lib/reports";
 import { hostOf } from "@/lib/url";
 import { Button, Callout, EmptyState, ErrorState, LinkButton, LoadingBlock, SelectField, StatusPill, useToast } from "@/components/ui";
 import { Phase2ReportBody } from "@/components/report/Phase2Report";
 import { Phase3ReportBody } from "@/components/report/Phase3Report";
+import { Phase4ReportBody } from "@/components/report/Phase4Report";
 import { useAuth } from "@/lib/auth";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { gateApproved, requirementsStages } from "@/components/requirements/hooks";
@@ -31,7 +32,12 @@ function Report() {
     refreshInterval: (d) => (d?.some((r) => r.status === "rendering") ? 3000 : 0),
   });
   const list = useMemo(() => (reports.data ?? []).filter((r) => r.report_type === def?.type).sort((a, b) => b.version - a.version), [reports.data, def?.type]);
-  const chosen = (Number.isInteger(wantVersion) && wantVersion > 0 ? list.find((r) => r.version === wantVersion) : null) ?? list.find((r) => r.status === "ready") ?? list[0];
+  const wantRun = params.get("run");
+  const chosen =
+    (Number.isInteger(wantVersion) && wantVersion > 0 ? list.find((r) => r.version === wantVersion) : null) ??
+    (wantRun ? list.find((r) => r.run_key === wantRun) : null) ??
+    list.find((r) => r.status === "ready") ??
+    list[0];
   const detail = useApi<ReportDetail>(chosen && chosen.status === "ready" ? `/reports/${chosen.id}` : null);
   const [downloading, setDownloading] = useState<Format | null>(null);
   const [creating, setCreating] = useState(false);
@@ -49,7 +55,7 @@ function Report() {
     setDownloading(format);
     setAnnounce(preparingText(format));
     try {
-      await downloadFile(`/reports/${chosen.id}/download?format=${format}`, phase2ReportFileName(hostOf(p.project?.primary_url) || "site", def.type, chosen.version, new Date(), format));
+      await downloadFile(`/reports/${chosen.id}/download?format=${format}`, phase2ReportFileName(hostOf(p.project?.primary_url) || "site", def.type, chosen.version, new Date(), format, chosen.run_key));
       setAnnounce("Report downloaded.");
       toast("Report downloaded.");
     } catch (err) {
@@ -85,7 +91,12 @@ function Report() {
           label="Version"
           value={String(chosen?.version ?? "")}
           onChange={(e) => router.replace(`/projects/${p.id}/reports/${def.slug}?version=${e.target.value}`)}
-          options={list.map((r) => ({ value: String(r.version), label: `Version ${r.version} · ${fmtDateTime(r.created_at)} · ${r.approval?.status === "approved" ? "Approved" : "Draft"}` }))}
+          options={list.map((r) => ({
+            value: String(r.version),
+            label: isPhase4Report(def.type)
+              ? `Version ${r.version} · ${r.run_key ?? (def.type === "execution" ? "latest per test case" : "defects")} · ${fmtDateTime(r.created_at)}`
+              : `Version ${r.version} · ${fmtDateTime(r.created_at)} · ${r.approval?.status === "approved" ? "Approved" : "Draft"}`,
+          }))}
           wrapClassName="w-full sm:w-80"
         />
       )}
@@ -99,7 +110,9 @@ function Report() {
         ? "The Test Strategy report is available once the strategy is written."
         : def.type === "requirements_spec" && !stages.req?.current_version
           ? "The Requirements Specification is available once requirements are generated."
-          : isPhase3Report(def.type) && !stages.design?.current_version
+          : isPhase4Report(def.type) && !p.workflow?.stages.find((x) => x.key === "execution")?.current_version && !list.length
+            ? "Not available yet · Needs a test run"
+            : isPhase3Report(def.type) && !stages.design?.current_version
             ? def.type === "rtm"
               ? "The Requirements Traceability Matrix is available after test cases are designed."
               : "The Test Case Specification is available after test cases are designed."
@@ -136,7 +149,13 @@ function Report() {
         </span>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="flex flex-wrap items-center gap-2 text-body text-fg">
-            {approved && phase3 ? (
+            {isPhase4Report(def.type) ? (
+              def.type === "defect" && defectDraftBand(Number((detail.data.content as { drafts?: number }).drafts ?? 0)) ? (
+                <span className="rounded-md bg-warning-bg px-2 py-0.5 text-small font-semibold text-warning-fg ring-1 ring-inset ring-warning-line">{defectDraftBand(Number((detail.data.content as { drafts?: number }).drafts ?? 0))}</span>
+              ) : (
+                <span className="text-small text-fg">{HYPOTHESIS_BAND}</span>
+              )
+            ) : approved && phase3 ? (
               <StatusPill status="approved" label={approvedBand(chosen.approval?.gate ?? "G5", chosen.approval?.approved_by?.full_name, chosen.approval?.approved_at ? fmtDateTime(chosen.approval.approved_at) : "")} />
             ) : approved ? (
               <StatusPill status="approved" label={`Approved${chosen.approval?.approved_by?.full_name ? ` by ${chosen.approval.approved_by.full_name}` : ""}${chosen.approval?.approved_at ? ` · ${fmtDateTime(chosen.approval.approved_at)}` : ""}`} />
@@ -162,7 +181,7 @@ function Report() {
             </Button>
           </div>
         </div>
-        {chosen.is_latest_source === false && (
+        {chosen.is_latest_source === false && !isPhase4Report(def.type) && (
           <Callout
             tone="info"
             actions={
@@ -178,7 +197,9 @@ function Report() {
               : `This report reflects ${def.source} version ${chosen.stage_run_version ?? chosen.version}. The current version has changed since.`}
           </Callout>
         )}
-        {phase3 ? (
+        {isPhase4Report(def.type) ? (
+          <Phase4ReportBody type={def.type} content={detail.data.content} projectId={p.id} />
+        ) : phase3 ? (
           <Phase3ReportBody type={def.type as "test_case_spec" | "rtm"} report={chosen} content={detail.data.content} projectId={p.id} />
         ) : (
           <Phase2ReportBody type={def.type} report={chosen} content={detail.data.content} />

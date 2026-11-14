@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Circle, CircleCheck, CircleDashed, CircleDot, CirclePause, CircleSlash, CircleX, Diamond, Loader2, MessageSquareWarning, RefreshCw, UserRoundCheck } from "lucide-react";
 import type { ProjectSummary, Workflow } from "@/lib/contract";
-import { GATE_1, LIFECYCLE, STATUS_LABEL, autoStartedAfterG4, buildLifecycle, gateReview, stageStatusTextFor, statusLabel, upstreamGateHint, type LifecycleStage, type LifecycleStatus } from "@/lib/lifecycle";
+import { GATE_1, LIFECYCLE, STATUS_LABEL, autoStartedAfterG4, buildLifecycle, fromApiStatus, gateReview, stageStatusTextFor, statusLabel, subjectGateText, upstreamGateHint, type LifecycleStage, type LifecycleStatus, type SubjectGates } from "@/lib/lifecycle";
 import { useAuth } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/format";
 import { Button, Disclosure, Tooltip } from "@/components/ui";
@@ -80,6 +80,8 @@ function gateWaitingText(s: LifecycleStage, canApprove: boolean) {
 
 function gateText(s: LifecycleStage, canApprove = true) {
   if (!s.gate) return "";
+  const subject = subjectGateText(s, canApprove);
+  if (subject) return `Gate ${s.gate.key.slice(1)}, ${s.gate.name}: ${subject}`;
   const st = s.gateStatus === "done" ? "approved" : s.gateStatus === "waiting" ? gateWaitingText(s, canApprove).toLowerCase() : s.status === "later" ? s.phaseLabel.toLowerCase() : "not reached";
   return `Gate ${s.gate.key.slice(1)}, ${s.gate.name}: ${st}`;
 }
@@ -104,15 +106,18 @@ export function LifecycleProgress({
   variant,
   onRerun,
   onReviewGate,
+  subjects,
 }: {
   workflow: Workflow | null | undefined;
   projectId: string;
   variant: "full" | "compact";
+  /** Run and defect state for the per-subject gates G7 and G8 (design P4 §4.3). */
+  subjects?: SubjectGates | null;
   /** Re-run a stage: Discovery opens the re-scan dialog; Requirements/Strategy open their regenerate dialog. */
   onRerun?: (stageId: string) => void;
   onReviewGate?: (stageId: string) => void;
 }) {
-  const stages = buildLifecycle(workflow);
+  const stages = buildLifecycle(workflow, subjects);
   if (variant === "compact") return <Compact stages={stages} projectId={projectId} />;
   return <Full stages={stages} projectId={projectId} onRerun={onRerun} onReviewGate={onReviewGate} />;
 }
@@ -147,6 +152,8 @@ function Compact({ stages, projectId }: { stages: LifecycleStage[]; projectId: s
 
 function stepStatus(stage: LifecycleStage, n: number): LifecycleStatus {
   if (stage.status === "later") return "later";
+  // Step 18 mirrors the latest run only (design P4 §4.3); a run waiting for Gate 7 hasn't started it.
+  if (stage.id === "execution") return fromApiStatus(stage.stages[0]);
   if (stage.status === "done" || stage.status === "waiting" || stage.status === "changes_requested" || stage.status === "out_of_date") return "done";
   const idx = n - stage.steps[0].n + 1;
   const cur = stage.currentStep;
@@ -268,7 +275,7 @@ function AllSteps({ stages, projectId, onRerun, onReviewGate }: { stages: Lifecy
               </div>
             </div>
             <ol className="mt-1.5 space-y-1">
-              {s.gate?.position === "before" && <GateRow s={s} />}
+              {s.gate?.position === "before" && <GateRow s={s} projectId={projectId} />}
               {s.steps.map((step) => {
                 const st = stepStatus(s, step.n);
                 return (
@@ -277,15 +284,25 @@ function AllSteps({ stages, projectId, onRerun, onReviewGate }: { stages: Lifecy
                       <span className="w-6 text-right tabular-nums text-fg-muted">{step.n}</span>
                       <StageStatusIcon status={st} />
                       <span className="min-w-0 flex-1 text-fg-strong">{step.name}</span>
-                      <span className={STATUS_TONE[st]}>{st === "later" ? s.phaseLabel : statusLabel(st, canApprove)}</span>
+                      <span className={STATUS_TONE[st]}>{st === "later" ? s.phaseLabel : s.id === "execution" && st === "failed" ? "Didn’t complete" : statusLabel(st, canApprove)}</span>
                       <span className="w-full pl-9 text-caption text-fg-muted sm:w-56 sm:pl-0">{step.agent}</span>
                     </div>
                     {step.n === 13 && st !== "not_started" && st !== "later" && autoStarted && <p className="pl-9 text-caption text-fg-muted">Started automatically after Gate 4 approval.</p>}
                     {s.id === "discovery" && step.n === GATE_1.afterStep && <Gate1Row />}
+                    {step.n === 18 && st === "not_started" && stages.find((x) => x.id === "automation")?.status === "done" && (
+                      <p className="flex flex-wrap items-center gap-2 pl-9 text-caption text-fg-muted">
+                        Ready. Runs start only when someone authorises them.
+                        {role !== "viewer" && (
+                          <Link href={`/projects/${projectId}/execution?new=1`} className="font-medium text-navy-700 underline underline-offset-2">
+                            Run tests…
+                          </Link>
+                        )}
+                      </p>
+                    )}
                   </li>
                 );
               })}
-              {s.gate?.position === "after" && <GateRow s={s} />}
+              {s.gate?.position === "after" && <GateRow s={s} projectId={projectId} />}
             </ol>
             {s.status === "failed" && run?.stale_reason && <p className="mt-1 pl-9 text-small text-danger-fg">{run.stale_reason}</p>}
           </section>
@@ -305,10 +322,11 @@ function Gate1Row() {
   );
 }
 
-function GateRow({ s }: { s: LifecycleStage }) {
+function GateRow({ s, projectId }: { s: LifecycleStage; projectId?: string }) {
   const { canApprove } = useAuth();
   if (!s.gate) return null;
-  const st = s.gateStatus === "done" ? "Approved" : s.gateStatus === "waiting" ? gateWaitingText(s, canApprove) : s.status === "later" ? s.phaseLabel : "Not reached";
+  const subject = s.status === "later" ? null : subjectGateText(s, canApprove);
+  const st = subject ?? (s.gateStatus === "done" ? "Approved" : s.gateStatus === "waiting" ? gateWaitingText(s, canApprove) : s.status === "later" ? s.phaseLabel : "Not reached");
   return (
     <li className="flex items-center gap-3 py-1 pl-9 text-small">
       <Diamond className={`h-3.5 w-3.5 ${s.gateStatus === "done" ? "fill-navy-800 text-navy-800" : s.gateStatus === "waiting" ? "fill-warning-solid text-warning-fg" : "text-line-strong"}`} aria-hidden />
@@ -316,6 +334,11 @@ function GateRow({ s }: { s: LifecycleStage }) {
         Gate {s.gate.key.slice(1)} · {s.gate.name}
       </span>
       <span className={s.gateStatus === "waiting" ? "text-warning-fg" : s.gateStatus === "done" ? "text-success-fg" : "text-fg-muted"}>{st}</span>
+      {s.gate.key === "G7" && s.gateStatus === "waiting" && s.subject?.runKey && projectId && (
+        <Link href={`/projects/${projectId}/execution/${s.subject.runKey}`} className="font-medium text-navy-700 underline underline-offset-2">
+          Review {s.subject.runKey}
+        </Link>
+      )}
     </li>
   );
 }

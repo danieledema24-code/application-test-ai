@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from app.domain.enums import GateKey, GatePolicy, StageKey
+from app.domain.enums import GateKey, GatePolicy, RunStatus, StageKey, StageStatus
 from app.domain.stages import (
     DERIVED_STAGES,
+    EXECUTION_STAGE_STATUS,
     LOCKED_GATES,
     REGENERABLE_STAGES,
+    RUN_DRIVEN_STAGES,
     RUNNABLE_IN_PHASE,
     STAGES,
+    SUBJECT_GATES,
     downstream_of,
     merged_policy,
     policy_violations,
 )
 
 
-def test_fifteen_stages_phase_three_available() -> None:
+def test_fifteen_stages_phase_four_available() -> None:
     assert len(STAGES) == 15
     available = [s.key for s in STAGES if s.available]
     assert available == [
@@ -27,7 +30,36 @@ def test_fifteen_stages_phase_three_available() -> None:
         StageKey.test_strategy,
         StageKey.test_design,
         StageKey.traceability,
+        StageKey.automation_assessment,
+        StageKey.automation,
+        StageKey.execution,
+        StageKey.failure_analysis,
+        StageKey.defects_summary,
     ]
+
+
+def test_phase_four_stage_rules() -> None:
+    # P4-00: assessment and automation run through /stages; execution and failure analysis never do.
+    assert {StageKey.automation_assessment, StageKey.automation} <= RUNNABLE_IN_PHASE
+    assert not ({StageKey.execution, StageKey.failure_analysis} & RUNNABLE_IN_PHASE)
+    assert RUN_DRIVEN_STAGES[StageKey.execution] == "Start a test run from Test Execution"
+    assert DERIVED_STAGES[StageKey.defects_summary] == StageKey.failure_analysis
+    # G7 per run and G8 per defect: locked to required and never decided through /gates.
+    assert set(SUBJECT_GATES) == {GateKey.G7, GateKey.G8} and {GateKey.G7, GateKey.G8} <= set(LOCKED_GATES)
+    for gate in ("G7", "G8"):
+        assert policy_violations({gate: "recommended"}) and policy_violations({gate: "auto"})
+
+
+def test_g6_default_is_the_d10_hybrid() -> None:
+    # Decision D10: static validation always blocks (P4-04); no human sign-off for rule-written scripts by default.
+    assert merged_policy(None)[GateKey.G6] == GatePolicy.recommended
+    assert policy_violations({"G6": "required"}) == []
+
+
+def test_execution_stage_mirrors_runs() -> None:
+    assert EXECUTION_STAGE_STATUS[RunStatus.failed] == StageStatus.completed
+    assert EXECUTION_STAGE_STATUS[RunStatus.error] == StageStatus.failed
+    assert RunStatus.awaiting_authorisation not in EXECUTION_STAGE_STATUS
 
 
 def test_g5_is_required_by_default_but_not_locked() -> None:

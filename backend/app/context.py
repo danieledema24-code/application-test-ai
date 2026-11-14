@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import httpx
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.automation.toolkit import Toolkit
 from app.browser.pool import BrowserPool
 from app.config import Settings
 from app.db.session import SessionFactory, create_engine, create_session_factory
@@ -35,6 +36,7 @@ class AppContext:
     queue: SqlJobQueue
     events: EventEmitter
     browser_pool: BrowserPool
+    toolkit: Toolkit
     resolver: Resolver = default_resolver
     # Test hook: lets URL checks run against httpx.MockTransport. None = real network.
     http_transport: httpx.AsyncBaseTransport | None = None
@@ -65,4 +67,5 @@ def build_context(settings: Settings, *, llm: BaseLLMClient | None = None) -> Ap
         queue=SqlJobQueue(sf),
         events=EventEmitter(sf),
         browser_pool=BrowserPool(headless=settings.browser_headless, max_contexts=settings.pool_max_contexts),
+        toolkit=Toolkit(settings),
     )

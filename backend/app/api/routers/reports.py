@@ -35,6 +35,7 @@ async def _summary(ctx: AppContext, s: AsyncSession, r: QaReport, latest_scan: u
             "approval": p2approval,
             "is_latest_source": await phase2_reports.is_latest_source(s, r),
             "frozen": bool((r.content or {}).get("frozen")),
+            "run_key": (r.source_versions or {}).get("run_key"),
         }
     else:
         approval = await approval_for_run(s, r.stage_run_id) if r.stage_run_id else {"status": "draft"}
@@ -94,7 +95,8 @@ async def create_report(
             details=[
                 {
                     "field": "report_type",
-                    "message": "Use discovery, requirements_spec, test_strategy, test_plan, test_case_spec or rtm.",
+                    "message": "Use discovery, requirements_spec, test_strategy, test_plan, test_case_spec, rtm, "
+                    "execution or defect.",
                 }
             ],
         )
@@ -103,17 +105,33 @@ async def create_report(
     if req.report_type != "discovery":
         rtype = ReportType(req.report_type)
         if not await phase2_reports.has_source(s, project_id, rtype):
+            if rtype == ReportType.execution:
+                raise GateBlocked("Not available yet: needs a test run")
+            if rtype == ReportType.defect:
+                raise GateBlocked("Not available yet: no defects have been found")
             if rtype in phase2_reports.PHASE3:
                 raise GateBlocked("Design test cases first")
             raise GateBlocked(f"Generate the {phase2_reports.TITLES[rtype].lower()} first")
-        if req.stage_run_version is not None:
+        if rtype == ReportType.execution and req.run_key:
+            from app.db.models import ExecutionRun
+
+            run = (
+                await s.execute(
+                    select(ExecutionRun).where(ExecutionRun.project_id == project_id, ExecutionRun.key == req.run_key)
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                raise NotFound(f"We couldn't find {req.run_key} in this project")
+            if run.finished_at is None or run.started_at is None:
+                raise GateBlocked(f"{run.key} hasn't finished")
+        if req.stage_run_version is not None and rtype not in (ReportType.execution, ReportType.defect):
             source_key = {ReportType.requirements_spec: "requirements"}.get(
                 rtype, "test_design" if rtype in phase2_reports.PHASE3 else "test_strategy"
             )
             current = (await phase2_reports.stamp(s, project_id, rtype)).get(source_key)
             if current is not None and current != req.stage_run_version:
                 raise Conflict("Reports are generated from the current version; reload and try again")
-        p2report = await phase2_reports.create(s, project, rtype, user_id=p.user.id)
+        p2report = await phase2_reports.create(s, project, rtype, user_id=p.user.id, run_key=req.run_key)
         await s.commit()
         await ctx.queue.enqueue(
             "report_render",
@@ -201,9 +219,9 @@ async def download(
     format: str = Query("pdf", pattern="^(pdf|html|json|csv)$"),
 ) -> RedirectResponse:
     r = await _load(s, report_id)
-    if format == "csv" and r.report_type not in phase2_reports.PHASE3:
+    if format == "csv" and r.report_type not in (*phase2_reports.PHASE3, ReportType.execution, ReportType.defect):
         raise ValidationFailed(
-            "CSV is available for the Test Case Specification and RTM only",
+            "CSV is available for the Test Case Specification, RTM, Test Execution and Defect reports only",
             details=[{"field": "format", "message": "Use pdf, html or json for this report."}],
         )
     if r.status == ReportStatus.rendering:

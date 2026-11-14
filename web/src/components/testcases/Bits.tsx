@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Check, ChevronDown, ChevronUp, ChevronsUp, CircleCheck, CircleHelp, CircleX, Equal, Info, KeyRound, Lock, PencilLine, Ruler, Sparkle, TriangleAlert, X } from "lucide-react";
 import type { CaseStatus, Priority, TestCaseSummary, TestDataItem } from "@/lib/contract";
 import { CASE_STATUS_TEXT, KIND_TEXT, PRIORITY_TEXT, TECHNIQUE_OPTIONS, displayValue, lintCounts, techniqueInfo } from "@/lib/testcases";
 import { StatusPill, Tooltip } from "@/components/ui";
+import { ResultStatus } from "@/components/domain/ExecutionLabels";
 
 // ---- Technique (§7.4) ---------------------------------------------------------------------------
 
@@ -155,15 +157,47 @@ export function CaseFlags({ c }: { c: Pick<TestCaseSummary, "locked" | "human_ed
   );
 }
 
-/** "Not run yet" with the Phase 4 tooltip (§6.1): never a pill, never coloured, never "—" alone. */
+/** "Not run yet" (§6.6): never a pill, never coloured, never "—" alone. */
 export function NotRunYet() {
+  return <span className="whitespace-nowrap text-fg-muted">Not run yet</span>;
+}
+
+function sizeWord(viewport: string): string {
+  return viewport === "390x844" ? "mobile" : "desktop";
+}
+
+/**
+ * Last result (design P4 §6.6): the status, then "RUN-0003 · 13 Nov" linking to the result. More than one browser or
+ * size shows the worst status plus "+1 more", with the full picture for screen readers.
+ */
+export function LastResult({ c, projectId }: { c: Pick<TestCaseSummary, "last_result">; projectId: string }) {
+  const r = c.last_result;
+  if (!r) return <NotRunYet />;
+  const more = r.results.length - 1;
+  const sr = r.results.map((x) => `${x.browser.charAt(0).toUpperCase()}${x.browser.slice(1)} ${sizeWord(x.viewport)} ${RESULT_WORD[x.status] ?? x.status}`).join(", ");
   return (
-    <Tooltip content="Execution arrives in Phase 4.">
-      <span tabIndex={0} className="whitespace-nowrap text-fg-muted">
-        Not run yet<span className="sr-only">. Execution arrives in Phase 4.</span>
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <span className="inline-flex flex-wrap items-center gap-1">
+        <ResultStatus status={r.status} />
+        {more > 0 && (
+          <span className="text-small text-fg-muted">
+            <span aria-hidden>+{more} more</span>
+            <span className="sr-only">{sr}</span>
+          </span>
+        )}
       </span>
-    </Tooltip>
+      <Link href={`/projects/${projectId}/execution/${r.run_key}/results/${r.result_key}`} className="whitespace-nowrap text-small text-navy-700 underline underline-offset-2">
+        {r.run_key} · {fmtDayMonth(r.at)}
+      </Link>
+    </span>
   );
+}
+
+const RESULT_WORD: Record<string, string> = { passed: "passed", failed: "failed", error: "error", flaky: "flaky", blocked: "blocked", skipped: "skipped" };
+
+function fmtDayMonth(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
 
 export function NotDecided() {

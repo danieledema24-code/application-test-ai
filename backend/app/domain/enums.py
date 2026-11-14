@@ -430,3 +430,108 @@ class TestDataValueType(StrEnum):
 class TestDataStatus(StrEnum):
     active = "active"
     retired = "retired"
+
+
+# ---------------------------------------------------------------- Phase 4: automation, execution, defects
+
+
+class GateSubjectType(StrEnum):
+    """What a per-subject gate decision is about (G7 per run, G8 per defect, G6 per AI-written script)."""
+
+    execution_run = "execution_run"
+    defect = "defect"
+    automation_script = "automation_script"
+
+
+class ScriptStatus(StrEnum):
+    draft = "draft"
+    valid = "valid"
+    invalid = "invalid"
+    outdated = "outdated"
+
+
+class AssetKind(StrEnum):
+    page_object = "page_object"
+    factory = "factory"
+    platform = "platform"
+    config = "config"
+
+
+class ScriptGeneratedBy(StrEnum):
+    rules = "rules"
+    ai = "ai"
+    heal = "heal"
+    platform = "platform"
+
+
+class RunMode(StrEnum):
+    automated = "automated"
+    manual = "manual"
+
+
+class RunStatus(StrEnum):
+    awaiting_authorisation = "awaiting_authorisation"
+    rejected = "rejected"
+    queued = "queued"
+    running = "running"
+    passed = "passed"
+    failed = "failed"
+    error = "error"
+    cancelled = "cancelled"
+
+
+class ResultStatus(StrEnum):
+    passed = "passed"
+    failed = "failed"
+    error = "error"
+    skipped = "skipped"
+    blocked = "blocked"
+    flaky = "flaky"
+
+
+class FailureClass(StrEnum):
+    application_defect = "application_defect"
+    script_defect = "script_defect"
+    selector_failure = "selector_failure"
+    test_data_issue = "test_data_issue"
+    environment_failure = "environment_failure"
+    network_failure = "network_failure"
+    flaky = "flaky"
+    unknown = "unknown"
+
+
+class ApprovalKind(StrEnum):
+    destructive = "destructive"
+    external_transaction = "external_transaction"
+    real_user_data = "real_user_data"
+    load_test = "load_test"
+    security_test = "security_test"
+
+
+class ApprovalStatus(StrEnum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    expired = "expired"
+    used = "used"
+
+
+class DefectSeverity(StrEnum):
+    critical = "critical"
+    major = "major"
+    minor = "minor"
+    trivial = "trivial"
+
+
+class DefectStatus(StrEnum):
+    draft = "draft"
+    confirmed = "confirmed"
+    rejected = "rejected"
+    fixed = "fixed"
+    verified = "verified"
+    closed = "closed"
+
+
+class DefectSource(StrEnum):
+    analysis = "analysis"
+    user = "user"

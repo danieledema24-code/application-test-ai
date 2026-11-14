@@ -30,7 +30,7 @@ ALWAYS_ALLOWED = frozenset({UC, EG, CHECKLIST})
 MAX_CASES = 300
 MAX_DATA = 400
 MAX_CASES_PER_REQUIREMENT = 15
-PRELIMINARY = "Preliminary: assessed in Phase 4."
+PRELIMINARY = "Preliminary: confirmed by the automation assessment after Gate 5."
 NOT_DESIGNED_APPROVAL = "Needs separate approval; designed in Phase 5"
 NOT_DESIGNED_SCOPE = "Out of scope in the approved strategy"
 NOT_DESIGNED_EXPLORATORY = "Exploratory testing stays a planned approach; charters arrive in Phase 6"
@@ -174,6 +174,9 @@ class CaseDraft:
     rule_id: str
     explanation: str
     side_effects: list[str] = field(default_factory=list)
+    # What running the case could do if the application failed to block an expected-blocked submission ("may
+    # submit"); empty for cases that don't expect a blocked submission. Drives the regression rule in `_suites`.
+    blocked_side_effects: list[str] = field(default_factory=list)
     suites: list[str] = field(default_factory=list)
     automation: tuple[str, str] = ("suitable", "")
     expected_result_status: str = "defined"
@@ -197,6 +200,22 @@ class DesignOutput:
     # Computed boundary lengths/partitions per field key: the AI path may only use these.
     allowed_boundaries: dict[str, set[int]] = field(default_factory=dict)
     allowed_partitions: dict[str, set[str]] = field(default_factory=dict)
+
+
+def safe_negative_for_regression(
+    *, positive: bool, expected_result_status: str, blocked_side_effects: list[str], risk_level: str | None
+) -> bool:
+    """A negative validation case whose only possible effect is a form submission (no transaction, sign-in or data
+    creation) is cheap and safe to repeat, and catches a validation rule that stops working: it belongs in Regression
+    from medium risk up (the demo's empty-Message case, roadmap Phase 4 thread; QA P4-BUG-01). An open question
+    qualifies too: whichever way it is answered, the case stays a safe form check. Shared by the generator and the
+    assistant's regression proposal (QA L1), so both pick the same cases."""
+    return (
+        not positive
+        and expected_result_status in ("defined", "open_question")
+        and list(blocked_side_effects) == ["submits_form"]
+        and risk_level in ("medium", "high", "very_high")
+    )
 
 
 def weakest(*labels: str) -> str:
@@ -877,6 +896,7 @@ class Designer:
                     f"design.ep.{req.rule}",
                     f"Equivalence class: {p.description} ({p.kind} partition of {fl.label})",
                     side_effects=self._side_effects(form, accepted),
+                    blocked_side_effects=[] if accepted else self._side_effects(form, True),
                     automation=self._automation(),
                     evidence_refs=list(req.evidence_refs),
                     feature_ids=list(req.feature_ids),
@@ -1009,6 +1029,7 @@ class Designer:
                     f"design.bva.{req.rule}",
                     explanation,
                     side_effects=self._side_effects(form, accepted),
+                    blocked_side_effects=[] if accepted else self._side_effects(form, True),
                     automation=self._automation(),
                     evidence_refs=list(req.evidence_refs),
                     feature_ids=list(req.feature_ids),
@@ -1200,6 +1221,7 @@ class Designer:
                         Provenance.assumed.value,
                         "design.eg.whitespace_only",
                         "Error guessing: whitespace-only input in a required field (catalogue eg.whitespace_only)",
+                        blocked_side_effects=self._side_effects(form, True),
                         automation=self._automation(),
                         evidence_refs=list(req.evidence_refs),
                         feature_ids=list(req.feature_ids),
@@ -1342,6 +1364,8 @@ class Designer:
             f"Error guessing: {fl.label} has no required attribute while "
             f"{_join([f.label for f in form.fields if f.required])} do (catalogue eg.optional_next_to_required)",
             side_effects=self._side_effects(form, says_optional),
+            # Mandatory or still open: the empty field may be refused, so pressing submit "may submit" the form.
+            blocked_side_effects=[] if says_optional else self._side_effects(form, True),
             automation=automation,
             expected_result_status=status,
             open_question=open_q,
@@ -1879,10 +1903,17 @@ class Designer:
         smoke_features: set[str] = set()
         for c in self.out.cases:
             suites = set(c.suites)
-            high = c.risk is not None and c.risk.level in ("high", "very_high")
+            level = c.risk.level if c.risk is not None else None
             if c.positive and c.expected_result_status == "defined":
                 suites.add("regression")
-            if not c.positive and high:
+            if not c.positive and level in ("high", "very_high"):
+                suites.add("regression")
+            if safe_negative_for_regression(
+                positive=c.positive,
+                expected_result_status=c.expected_result_status,
+                blocked_side_effects=c.blocked_side_effects,
+                risk_level=level,
+            ):
                 suites.add("regression")
             if c.smoke_candidate and c.positive:
                 key = (c.feature_ids or ["-"])[0]

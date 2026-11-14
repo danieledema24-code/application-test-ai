@@ -7,57 +7,13 @@
 //
 // Works with AI off (rules path): assertions are about structure and code-computed numbers, never about
 // generated wording. Invitations created here are revoked again; no account is created from them.
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { SITE_URL, seriousA11yViolations, useSharedAccount } from "./helpers";
+import { LONG, a11y, appears, approveCase, noSideways, openFrom, reloadUntil } from "./journey";
 
 test.describe.configure({ mode: "serial" });
 
 let projectId = process.env.P3_PROJECT ?? "";
-const LONG = 15 * 60_000;
-
-async function a11y(page: Page, screen: string) {
-  expect.soft(await seriousA11yViolations(page), `axe serious/critical on ${screen}`).toEqual([]);
-}
-
-async function noSideways(page: Page, screen: string) {
-  for (const width of [375, 320]) {
-    await page.setViewportSize({ width, height: 800 });
-    const extra = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    expect.soft(extra, `${screen} scrolls sideways at ${width} px`).toBeLessThanOrEqual(0);
-  }
-  await page.setViewportSize({ width: 1280, height: 900 });
-}
-
-/** Waits up to `ms` for the locator to show. (`isVisible({ timeout })` doesn't wait, so it can't be used here.) */
-async function appears(l: Locator, ms: number): Promise<boolean> {
-  return l.first().waitFor({ state: "visible", timeout: ms }).then(() => true).catch(() => false);
-}
-
-/**
- * Opens a list row's link and waits for the page. The dev server compiles a route on its first visit and drops
- * compiled routes after about a minute idle, so the first navigation after a long generation wait can take
- * 20–30 s (QA BUG-P3-19: measured 24 s for the RSC request; the click itself isn't lost). Production builds
- * precompile routes.
- */
-async function openFrom(page: Page, link: Locator, url: RegExp) {
-  await link.click({ position: { x: 8, y: 8 } });
-  await expect(page).toHaveURL(url, { timeout: 90_000 });
-}
-
-async function reloadUntil(page: Page, url: string, check: () => Promise<boolean>, timeout = LONG) {
-  const end = Date.now() + timeout;
-  for (;;) {
-    await page.goto(url);
-    // Data loads client-side and an event stream stays open ("networkidle" is unreliable): poll after each load.
-    const settle = Date.now() + 15_000;
-    while (Date.now() < settle) {
-      if (await check().catch(() => false)) return;
-      await page.waitForTimeout(1_000);
-    }
-    if (Date.now() > end) throw new Error(`Timed out waiting on ${url}`);
-    await page.waitForTimeout(5_000);
-  }
-}
 
 test.beforeEach(async ({ page }) => {
   await useSharedAccount(page);
@@ -161,15 +117,6 @@ test("P3-01/02/03: test design produces cases with techniques, conditions and sy
   await noSideways(page, "test data");
 });
 
-/** On a case page: approve it if it's a draft. The Approve button stays focusable while blocked, with its reason. */
-async function approveCase(page: Page) {
-  const approve = page.getByRole("button", { name: "Approve", exact: true });
-  await expect(approve).toBeVisible({ timeout: 30_000 });
-  await expect(approve).not.toHaveAttribute("aria-disabled", "true");
-  await approve.click();
-  await expect(approve).toHaveCount(0, { timeout: 30_000 });
-}
-
 test("P3-02 and Gate 5: answer open questions, cover open high risks, approve cases, then approve the gate", async ({ page }) => {
   test.setTimeout(15 * 60_000);
   const base = `/projects/${projectId}`;
@@ -247,13 +194,14 @@ test("P3-02 and Gate 5: answer open questions, cover open high risks, approve ca
   await expect(page.getByText(/Test cases approved\./).first()).toBeVisible({ timeout: 30_000 });
 });
 
-test("P3-04: traceability coverage, matrix and chain view; execution is never a number", async ({ page }) => {
+test("P3-04: traceability coverage, matrix and chain view; no pass rate before any run", async ({ page }) => {
   const base = `/projects/${projectId}`;
   await page.goto(`${base}/traceability`);
   await expect(page.getByRole("heading", { level: 1, name: "Traceability" })).toBeVisible();
   await expect(page.getByText("Requirements covered", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Execution coverage", { exact: true })).toBeVisible();
-  await expect(page.getByText("Not available").first()).toBeVisible();
+  // Nothing has run in this project: no pass rate is invented (a pre-Phase 4 backend said "Not available").
+  await expect(page.getByText(/^(No results yet|Not available)$/).first()).toBeVisible();
   await a11y(page, "traceability coverage");
   await noSideways(page, "traceability coverage");
 
@@ -264,7 +212,10 @@ test("P3-04: traceability coverage, matrix and chain view; execution is never a 
   await noSideways(page, "traceability matrix");
   await table.getByRole("link", { name: /^Trace REQ-/ }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: /^Trace REQ-/ })).toBeVisible();
-  await expect(page.getByText(/not available until Phase 4/).first()).toBeVisible();
+  // The chain never promises a later phase (the lifecycle bar's stage labels are not part of it).
+  const chain = page.getByRole("region").filter({ has: page.getByRole("heading", { level: 2, name: "Chain" }) });
+  await expect(chain).toBeVisible();
+  await expect(chain.getByText(/Phase 4/)).toHaveCount(0);
   await a11y(page, "chain view");
 });
 

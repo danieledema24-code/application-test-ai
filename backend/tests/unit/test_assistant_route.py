@@ -21,7 +21,14 @@ from app.services.assistant import INTENTS, route
         ("Approve Gate 3", "refuse_gate", {"gate": "G3"}),
         ("please approve G4 now", "refuse_gate", {"gate": "G4"}),
         ("Which requirements aren't approved yet?", "list_requirements", {"status": "draft"}),
-        ("Explain the failed login test", "execution_results", {}),
+        ("Explain the failed login test", "explain_failed_test", {}),
+        ("Explain the failed test TC-0019", "explain_failed_test", {"key": "TC-0019"}),
+        ("Why did RUN-0003-01 fail?", "explain_failed_test", {"key": "RUN-0003-01"}),
+        ("Re-run the failed tests", "propose_rerun", {"only_failed": True}),
+        ("Rerun TC-0019 and tc-0020", "propose_rerun", {"case_keys": ["TC-0019", "TC-0020"]}),
+        ("Analyse DEF-0001", "analyse_defect", {"key": "DEF-0001"}),
+        ("Which defects are still draft?", "list_defects", {"status": "draft"}),
+        ("Which scripts can't run?", "automation_status", {}),
     ],
 )
 def test_route(text: str, intent: str, params: dict[str, str]) -> None:
@@ -38,6 +45,7 @@ def test_ai_only_intents_are_marked() -> None:
         "propose_missing_requirements",
         "propose_risk_update",
         "propose_test_case_update",  # P3-06, AI-only
+        "propose_script_improvement",  # P4-13, AI-only
         "propose_missing_test_cases",  # P3-06, AI-only
     }
     assert all(s.requires_role == "member" for s in INTENTS.values() if s.creates_proposal)

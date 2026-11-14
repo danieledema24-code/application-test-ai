@@ -42,6 +42,10 @@ class Facts:
     ac_coverage: dict[str, tuple[list[str], list[str]]] | None = None
     # {"stale": bool, "without_case": [REQ keys], "orphans": [TC keys]}
     traceability: dict[str, Any] | None = None
+    # Phase 4 (None = nothing has run yet). requirement id -> latest result statuses of its approved cases
+    executed: dict[str, list[str]] | None = None
+    # Phase 4 (None = no defects yet): open defects as (key, severity), for "No open critical or high defects"
+    open_defects: list[tuple[str, str]] | None = None
 
 
 DOR, DOD = ReadinessKind.dor, ReadinessKind.dod
@@ -74,10 +78,8 @@ def templates(*, has_forms: bool, auth_boundary: bool) -> list[Template]:
     return out
 
 
-LATER_PHASE_DETAIL = {
-    "dod.tests_executed": "No test execution exists yet (Phase 4)",
-    "dod.no_open_high_defects": "No defect tracking exists yet (Phase 4)",
-}
+# Phase 4 checks are coded below (P4-12); nothing is left for a later phase.
+LATER_PHASE_DETAIL: dict[str, str] = {}
 
 FORM_CATEGORIES = frozenset({"form_input", "validation"})
 
@@ -111,14 +113,14 @@ def evaluate(rule_id: str | None, facts: Facts, *, requirement_id: str | None = 
         missing = [r["key"] for r in reqs if not r["ac_approved"]]
         return _result(
             "not_met" if missing else "met",
-            f"Without an approved acceptance criterion: {', '.join(missing[:8])}" if missing
+            f"Without an approved acceptance criterion: {_names(missing)}" if missing
             else "Every requirement checked has an approved acceptance criterion",
         )  # fmt: skip
     if rule_id == "dor.no_open_questions":
         open_q = [r["key"] for r in reqs if r["status"] == "needs_info"]
         return _result(
             "not_met" if open_q else "met",
-            f"Needs info: {', '.join(open_q[:8])}" if open_q else "No requirement is marked Needs info",
+            f"Needs info: {_names(open_q)}" if open_q else "No requirement is marked Needs info",
         )
     if rule_id == "dor.test_data_identified":
         forms = [r for r in reqs if r["category"] in FORM_CATEGORIES]
@@ -129,9 +131,7 @@ def evaluate(rule_id: str | None, facts: Facts, *, requirement_id: str | None = 
         missing = [r["key"] for r in forms if not r["ac_with_values"]]
         return _result(
             "not_met" if missing else "met",
-            f"No test values yet for {', '.join(missing[:8])}"
-            if missing
-            else "Test values are recorded for form fields",
+            f"No test values yet for {_names(missing)}" if missing else "Test values are recorded for form fields",
         )
     if rule_id == "dor.environment_reachable":
         if facts.reachable is None:
@@ -162,12 +162,22 @@ def evaluate(rule_id: str | None, facts: Facts, *, requirement_id: str | None = 
             return _result("not_met", "The test design is out of date with the requirements or strategy")
         problems = []
         if tr["without_case"]:
-            problems.append(f"Approved requirements without a test case: {', '.join(tr['without_case'][:8])}")
+            problems.append(f"Approved requirements without a test case: {_names(tr['without_case'])}")
         if tr["orphans"]:
-            problems.append(f"Test cases without a requirement: {', '.join(tr['orphans'][:8])}")
+            problems.append(f"Test cases without a requirement: {_names(tr['orphans'])}")
         if problems:
             return _result("not_met", "; ".join(problems))
         return _result("met", "Every approved requirement traces to a test case and every case to a requirement")
+    if rule_id == "dod.tests_executed":
+        return _tests_executed([r for r in reqs if r["status"] == "approved"], facts, requirement_id is not None)
+    if rule_id == "dod.no_open_high_defects":
+        if facts.open_defects is None:
+            return _result("unknown", "No test has run yet, so there are no defects to check")
+        high = [(k, sev) for k, sev in facts.open_defects if sev in ("critical", "major")]
+        if high:
+            named = _names([f"{k} ({sev.capitalize()})" for k, sev in high])
+            return _result("not_met", f"{named} {'is' if len(high) == 1 else 'are'} open")
+        return _result("met", "No critical or major defect is open")
     if rule_id == "dod.report_generated":
         ok = "requirements_spec" in facts.reports_ready
         return _result("met" if ok else "not_met", "Generated" if ok else "Not generated yet")
@@ -191,14 +201,14 @@ def _test_data(forms: list[dict[str, Any]], data: dict[str, dict[str, str]]) -> 
             elif label not in ok:
                 ok.append(label)
     if not missing and not questions:
-        return _result("met", f"Test data is identified for {', '.join(ok[:8]) or 'every form field'}")
+        return _result("met", f"Test data is identified for {_names(ok) or 'every form field'}")
     parts = []
     if ok:
-        parts.append(f"Identified for {', '.join(ok[:8])}")
+        parts.append(f"Identified for {_names(ok)}")
     if questions:
-        parts.append(f"Open question: {', '.join(questions[:8])}")
+        parts.append(f"Open question: {_names(questions)}")
     if missing:
-        parts.append(f"No test data yet for {', '.join(missing[:8])}")
+        parts.append(f"No test data yet for {_names(missing)}")
     return _result("not_met", "; ".join(parts))
 
 
@@ -215,11 +225,31 @@ def _ac_covered(reqs: list[dict[str, Any]], facts: Facts, single: bool) -> dict[
     if not total:
         return _result("unknown", "No approved acceptance criteria to cover")
     if uncovered:
-        return _result("not_met", f"Not covered by a test case: {', '.join(uncovered[:8])}")
+        return _result("not_met", f"Not covered by a test case: {_names(uncovered)}")
     return _result("met", f"All {len(total)} approved acceptance criteria are covered by a test case")
+
+
+def _names(items: list[str], limit: int = 8) -> str:
+    """Names joined with commas; past `limit`, "A, B, … and 3 more". A detail never drops names silently (QA
+    P4-BUG-10)."""
+    shown = ", ".join(items[:limit])
+    return f"{shown} and {len(items) - limit} more" if len(items) > limit else shown
 
 
 def stamp(result: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
     if result is None:
         return None
     return {"criterion_key": key, **result, "evaluated_at": datetime.now(UTC).isoformat()}
+
+
+def _tests_executed(reqs: list[dict[str, Any]], facts: Facts, single: bool) -> dict[str, Any]:
+    """Executed with evidence = the latest result of an approved case is passed or failed (flaky, errors and blocked
+    results don't count as evidence)."""
+    if facts.executed is None:
+        return _result("unknown", "No test has run yet")
+    if not reqs:
+        return _result("not_applicable" if single else "unknown", "No approved requirement")
+    missing = [r["key"] for r in reqs if not any(st in ("passed", "failed") for st in facts.executed.get(r["id"], []))]
+    if missing:
+        return _result("not_met", f"Without a passed or failed result: {_names(missing)}")
+    return _result("met", "Every approved requirement has a passed or failed result with evidence")

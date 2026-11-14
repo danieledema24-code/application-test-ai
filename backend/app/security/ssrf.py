@@ -1,4 +1,4 @@
-"""SSRF guard (threat T1/T2). Ported from `api/src/lib/ssrf.ts` and extended.
+"""SSRF guard (threat T1/T2). Ported from the legacy Node API's `src/lib/ssrf.ts` (on `main`) and extended.
 
 Rules: http/https only; no credentials in the URL; IP literals in every form a browser accepts (decimal, octal,
 hex, shortened) are canonicalised before checking; every A/AAAA record of a host name must be public; IPv4

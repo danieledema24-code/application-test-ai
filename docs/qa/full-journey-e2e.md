@@ -1,5 +1,7 @@
 # Full journey end-to-end test through the web UI
 
+> Historical report on the retired Node API product. `api/` was deleted from this branch in P4-15; the script and paths below exist on `main` only.
+
 - **Date:** 2026-11-12
 - **Branch:** `detailed-checks` (no product code changed)
 - **Tester:** QA agent, headless Chromium (Playwright 1.64), viewport 1366x900
@@ -94,7 +96,7 @@ Screenshots are in `/private/tmp/claude-501/-Users-danieledema-football-predicto
 
 ## How to re-run
 
-With the web app (:3002), API (:4000) and demo shop (:4100) running:
+Only on `main`, where `api/` still exists. On `phase-4` the API is `backend/` (:8200) and the demo shop runs from `demo-shop/`; this script does not target them. With the web app (:3002), API (:4000) and demo shop (:4100) running on `main`:
 
 ```sh
 cd api

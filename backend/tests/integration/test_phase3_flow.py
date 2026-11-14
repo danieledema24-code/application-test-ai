@@ -419,17 +419,18 @@ async def test_g5_needs_can_approve_and_freezes_reports(flow: Flow) -> None:
 
 async def test_traceability_matrix_coverage_gaps_and_chain(flow: Flow) -> None:
     cov = (await flow.get(f"/projects/{flow.pid}/traceability/coverage")).json()
-    assert cov["basis"] == "current" and cov["execution"]["available"] is False
+    assert cov["basis"] == "current" and cov["execution"]["executed"] is False  # P4-12: computed, nothing ran
     assert 0 < cov["requirements"]["with_approved_case"] <= cov["requirements"]["approved"]
     gaps = (await flow.get(f"/projects/{flow.pid}/traceability/gaps")).json()
-    for k in ("requirements_without_execution_evidence", "failed_tests", "outdated_automation_scripts",
-              "defects_without_regression_coverage"):  # fmt: skip
-        assert gaps[k]["available"] is False and gaps[k]["available_from_phase"] == 4
+    assert gaps["requirements_without_execution_evidence"]["executed"] is False
+    for k in ("failed_tests", "flaky_tests", "outdated_automation_scripts", "defects_without_regression_coverage"):
+        assert gaps[k] == []
     approved_reqs = cov["requirements"]["approved"]
     none = len(gaps["requirements_without_test_cases"]["none"])
     assert cov["requirements"]["with_case"] == approved_reqs - none
     fwd = (await flow.get(f"/projects/{flow.pid}/traceability?view=forward")).json()
-    assert fwd["items"] and all(r["automation"]["available"] is False for r in fwd["items"])
+    # Scripts may exist (automation starts after G5); nothing has run.
+    assert fwd["items"] and all(isinstance(r["automation"], list) and r["results"] == [] for r in fwd["items"])
     bwd = (await flow.get(f"/projects/{flow.pid}/traceability?view=backward&limit=5")).json()
     assert len(bwd["items"]) == 5 and bwd["next_cursor"]
     row = next(r for r in fwd["items"] if r["test_cases"])
@@ -440,7 +441,8 @@ async def test_traceability_matrix_coverage_gaps_and_chain(flow: Flow) -> None:
     back = (await flow.get(f"/projects/{flow.pid}/traceability/chain?key={case_key}")).json()
     reqs = next(g for g in back["upstream"] if g["type"] == "requirement")["items"]
     assert row["requirement"]["key"] in {r["key"] for r in reqs}
-    assert {x["type"] for x in back["later_phase"]} == {"automation_script", "execution_result", "defect"}
+    assert back["later_phase"] == []
+    assert {x["type"] for x in back["downstream"]} == {"automation_script", "execution_result", "defect"}
     assert (await flow.get(f"/projects/{flow.pid}/traceability/chain?key=TC-9999")).status_code == 404
     approved = (await flow.get(f"/projects/{flow.pid}/traceability/coverage?basis=approved")).json()
     assert approved["basis"] == "approved" and approved["snapshot_hash"] and approved["approved_at"]
@@ -486,7 +488,10 @@ async def test_reports_counts_csv_and_no_credentials(flow: Flow) -> None:
     stats = (await flow.get(f"/projects/{flow.pid}/test-cases/stats")).json()
     assert rep["content"]["counts"]["total"] == stats["total"]
     assert rep["content"]["counts"]["by_status"] == stats["by_status"]
-    assert rep["content"]["execution_note"] == "Execution status: Not run. Execution arrives in Phase 4."
+    assert (
+        rep["content"]["execution_note"].startswith("Execution status: ")
+        and "Phase 4" not in rep["content"]["execution_note"]
+    )
     raw = await _download(flow, rep["id"], "csv")
     assert raw.startswith("\ufeff".encode())
     rows = list(csv.reader(io.StringIO(raw.decode("utf-8-sig"))))
@@ -498,7 +503,8 @@ async def test_reports_counts_csv_and_no_credentials(flow: Flow) -> None:
     assert (title not in html and "=HYPERLINK(&#34;" in html) or "=HYPERLINK(&quot;" in html
     rtm = flow.state["reports"]["rtm"]
     rtm_csv = (await _download(flow, rtm["id"], "csv")).decode("utf-8-sig")
-    assert "Not available until Phase 4" in rtm_csv
+    assert "Phase 4" not in rtm_csv and ("No script" in rtm_csv or " · tests/" in rtm_csv)
+    assert any(x in rtm_csv for x in ("Not run", "passed · ", "failed · "))
     other = await flow.get(f"/reports/{rtm['id']}/download?format=csv", flow.other.headers)
     assert other.status_code == 404
     spec = next(x for x in (await flow.get(f"/projects/{flow.pid}/reports")).json()
@@ -553,14 +559,15 @@ async def test_assistant_v2_intents_ai_off(flow: Flow) -> None:
     numbers = (await flow.get(f"/projects/{flow.pid}/traceability/coverage")).json()
     rq = numbers["requirements"]
     assert f"{rq['with_approved_case']} of {rq['approved']} approved requirements" in cov["content"]
-    assert "Execution coverage is available from Phase 4" in cov["content"]
+    assert "No test has run yet, so there is no execution coverage." in cov["content"]
     tokens = set(re.findall(r"\b(?:REQ|AC|RISK|TC|TCOND|TD|FEAT)-\d+\b", cov["content"]))
     assert tokens <= {c["key"] for c in cov["citations"]}
     key = (await flow.cases(status="approved"))[0]["key"]
     ex = await _ask(flow, tid, {"content": f"Explain {key}"})
     assert ex["intent"] == "explain_test_case" and key in {c["key"] for c in ex["citations"]}
+    assert "It hasn't been run yet." in ex["content"]
     tr = await _ask(flow, tid, {"intent": "traceability_for", "params": {"key": key}})
-    assert "Phase 4" in tr["content"] and key in {c["key"] for c in tr["citations"]}
+    assert "Phase 4" not in tr["content"] and key in {c["key"] for c in tr["citations"]}
     ls = await _ask(flow, tid, {"intent": "list_test_cases", "params": {"status": "approved"}})
     assert ls["citations"] and all(c["type"] == "test_case" for c in ls["citations"])
     g5 = await _ask(flow, tid, {"intent": "explain_gate", "params": {"gate": "G5"}})
@@ -756,6 +763,43 @@ async def test_regression_suite_proposal_accepts_atomically(flow: Flow) -> None:
     st = await flow.stage("test_design")
     assert st["gate"]["status"] != "approved"  # accepting into approved content reopens G5
     assert any(e["type"] == "gate.reopened" and prop["key"] in _dump(e) for e in await flow.events())
+    assert (await flow.gate("G5", flow.approver)).status_code == 200
+    await flow.idle()
+
+
+async def test_regression_proposal_follows_the_generators_safe_negative_rule(flow: Flow) -> None:
+    """QA L1: the assistant's "high_risk" scope proposes the same negative form checks the generator puts in
+    Regression (only blocked effect: a form submission; medium risk or higher), not only high-risk cases."""
+    from sqlalchemy import select
+
+    from app.db.models import TestCase
+    from app.domain.enums import CaseStatus
+    from app.services.assistant_p3 import _safe_negative
+
+    async with flow.ctx.session_factory() as s:
+        rows = (
+            await s.execute(
+                select(TestCase)
+                .where(TestCase.project_id == uuid.UUID(flow.pid), TestCase.status == CaseStatus.approved)
+                .execution_options(tenant_bypass=True)
+            )
+        ).scalars()
+        safe = sorted((c.key, c.risk_level) for c in rows if _safe_negative(c) and c.risk_level == "medium")
+    assert safe, "the fixture site has a medium-risk negative form check"
+    key = safe[0][0]
+    d = await flow.case(key)
+    assert "regression" in d["suites"], "the generator put it in Regression"
+    r = await flow.patch(f"/test-cases/{d['id']}", {"version": d["version"],
+                                                    "suites": [x for x in d["suites"] if x != "regression"]})  # fmt: skip
+    assert r.status_code == 200, r.text
+    tid = await _thread(flow, flow.member)
+    reg = await _ask(flow, tid, {"intent": "propose_regression_suite", "params": {"scope": "high_risk"}}, flow.member)
+    prop = reg["proposals"][0]
+    assert "(high-risk cases and safe negative form checks)" in prop["summary"]
+    mine = next(x for x in prop["preview"] if x["key"] == key)
+    assert mine["action"] == "add" and mine["reason"].startswith("Negative form check that only submits the form")
+    acc = await flow.post(f"/assistant/proposals/{prop['id']}/accept", {}, flow.member)
+    assert acc.status_code == 200, acc.text
     assert (await flow.gate("G5", flow.approver)).status_code == 200
     await flow.idle()
 

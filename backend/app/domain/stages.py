@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.enums import GateKey, GatePolicy, StageKey, StageStatus
+from app.domain.enums import GateKey, GatePolicy, RunStatus, StageKey, StageStatus
 
-CURRENT_PHASE = 3
+CURRENT_PHASE = 4
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,9 @@ DEFAULT_APPROVAL_POLICY: dict[GateKey, GatePolicy] = {
     GateKey.G3: GatePolicy.required,
     GateKey.G4: GatePolicy.required,
     GateKey.G5: GatePolicy.required,
-    GateKey.G6: GatePolicy.required,
+    # Decision D10 (hybrid): static validation always blocks (P4-04 preconditions) and AI-written scripts need a
+    # `can_approve` review before they can run; a bundle of rule-written valid scripts needs no human sign-off.
+    GateKey.G6: GatePolicy.recommended,
     GateKey.G7: GatePolicy.required,
     GateKey.G8: GatePolicy.required,
     GateKey.G9: GatePolicy.required,
@@ -102,8 +104,32 @@ ACTIVE_STATUSES = frozenset({StageStatus.queued, StageStatus.running})
 REGENERABLE_STAGES = frozenset(
     {StageKey.requirements, StageKey.readiness_criteria, StageKey.test_strategy, StageKey.test_design}
 )
-# Stages whose status is derived on read from another stage; never queued, no agent (P3-00).
-DERIVED_STAGES: dict[StageKey, StageKey] = {StageKey.traceability: StageKey.test_design}
+# P4-00: the `execution` stage mirrors its latest execution run. Runs waiting for (or refused) G7 don't move it.
+EXECUTION_STAGE_STATUS: dict[RunStatus, StageStatus] = {
+    RunStatus.queued: StageStatus.queued,
+    RunStatus.running: StageStatus.running,
+    RunStatus.passed: StageStatus.completed,
+    RunStatus.failed: StageStatus.completed,  # the run finished; failing tests are results, not a stage failure
+    RunStatus.error: StageStatus.failed,  # the run errored as a whole
+    RunStatus.cancelled: StageStatus.cancelled,
+}
+
+# Stages whose status is derived on read from another stage; never queued, no agent (P3-00, P4-00).
+DERIVED_STAGES: dict[StageKey, StageKey] = {
+    StageKey.traceability: StageKey.test_design,
+    # P4-00: awaiting_approval while a defect draft is undecided (G8 per defect), completed when none are left.
+    StageKey.defects_summary: StageKey.failure_analysis,
+}
+# Gates decided per subject (G7 per execution run, G8 per defect), never through POST /gates/{gate}/decision.
+SUBJECT_GATES: dict[GateKey, str] = {
+    GateKey.G7: "Authorise each test run from Test Execution",
+    GateKey.G8: "Confirm or reject each defect from Defects",
+}
+# Stages driven by execution runs: never queued by advance() or POST /stages/{stage}/run (P4-00).
+RUN_DRIVEN_STAGES: dict[StageKey, str] = {
+    StageKey.execution: "Start a test run from Test Execution",
+    StageKey.failure_analysis: "Failure analysis runs automatically after a test run with failures",
+}
 # Stages queued again automatically when their upstream produces a new version ("auto_rerun").
 AUTO_RERUN_STAGES = frozenset({StageKey.discovery_report})
 # Stages a user can start with POST /stages/{stage}/run in the current phase.
@@ -115,6 +141,8 @@ RUNNABLE_IN_PHASE = frozenset(
         StageKey.readiness_criteria,
         StageKey.test_strategy,
         StageKey.test_design,
+        StageKey.automation_assessment,
+        StageKey.automation,
     }
 )
 

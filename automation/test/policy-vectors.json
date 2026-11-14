@@ -1,0 +1,32 @@
+{
+  "description": "Network-policy vectors shared by automation/test/policy.test.ts (Node fixtures, plus a real-browser run in browser.test.ts) and backend/tests/unit/test_ssrf.py (Python policy). {port} is the approved target's port, {other_port} another local port. `resolves_to` stubs DNS (absent = 93.184.216.34). `browser: false` vectors need a DNS stub or a scheme Chromium refuses itself, so they run only in the pure tests.",
+  "approved_origin": "http://127.0.0.1:{port}",
+  "allowed_hosts": ["127.0.0.1"],
+  "allow_private": true,
+  "vectors": [
+    { "url": "http://127.0.0.1:{port}/ok", "top_level": false, "verdict": "allowed" },
+    { "url": "http://127.0.0.1:{port}/ok", "top_level": true, "verdict": "allowed" },
+    { "url": "http://127.0.0.1:{other_port}/x", "top_level": false, "verdict": "blocked", "code": "private_address" },
+    { "url": "http://2130706433:{other_port}/x", "top_level": false, "verdict": "blocked", "code": "private_address" },
+    { "url": "http://[::1]:{other_port}/x", "top_level": false, "verdict": "blocked", "code": "private_address" },
+    { "url": "http://10.0.0.5/", "top_level": false, "verdict": "blocked", "code": "private_address" },
+    { "url": "http://192.168.1.1/", "top_level": false, "verdict": "blocked", "code": "private_address" },
+    { "url": "http://169.254.169.254/latest/meta-data/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://[::ffff:a9fe:a9fe]/latest/meta-data/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://[64:ff9b::a9fe:a9fe]/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://[2002:a9fe:a9fe::]/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://[fd00:ec2::254]/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://metadata.google.internal/computeMetadata/v1/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://2852039166/latest/meta-data/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://0251.0376.0251.0376/latest/meta-data/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "http://0xa9fea9fe/", "top_level": false, "verdict": "blocked", "code": "metadata" },
+    { "url": "file:///etc/passwd", "top_level": true, "verdict": "blocked", "code": "unsupported_scheme" },
+    { "url": "ftp://example.com/", "top_level": false, "verdict": "blocked", "code": "unsupported_scheme", "browser": false },
+    { "url": "https://user:pass@shop.example.com/", "top_level": false, "verdict": "blocked", "code": "credentials_in_url", "browser": false },
+    { "url": "https://shop.example.com/", "top_level": true, "verdict": "blocked", "code": "off_site", "browser": false },
+    { "url": "https://cdn.example.net/app.js", "top_level": false, "verdict": "allowed", "browser": false },
+    { "url": "https://internal.example.com/", "top_level": false, "verdict": "blocked", "code": "private_address", "resolves_to": ["93.184.216.34", "10.1.2.3"], "browser": false },
+    { "url": "https://rebind.example.com/", "top_level": false, "verdict": "blocked", "code": "metadata", "resolves_to": ["169.254.169.254"], "browser": false },
+    { "url": "https://nowhere.example.com/", "top_level": false, "verdict": "blocked", "code": "dns_failure", "resolves_to": [], "browser": false }
+  ]
+}

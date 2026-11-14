@@ -1,6 +1,7 @@
 // Test design (design P3 §5–§13): techniques, priority, lint vocabulary, list filters, the bulk-approve guard,
 // visible values and the Gate 5 checks. Pure functions, unit-tested in tests/unit/phase3.spec.ts.
 
+import { SUITABILITY_TEXT } from "@/lib/automation";
 import type {
   CaseStatus,
   Gaps,
@@ -99,6 +100,16 @@ export const SIDE_EFFECT_TEXT: Record<string, string> = {
 };
 
 export const AUTOMATION_TEXT: Record<string, string> = { suitable: "Suitable", partial: "Partly automatable", manual_only: "Manual only" };
+
+/**
+ * Automation suitability as shown on a case (design P4 §3, §6.6): once assessed (P4-02) "Can be automated · Needs test
+ * credentials · Needs a person"; before that the Phase 3 preliminary label with "(preliminary)".
+ */
+export function automationValueText(s: { value: string; assessed?: string | null } | null | undefined): string {
+  if (!s?.value) return "";
+  if (s.assessed === "assessed") return SUITABILITY_TEXT[s.value as keyof typeof SUITABILITY_TEXT] ?? s.value;
+  return `${AUTOMATION_TEXT[s.value] ?? s.value} (preliminary)`;
+}
 
 // ---- Lint vocabulary (§8.6) -----------------------------------------------------------------
 
@@ -890,11 +901,13 @@ export function formHeading(label: string, path: string | null | undefined): str
   return path && !l.includes(path) ? `${l} (${path})` : l;
 }
 
-export const PRELIMINARY_TEXT = "Preliminary: assessed in Phase 4.";
+export const PRELIMINARY_TEXT = "Preliminary: confirmed by the automation assessment after Gate 5.";
+/** The same sentence as stored by Phase 3 versions (still stripped from older reasons). */
+const PRELIMINARY_LEGACY = "Preliminary: assessed in Phase 4.";
 
-/** The automation reason without the "Preliminary: assessed in Phase 4." sentence, which the UI prints once itself. */
+/** The automation reason without the preliminary sentence (current or legacy wording), which the UI prints once itself. */
 export function automationReasonText(reason: string | null | undefined): string {
-  return (reason ?? "").split(PRELIMINARY_TEXT).join(" ").replace(/\s+/g, " ").trim();
+  return (reason ?? "").split(PRELIMINARY_TEXT).join(" ").split(PRELIMINARY_LEGACY).join(" ").replace(/\s+/g, " ").trim();
 }
 
 /** A coverage item as people read it ("empty", "81 characters"); the raw id ("len:0") only when no label came. */
@@ -983,6 +996,7 @@ export function suiteDiff<T extends { key: string; from: readonly string[]; to: 
 
 /** Toast after applying test-design proposals: "3 test cases added as drafts. View in Test Cases." */
 export function proposalAppliedToast(kind: string | undefined, ok: number, cases = ok): string {
+  if (kind === "request_run") return "Run request created. It starts only after someone who can approve gates authorises it (Gate 7).";
   if (kind === "add_test_cases") return `${cases} test case${cases === 1 ? "" : "s"} added as drafts. View in Test Cases.`;
   if (kind === "set_suite") return `${ok} suite change${ok === 1 ? "" : "s"} applied. View in Test Cases.`;
   if (kind === "update_test_case") return `${ok} change${ok === 1 ? "" : "s"} applied. View in Test Cases.`;

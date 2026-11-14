@@ -1,11 +1,16 @@
-"""T1: SSRF vectors (port of api/test/security.test.ts plus IP literal forms and IPv6 embeddings)."""
+"""T1: SSRF vectors (port of the legacy Node API's test/security.test.ts plus IP literal forms and IPv6 embeddings), and the vector file
+shared with the Node fixtures in automation/ (P4-01 parity)."""
 
 from __future__ import annotations
 
 import ipaddress
+import json
+from pathlib import Path
+from typing import Any
 
 import pytest
 
+from app.browser.network_policy import NetworkPolicy
 from app.security.ssrf import (
     BlockedCode,
     UrlRejected,
@@ -173,3 +178,39 @@ async def test_dev_flag_still_blocks_lan_and_link_local(addr: str) -> None:
 async def test_dev_flag_blocks_host_resolving_to_loopback_and_lan() -> None:
     chk = await check_host("mixed.example.com", allow_loopback=True, resolver=resolver_for("127.0.0.1", "192.168.1.1"))
     assert not chk.allowed and chk.blocked_ip == "192.168.1.1"
+
+
+# ---------------------------------------------------------------------------- shared vectors (P4-01)
+
+_VECTOR_FILE = Path(__file__).resolve().parents[3] / "automation" / "test" / "policy-vectors.json"
+_SHARED = json.loads(_VECTOR_FILE.read_text())
+_APPROVED_PORT = 4100
+_REASON_CODES = {
+    "Unsupported scheme": "unsupported_scheme",
+    "Cloud metadata endpoint": "metadata",
+    "Private network address": "private_address",
+    "Host name could not be resolved": "dns_failure",
+    "Outside the approved site": "off_site",
+    "Credentials in URL are not allowed": "credentials_in_url",
+}
+
+
+def _fill(s: str) -> str:
+    return s.replace("{port}", str(_APPROVED_PORT)).replace("{other_port}", str(_APPROVED_PORT + 1))
+
+
+@pytest.mark.parametrize("vector", _SHARED["vectors"], ids=lambda v: f"{v['url']}|top={v['top_level']}")
+async def test_shared_policy_vectors(vector: dict[str, Any]) -> None:
+    """The vectors the Node fixtures are tested with (automation/test/policy.test.ts) give the same verdicts here."""
+    addrs = vector.get("resolves_to", ["93.184.216.34"])
+    policy = NetworkPolicy(
+        approved_origins={_fill(_SHARED["approved_origin"])},
+        allowed_hosts=_SHARED["allowed_hosts"],
+        allow_private_targets=_SHARED["allow_private"],
+        resolver=resolver_for(*addrs),
+    )
+    reason = await policy.check(_fill(vector["url"]), top_level=vector["top_level"])
+    assert ("allowed" if reason is None else "blocked") == vector["verdict"], reason
+    if vector.get("code"):
+        code = _REASON_CODES.get(reason or "", "invalid_url" if (reason or "").startswith("Invalid URL") else reason)
+        assert code == vector["code"]

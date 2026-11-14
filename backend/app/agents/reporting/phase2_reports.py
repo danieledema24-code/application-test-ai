@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.reporting import phase4_reports as _p4
 from app.agents.reporting.discovery_report import _env
 from app.context import AppContext
 from app.db.models import Project, QaReport, ReadinessCriterion, Risk, SourceDocument
@@ -34,6 +35,8 @@ TITLES = {
     ReportType.test_plan: "Test Plan",
     ReportType.test_case_spec: "Test Case Specification",
     ReportType.rtm: "Requirements Traceability Matrix",
+    ReportType.execution: "Test Execution Report",
+    ReportType.defect: "Defect Report",
 }
 REPORT_STAGE = {
     ReportType.requirements_spec: StageKey.requirements,
@@ -41,6 +44,8 @@ REPORT_STAGE = {
     ReportType.test_plan: StageKey.test_strategy,
     ReportType.test_case_spec: StageKey.test_design,
     ReportType.rtm: StageKey.traceability,
+    ReportType.execution: StageKey.execution,
+    ReportType.defect: StageKey.defects_summary,
 }
 PHASE3 = frozenset({ReportType.test_case_spec, ReportType.rtm})
 GATE_OF = {
@@ -69,6 +74,8 @@ async def source_snapshot(
 
 
 async def approval(s: AsyncSession, report: QaReport) -> dict[str, Any]:
+    if report.report_type in _p4.PHASE4:
+        return await _p4.approval(s, report)
     gate = GATE_OF[report.report_type]
     d = await gates.last_approval(s, report.project_id, gate)
     stamped = (report.source_versions or {}).get("snapshot_hash")
@@ -84,6 +91,8 @@ async def approval(s: AsyncSession, report: QaReport) -> dict[str, Any]:
 
 
 async def is_latest_source(s: AsyncSession, report: QaReport) -> bool:
+    if report.report_type in _p4.PHASE4:
+        return await _p4.is_latest_source(s, report)
     current, _ = await source_snapshot(s, report.project_id, report.report_type)
     if report.report_type == ReportType.test_plan:
         from app.services.plan import current_plan
@@ -109,6 +118,8 @@ async def build(ctx: AppContext, s: AsyncSession, project: Project, report: QaRe
         from app.agents.reporting import phase3_reports
 
         return {**base, **await phase3_reports.build(ctx, s, project, report.report_type)}
+    if report.report_type in _p4.PHASE4:
+        return {**base, **await _p4.build(s, project, report)}
     return {**base, **await _plan(s, project)}
 
 
@@ -281,12 +292,16 @@ async def _plan(s: AsyncSession, project: Project) -> dict[str, Any]:
 
 
 def render_html(content: dict[str, Any]) -> str:
+    if content.get("report_type") in ("execution", "defect"):
+        return _env.get_template("phase4_report.html").render(c=content)
     return _env.get_template("phase2_report.html").render(c=content)
 
 
 async def render_pdf(ctx: AppContext, html_doc: str, content: dict[str, Any]) -> bytes:
     draft = (content.get("approval") or {}).get("status") != "approved"
     band = " · DRAFT" if draft else ""
+    if content.get("report_type") == "execution":
+        band = f" · {content.get('hypothesis_note', '')}"
     title = html.escape(f"{content['title']} · {content['project']['name']}{band}")
     header = (
         '<div style="font-family:Helvetica,Arial,sans-serif;font-size:8px;color:#535D70;width:100%;padding:0 20mm;">'
@@ -317,7 +332,7 @@ async def render(ctx: AppContext, s: AsyncSession, report: QaReport) -> QaReport
     try:
         content = await build(ctx, s, project, report)
         content["frozen"] = frozen
-        if not report.source_versions:
+        if not report.source_versions and report.report_type not in _p4.PHASE4:
             report.source_versions = await stamp(s, project.id, report.report_type)
         content["approval"] = await approval(s, report)
         html_doc = render_html(content)
@@ -333,8 +348,15 @@ async def render(ctx: AppContext, s: AsyncSession, report: QaReport) -> QaReport
             from app.agents.reporting.phase3_reports import to_csv
 
             outputs.append(("csv", to_csv(content), "text/csv; charset=utf-8"))
+        host = await _p4.host_of(s, project.id) if report.report_type in _p4.PHASE4 else ""
+        if report.report_type in _p4.PHASE4:
+            outputs.append(("csv", _p4.to_csv(content), "text/csv; charset=utf-8"))
         for fmt, data, mime in outputs:
-            name = f"{slug}-v{report.version}-{content['generated_at'][:10]}.{fmt}"
+            name = (
+                _p4.file_name(host, content, report.version, fmt)
+                if report.report_type in _p4.PHASE4
+                else f"{slug}-v{report.version}-{content['generated_at'][:10]}.{fmt}"
+            )
             ev = await write_evidence(
                 s,
                 ctx.storage,
@@ -382,6 +404,8 @@ async def stamp(s: AsyncSession, project_id: Any, report_type: ReportType) -> di
 
 
 async def has_source(s: AsyncSession, project_id: Any, report_type: ReportType) -> bool:
+    if report_type in _p4.PHASE4:
+        return await _p4.has_source(s, project_id, report_type)
     if report_type == ReportType.requirements_spec:
         run, _ = await gates.current_requirements(s, project_id)
         return run is not None
@@ -398,13 +422,33 @@ async def has_source(s: AsyncSession, project_id: Any, report_type: ReportType) 
 
 
 async def create(
-    s: AsyncSession, project: Project, report_type: ReportType, *, user_id: Any, frozen: bool = False
+    s: AsyncSession,
+    project: Project,
+    report_type: ReportType,
+    *,
+    user_id: Any,
+    frozen: bool = False,
+    run_key: str | None = None,
 ) -> QaReport:
     """Adds a `rendering` report stamped with its current source (the caller commits and queues `report_render`).
     Frozen versions are the ones created automatically at G3/G4 approval and when the plan is written."""
     from app.agents.reporting.discovery_report import next_report_version
 
     stage_run_id = None
+    if report_type in _p4.PHASE4:
+        p4report = QaReport(
+            organisation_id=project.organisation_id,
+            project_id=project.id,
+            report_type=report_type,
+            version=await next_report_version(s, project.id, report_type),
+            status=ReportStatus.rendering,
+            created_by=user_id,
+            content={"frozen": frozen},
+            source_versions=await _p4.stamp(s, project.id, report_type, run_key),
+        )
+        s.add(p4report)
+        await s.flush()
+        return p4report
     if report_type == ReportType.requirements_spec:
         run, _ = await gates.current_requirements(s, project.id)
         stage_run_id = run.id if run else None

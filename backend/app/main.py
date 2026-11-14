@@ -20,10 +20,13 @@ from app.api.errors import AppError, envelope
 from app.api.routers import (
     assistant,
     auth,
+    automation,
     dashboard,
+    defects,
     documents,
     events,
     evidence,
+    execution,
     health,
     members,
     projects,
@@ -125,9 +128,11 @@ def create_app(
 
         await backfill(context)
         # P3-00 data step (decision D1): G5 becomes a required sign-off on existing projects (idempotent).
-        from app.services.projects import require_g5_signoff
+        from app.services.projects import apply_g6_hybrid_default, require_g5_signoff
 
         await require_g5_signoff(context)
+        # P4-00 data step (decision D10): G6 defaults to the hybrid policy on existing projects (idempotent).
+        await apply_g6_hybrid_default(context)
         worker: Worker | None = None
         run_worker = start_worker if start_worker is not None else settings.worker_mode == "inline"
         if run_worker:
@@ -181,6 +186,10 @@ def create_app(
         )
 
     origins = [settings.web_origin, *settings.extra_test_origins]
+    # Order matters: the last middleware added is the outermost. CORS wraps the request-id middleware, so the 500
+    # envelope it writes for an unhandled error carries the CORS headers too; without them the browser reports a
+    # network error ("Can't reach QA Analyst") instead of the error and its request id (QA P4-BUG-09).
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
@@ -190,7 +199,6 @@ def create_app(
         allow_headers=["Authorization", "Content-Type", "Accept", "Cache-Control", "Last-Event-ID", "X-Request-ID"],
         expose_headers=["X-Request-ID", "Retry-After"],
     )
-    app.add_middleware(RequestIdMiddleware)
     for r in (
         health,
         members,
@@ -201,6 +209,9 @@ def create_app(
         requirements,
         strategy,
         testdesign,
+        automation,
+        execution,
+        defects,
         traceability,
         secrets,
         documents,

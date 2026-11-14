@@ -160,7 +160,35 @@ async def snapshot_for(
         from app.services import testdesign
 
         return await testdesign.g5_snapshot(s, project_id)
+    if gate == GateKey.G6:
+        return await g6_snapshot(s, project_id)
     return [], {}
+
+
+async def g6_snapshot(s: AsyncSession, project_id: uuid.UUID) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """The runnable scripts of the current automation bundle as `{type, id, version, sha256}`: valid, and approved
+    in review when AI wrote them (P4-04)."""
+    from app.db.models import AutomationScript
+    from app.domain.enums import ScriptStatus
+    from app.services.automation import runnable
+
+    st = await _stage(s, project_id, StageKey.automation)
+    run = await _run(s, st.current_stage_run_id)
+    if run is None or run.finished_at is None:
+        return [], {}
+    scripts = (
+        await s.execute(
+            select(AutomationScript).where(
+                AutomationScript.stage_run_id == run.id, AutomationScript.status == ScriptStatus.valid
+            )
+        )
+    ).scalars()
+    items: list[dict[str, Any]] = [
+        {"type": "automation_script", "id": str(x.id), "version": x.version, "sha256": x.sha256}
+        for x in scripts
+        if runnable(x)
+    ]
+    return items, {"automation": run.version}
 
 
 async def last_approval(s: AsyncSession, project_id: uuid.UUID, gate: GateKey) -> GateDecision | None:
@@ -378,7 +406,17 @@ async def preconditions(s: AsyncSession, project: Project, gate: GateKey) -> lis
         from app.services import testdesign
 
         return await testdesign.g5_preconditions(s, project)
+    if gate == GateKey.G6:
+        return await g6_preconditions(s, project)
     return []
+
+
+async def g6_preconditions(s: AsyncSession, project: Project) -> list[Precondition]:
+    """G6 (decision D10, P4-04): >=1 runnable script and no unreviewed AI-written script (blocking); invalid
+    scripts, unchecked scripts and locators, and outdated scripts as warnings."""
+    from app.services import automation
+
+    return await automation.g6_preconditions(s, project)
 
 
 def blockers(items: list[Precondition]) -> list[Precondition]:

@@ -126,6 +126,8 @@ export type ProjectSummary = {
   pages_discovered: number;
   awaiting_approval: boolean;
   updated_at: IsoDate;
+  /** Phase 4: the latest finished test run; null before any run. */
+  last_run?: { key: string; status: string; tests: number; totals: Partial<Record<"passed" | "failed" | "error" | "flaky" | "skipped" | "blocked", number>>; finished_at: IsoDate | null } | null;
 };
 
 export type Dashboard = {
@@ -483,6 +485,9 @@ export type ReportSummary = {
   is_latest_source?: boolean;
   stage_run_version?: number | null;
   error?: string | null;
+  /** Phase 4: the run of a Test Execution Report (null = latest result per test case). */
+  run_key?: string | null;
+  frozen?: boolean;
 };
 
 export type DiscoveryReportContent = {
@@ -572,7 +577,12 @@ export type ArtefactType =
   // Phase 3
   | "test_condition"
   | "test_case"
-  | "test_data";
+  | "test_data"
+  // Phase 4
+  | "automation_script"
+  | "execution_result"
+  | "execution_run"
+  | "defect";
 
 export type ArtefactRef = { type: ArtefactType; id: Uuid | null; key: string; label: string; path: string };
 
@@ -982,7 +992,14 @@ export type AssistantIntent =
   | "propose_regenerate"
   | "propose_requirement_update"
   | "propose_missing_requirements"
-  | "propose_risk_update";
+  | "propose_risk_update"
+  // Phase 4 (P4-13)
+  | "explain_failed_test"
+  | "analyse_defect"
+  | "list_defects"
+  | "automation_status"
+  | "propose_rerun"
+  | "propose_script_improvement";
 
 export type AssistantMessageCreate = { content?: string | null; intent?: AssistantIntent | null; params?: Record<string, unknown>; context?: ArtefactRef | null };
 
@@ -1021,7 +1038,9 @@ export type Proposal = {
     // Phase 3 (P3-06)
     | "add_test_cases"
     | "update_test_case"
-    | "set_suite";
+    | "set_suite"
+    // Phase 4 (P4-13): accepting creates a run request that still needs Gate 7
+    | "request_run";
   target: ArtefactRef | null;
   summary: string;
   payload: Record<string, unknown>;
@@ -1107,7 +1126,16 @@ export type CaseStatus = "draft" | "approved" | "rejected" | "deprecated";
 export type Priority = "critical" | "high" | "medium" | "low";
 export type Suite = "smoke" | "regression";
 export type SideEffect = "submits_form" | "signs_in" | "creates_data" | "external_transaction";
-export type ExecutionStatus = "not_run" | "passed" | "failed" | "blocked" | "error";
+export type ExecutionStatus = "not_run" | "passed" | "failed" | "blocked" | "error" | "flaky" | "skipped";
+
+export type CaseLastResult = {
+  status: Exclude<ExecutionStatus, "not_run">;
+  run_key: string;
+  result_key: string;
+  at: IsoDate;
+  manual: boolean;
+  results: { browser: string; viewport: string; status: Exclude<ExecutionStatus, "not_run">; result_key: string }[];
+};
 
 export type LintCode =
   | "missing_steps"
@@ -1190,8 +1218,8 @@ export type TestCaseSummary = Provenanced & {
   lint_summary: { errors: number; warnings: number; blocks_approval: boolean };
   expected_result_status: "defined" | "open_question";
   execution_status: ExecutionStatus;
-  /** Always null in Phase 3. */
-  last_result: null;
+  /** The latest run that ran the case (worst status of its browser/size results); null when never run (P4 §6.6). */
+  last_result: CaseLastResult | null;
   stage_run_version: number;
   version: number;
   locked: boolean;
@@ -1343,16 +1371,24 @@ export type TestDesignRunOutput = {
 
 // ---- Traceability (P3-04) -------------------------------------------------------------
 
+/** Script · Result · Defects of one test case (P4-12). Absent in content stored before Phase 4. */
+export type CaseExec = {
+  script: { file: string; version: number; state: string } | null;
+  result: { status: string; run_key: string; result_key: string; at: IsoDate } | null;
+  defects: (ArtefactRef & { status: string; severity: string })[];
+};
+
 export type ForwardRow = {
   requirement: ArtefactRef;
   requirement_status: string;
   risk: { level: string; risks: ArtefactRef[] } | null;
   acceptance_criteria: { ac: ArtefactRef; covered: boolean }[];
   conditions: (ArtefactRef & { technique?: Technique })[];
-  test_cases: { case: ArtefactRef; status: CaseStatus; priority: Priority }[];
-  automation: Unavailable;
-  results: Unavailable;
-  defects: Unavailable;
+  test_cases: ({ case: ArtefactRef; status: CaseStatus; priority: Priority } & Partial<CaseExec>)[];
+  /** Phase 4 lists; `Unavailable` in reports stored before Phase 4. */
+  automation: ({ case_key: string } & NonNullable<CaseExec["script"]>)[] | Unavailable;
+  results: ({ case_key: string } & NonNullable<CaseExec["result"]>)[] | Unavailable;
+  defects: CaseExec["defects"] | Unavailable;
 };
 
 export type BackwardRow = {
@@ -1365,7 +1401,7 @@ export type BackwardRow = {
   /** Assumed extras, read if present. */
   priority?: Priority;
   technique?: Technique;
-};
+} & Partial<CaseExec>;
 
 export type Coverage = {
   basis: "current" | "approved";
@@ -1376,7 +1412,7 @@ export type Coverage = {
   high_risk_requirements: { total: number; with_approved_case: number };
   techniques: { condition: ArtefactRef; technique: Technique; items: number; covered: number }[];
   test_cases: { by_status: Partial<Record<CaseStatus, number>>; orphans: number };
-  execution: Unavailable;
+  execution: ExecutionCoverage | Unavailable;
   /** Assumed: when basis=approved, the G5 approval date. */
   approved_at?: IsoDate | null;
 };
@@ -1387,16 +1423,28 @@ export type Gaps = {
   acceptance_criteria_without_test_cases: ArtefactRef[];
   untested_high_risk: { open: { risk: ArtefactRef; requirements: ArtefactRef[] }[]; accepted: { risk: ArtefactRef; comment: string }[] };
   features_without_requirements: ArtefactRef[];
-  requirements_without_execution_evidence: Unavailable;
-  failed_tests: Unavailable;
-  outdated_automation_scripts: Unavailable;
-  defects_without_regression_coverage: Unavailable;
+  requirements_without_execution_evidence: { executed: boolean; automated_not_run: ArtefactRef[]; manual_only: ArtefactRef[] } | Unavailable;
+  failed_tests: FailedTest[] | Unavailable;
+  /** Flaky results are counted separately and listed in their own sub-list (never as passed or failed). */
+  flaky_tests?: FailedTest[];
+  outdated_automation_scripts: { case: ArtefactRef; file: string; version: number }[] | Unavailable;
+  defects_without_regression_coverage: { defect: ArtefactRef & { status: string; severity: string }; case: ArtefactRef | null }[] | Unavailable;
+};
+
+export type FailedTest = { case: ArtefactRef; status: string; run_key: string; result_key: string; classification: string | null; label: string | null };
+
+export type ExecutionCoverage = {
+  executed: boolean;
+  requirements: { approved: number; with_result: number };
+  results: { tests: number; passed: number; failed: number; flaky: number; error: number; blocked: number; skipped: number };
+  automation: { approved_cases: number; with_valid_script: number };
 };
 
 export type Chain = {
   root: ArtefactRef;
   upstream: { type: string; items: ArtefactRef[] }[];
   downstream: { type: string; items: ArtefactRef[] }[];
+  /** Empty since Phase 4 (the levels are in upstream/downstream); kept for stored content. */
   later_phase: { type: "automation_script" | "execution_result" | "defect"; status: Unavailable }[];
 };
 
@@ -1429,6 +1477,8 @@ export type RtmContent = {
   backward: BackwardRow[];
   coverage: Coverage;
   gaps: Gaps;
+  /** P4-12: whether tests had run when this version was generated (absent in older versions). */
+  phase4_note?: string;
 };
 
 // ---- Assistant v2 (P3-06) ------------------------------------------------------------------

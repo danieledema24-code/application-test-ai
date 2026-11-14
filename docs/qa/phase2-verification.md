@@ -405,7 +405,7 @@ Logs: `scratchpad/logs/e2e-existing2.txt`, `e2e-phase2-journey3..6.txt`, `e2e-dj
 
 **Steps:**
 
-1. Save the demo shop's test login (the one in `api/test/e2e-journey.mjs`).
+1. Save the demo shop's test login (now in `demo-shop/demo-login.mjs`).
 2. Press Test sign-in.
 3. Re-scan.
 

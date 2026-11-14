@@ -1,6 +1,6 @@
 """Rule-based discovery analysis (works with AI off; labelled generated_by="rules").
 
-Ported from `api/src/services/discovery.ts` (SKIP_LINK, heuristicWorkflows) and extended: page typing, form
+Ported from the legacy Node API's `src/services/discovery.ts` (on `main`) (SKIP_LINK, heuristicWorkflows) and extended: page typing, form
 purpose, features backed by observed elements, inferred journeys over navigated pages, auth boundaries, access gaps.
 """
 
