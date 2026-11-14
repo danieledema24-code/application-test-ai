@@ -15,6 +15,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
+import { automationBadge } from "@/lib/automation";
 
 export type ProjectSection = {
   slug: string;
@@ -24,6 +25,8 @@ export type ProjectSection = {
   phase: number | null;
   /** One sentence for the "Coming in Phase N" page (design spec §13). */
   description?: string;
+  /** Built ahead of the rest of its phase (Phase 4 lands story by story: Automation first). */
+  built?: boolean;
 };
 
 export const PROJECT_SECTIONS: ProjectSection[] = [
@@ -57,6 +60,7 @@ export const PROJECT_SECTIONS: ProjectSection[] = [
     label: "Automation",
     icon: Workflow,
     phase: 4,
+    built: true,
     description: "The Test Automation Engineer Agent will generate and validate Playwright scripts linked to approved test cases.",
   },
   {
@@ -110,13 +114,16 @@ export function comingLabel(phase: number | null): string {
 }
 
 /** The phase the product has reached: sections up to it are real screens (design P2 §3.2). */
-export const CURRENT_PHASE = 3;
+export const CURRENT_PHASE = 4;
 
 export function isBuilt(s: ProjectSection): boolean {
-  return s.phase !== null && s.phase <= CURRENT_PHASE;
+  return s.built === true || (s.phase !== null && s.phase <= CURRENT_PHASE);
 }
 
 export type SectionBadge = { text: string; srText: string };
+
+/** Run and defect counts behind the Test Execution and Defects badges (design P4 §4.2). */
+export type ExecutionCounts = { runsWaiting: number; running: boolean; drafts: number };
 
 /**
  * One attention badge per built section, in priority order: gate waiting → out of date → proposals
@@ -127,6 +134,7 @@ export function sectionBadge(
   stages: { key: string; status: string; gate: { key: string; status: string } | null }[] | undefined,
   pendingProposals = 0,
   openQuestions = 0,
+  execution?: ExecutionCounts,
 ): SectionBadge | null {
   const by = (k: string) => stages?.find((s) => s.key === k);
   const gateWaiting = (k: string) => {
@@ -146,6 +154,16 @@ export function sectionBadge(
     if (gateWaiting("test_design")) return { text: "Review", srText: "Gate 5 waiting for approval" };
     if (by("test_design")?.status === "stale") return { text: "Out of date", srText: "out of date" };
     if (openQuestions > 0) return { text: `${openQuestions} ?`, srText: `${openQuestions} open question${openQuestions === 1 ? "" : "s"}` };
+  }
+  if (slug === "automation") return automationBadge(stages);
+  if (slug === "execution" && execution) {
+    const n = execution.runsWaiting;
+    if (n > 0) return { text: "Authorise", srText: `${n} run${n === 1 ? "" : "s"} waiting for authorisation` };
+    if (execution.running) return { text: "Running", srText: "a run is in progress" };
+  }
+  if (slug === "defects" && execution && execution.drafts > 0) {
+    const n = execution.drafts;
+    return { text: `${n} to review`, srText: `${n} draft${n === 1 ? "" : "s"} waiting for review` };
   }
   if (slug === "traceability" && (by("traceability")?.status === "stale" || by("test_design")?.status === "stale")) return { text: "Out of date", srText: "out of date" };
   if (slug === "assistant" && pendingProposals > 0)

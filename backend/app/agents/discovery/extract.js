@@ -1,4 +1,4 @@
-// In-page extraction for the Application Discovery Agent. Ported from api/src/services/discovery.ts
+// In-page extraction for the Application Discovery Agent. Ported from the legacy Node API's src/services/discovery.ts (on main)
 // (EXTRACT_SCRIPT) and extended for dropdowns, search, filters, tables, modals, tabs, accordions, menus,
 // pagination, ARIA roles, form constraints and locator candidates. Read-only: it never clicks or types.
 // Evaluated as an expression; returns plain JSON.

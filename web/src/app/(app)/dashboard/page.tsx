@@ -7,6 +7,7 @@ import { useApi } from "@/lib/hooks";
 import { firstName, useAuth } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
 import type { ActivityItem, Dashboard } from "@/lib/contract";
+import { lastRunShort } from "@/lib/execution";
 import { projectStatusLabel } from "@/lib/projectStatus";
 import { shortUrl } from "@/lib/url";
 import { useOnline } from "@/lib/useOnline";
@@ -138,6 +139,13 @@ function TestingActivity({ data, error }: { data: Dashboard | undefined; error: 
   );
 }
 
+/** "13 Nov" for the Last run column. */
+function shortDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 function Health({ data }: { data: Dashboard }) {
   const h = data.health;
   // Role-aware (design P3 §4.3): only people who can approve are waited on.
@@ -160,6 +168,7 @@ function Health({ data }: { data: Dashboard }) {
                 <Th>Lifecycle</Th>
                 <Th className="text-right">Pages found</Th>
                 <Th>Gate status</Th>
+                <Th>Last run</Th>
               </tr>
             </THead>
             <TBody>
@@ -175,6 +184,7 @@ function Health({ data }: { data: Dashboard }) {
                   </Td>
                   <Td className="text-right tabular-nums">{p.pages_discovered}</Td>
                   <Td>{p.awaiting_approval ? <StatusPill status="awaiting_approval" label="Gate waiting" /> : <span className="text-fg-muted">—</span>}</Td>
+                  <Td className="whitespace-nowrap">{p.last_run ? lastRunShort(p.last_run, shortDate) : <span className="text-fg-muted">Not run yet</span>}</Td>
                 </Tr>
               ))}
             </TBody>

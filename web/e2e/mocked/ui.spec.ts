@@ -231,10 +231,13 @@ test.describe("project workspace", () => {
     await expect(nav.getByRole("link", { name: "Requirements", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "AI QA Analyst", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: /coming in Phase [23]/ })).toHaveCount(0);
-    // Phase 3 built Test Cases and Traceability (design P3 §4); Automation is the next unbuilt section.
+    // Phase 4 built Automation, Test Execution and Defects (design P4 §4.2), so Performance is the next unbuilt section.
     await expect(nav.getByRole("link", { name: "Test Cases", exact: true })).toBeVisible();
-    await nav.getByRole("link", { name: "Automation, coming in Phase 4" }).click();
-    await expect(page.getByText("Automation: coming in Phase 4")).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Automation", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Test Execution", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Defects", exact: true })).toBeVisible();
+    await nav.getByRole("link", { name: "Performance, coming in Phase 5" }).click();
+    await expect(page.getByText("Performance: coming in Phase 5")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Go to Application Discovery" })).toBeVisible();
   });

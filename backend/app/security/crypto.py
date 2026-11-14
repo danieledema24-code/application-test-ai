@@ -1,4 +1,4 @@
-"""AES-256-GCM envelope for stored secrets (ported from `api/src/lib/crypto.ts`, plus a key-id prefix for rotation).
+"""AES-256-GCM envelope for stored secrets (ported from the legacy Node API's `src/lib/crypto.ts`, on `main`, plus a key-id prefix for rotation).
 
 Format: `<key_id>:base64(iv | tag | ciphertext)`.
 """

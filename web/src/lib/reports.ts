@@ -1,17 +1,30 @@
 // Phase 2 and 3 report types (design P2 §10, P3 §15): slugs, names, gates and file names. Unit-tested.
 
-export type Phase2ReportSlug = "requirements" | "test-strategy" | "test-plan" | "test-case-spec" | "rtm";
-export type ReportType = "discovery" | "requirements_spec" | "test_strategy" | "test_plan" | "test_case_spec" | "rtm";
+export type Phase2ReportSlug = "requirements" | "test-strategy" | "test-plan" | "test-case-spec" | "rtm" | "test-execution" | "defects";
+export type ReportType = "discovery" | "requirements_spec" | "test_strategy" | "test_plan" | "test_case_spec" | "rtm" | "execution" | "defect";
 export type DownloadFormat = "pdf" | "html" | "csv";
 
-export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportType; name: string; gate: "G2" | "G3" | "G4" | "G5" | null; file: string; source: string; csv?: boolean }[] = [
+export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportType; name: string; gate: "G2" | "G3" | "G4" | "G5" | "G7" | "G8" | null; file: string; source: string; csv?: boolean; phase?: 4 }[] = [
   { slug: "discovery", type: "discovery", name: "Application Discovery Report", gate: "G2", file: "discovery-report", source: "Scan" },
   { slug: "requirements", type: "requirements_spec", name: "Requirements Specification", gate: "G3", file: "requirements-spec", source: "Requirements" },
   { slug: "test-strategy", type: "test_strategy", name: "Test Strategy", gate: "G4", file: "test-strategy", source: "Strategy" },
   { slug: "test-plan", type: "test_plan", name: "Test Plan", gate: null, file: "test-plan", source: "Plan" },
   { slug: "test-case-spec", type: "test_case_spec", name: "Test Case Specification", gate: "G5", file: "test-case-spec", source: "Design run", csv: true },
   { slug: "rtm", type: "rtm", name: "Requirements Traceability Matrix", gate: "G5", file: "rtm", source: "Design run", csv: true },
+  { slug: "test-execution", type: "execution", name: "Test Execution Report", gate: null, file: "test-execution", source: "Run", csv: true, phase: 4 },
+  { slug: "defects", type: "defect", name: "Defect Report", gate: "G8", file: "defects", source: "Defects", csv: true, phase: 4 },
 ];
+
+export function isPhase4Report(type: ReportType | string): type is "execution" | "defect" {
+  return type === "execution" || type === "defect";
+}
+
+export const HYPOTHESIS_BAND = "Causes are hypotheses unless a person confirmed them.";
+
+/** "DRAFT: 2 defects not yet reviewed at Gate 8" while drafts exist (design §13). */
+export function defectDraftBand(drafts: number): string | null {
+  return drafts > 0 ? `DRAFT: ${drafts} defect${drafts === 1 ? "" : "s"} not yet reviewed at Gate 8` : null;
+}
 
 export function isPhase3Report(type: ReportType): boolean {
   return type === "test_case_spec" || type === "rtm";
@@ -38,9 +51,11 @@ export function reportBySlug(slug: string) {
 }
 
 /** `{host}-requirements-spec-v{n}-{yyyy-mm-dd}.{pdf|html}` (design P2 §10.3); `{host}-test-case-spec-v{n}-….csv` (P3 §15.2). */
-export function phase2ReportFileName(host: string, type: ReportType, version: number, date: Date, format: string): string {
+export function phase2ReportFileName(host: string, type: ReportType, version: number, date: Date, format: string, runKey?: string | null): string {
   const d = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   const safeHost = host.replace(/[^a-z0-9.-]/gi, "-") || "site";
+  // `{host}-test-execution-RUN-0003-{date}` and `{host}-defects-v{n}-{date}` (design P4 §13).
+  if (type === "execution") return `${safeHost}-test-execution-${runKey || `latest-v${version}`}-${d}.${format}`;
   const file = REPORT_TYPES.find((r) => r.type === type)?.file ?? type;
   return `${safeHost}-${file}-v${version}-${d}.${format}`;
 }

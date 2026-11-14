@@ -41,7 +41,9 @@ from app.services import gates
 from app.services import serialize_p2 as out
 from app.services.counters import next_key
 
-KEY_RE = re.compile(r"\b(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT|TCOND|TC|TD)-\d{2,6}\b")
+KEY_RE = re.compile(
+    r"\b(?:(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT|TCOND|TC|TD|DEF|APR)-\d{2,6}|RUN-\d{2,6}(?:-\d{2,4})?)\b"
+)
 AI_OFF_NOTICE = "Free-form answers need AI, which isn't configured. Built-in questions still work."
 DEFAULT_AI_TURNS_PER_DAY = 200
 REGENERABLE = ("requirements", "readiness_criteria", "test_strategy", "test_plan", "test_design")
@@ -83,7 +85,34 @@ INTENTS: dict[str, IntentSpec] = {
         IntentSpec("explain_gate", "Explain a gate", "Why can't I approve G3?", _schema(gate="string")),
         IntentSpec("list_access_gaps", "Access gaps", "Which areas couldn't be reached?", _schema()),
         IntentSpec("risk_summary", "Risk summary", "What are the highest risks?", _schema()),
-        IntentSpec("execution_results", "Test results", "Did the tests pass?", _schema()),
+        IntentSpec("execution_results", "Did the tests pass?", "Did the tests pass?", _schema()),
+        IntentSpec(
+            "explain_failed_test", "Explain a failed test", "Explain the failed test TC-0019", _schema(key="string")
+        ),
+        IntentSpec("analyse_defect", "Analyse a defect", "Analyse DEF-0001", _schema(key="string")),
+        IntentSpec(
+            "list_defects",
+            "List defects",
+            "Which defects are still drafts?",
+            _schema(status="string", severity="string"),
+        ),
+        IntentSpec("automation_status", "Automation status", "Which scripts can't run?", _schema()),
+        IntentSpec(
+            "propose_rerun",
+            "Re-run tests",
+            "Re-run the failed tests",
+            {"type": "object", "properties": {"only_failed": {"type": "boolean"}, "case_keys": {"type": "array"}}},
+            creates_proposal=True,
+        ),
+        IntentSpec(
+            "propose_script_improvement",
+            "Improve existing test scripts",
+            "Improve the script for TC-0019",
+            {"type": "object", "properties": {"test_case_keys": {"type": "array"}}},
+            creates_proposal=True,
+            requires_ai=True,
+            available=False,
+        ),
         IntentSpec(
             "propose_negative_criteria",
             "Add negative criteria",
@@ -186,7 +215,6 @@ INTENTS: dict[str, IntentSpec] = {
 }
 
 LATER_PHASE = [
-    {"label": "Run tests and explain failures", "available_from_phase": 4, "needs": "Test execution (Phase 4)"},
     {"label": "Performance, accessibility and security checks", "available_from_phase": 5, "needs": "Phase 5"},
 ]
 
@@ -385,6 +413,10 @@ async def resolve_keys(s: AsyncSession, project_id: uuid.UUID, keys: set[str]) -
                 plan = await current_plan(s, project_id)
                 if plan is not None and plan.key in keys:
                     found[plan.key] = _ref(project_id, "test_plan", plan.id, plan.key, "Test Plan")
+    if {"RUN", "DEF", "APR"} & set(by_prefix):
+        from app.services import assistant_p4
+
+        found.update(await assistant_p4.resolve(s, project_id, keys))
     return found
 
 
@@ -669,7 +701,7 @@ async def _risk_summary(t: Turn, _p: dict[str, Any]) -> Answer:
 
 async def _execution(t: Turn, _p: dict[str, Any]) -> Answer:
     a = Answer("No tests have been run for this project, so there are no results to report.", "execution_results")
-    a.notice("no_execution_data", "Test execution arrives in Phase 4; I never report results that don't exist.")
+    a.notice("no_execution_data", "I never report results that don't exist.")
     return a
 
 
@@ -868,6 +900,18 @@ def _register_p3() -> None:
             "propose_regression_suite": p3.propose_regression_suite,
         }
     )
+    from app.services import assistant_p4 as p4
+
+    HANDLERS.update(
+        {
+            "execution_results": p4.execution_results,
+            "explain_failed_test": p4.explain_failed_test,
+            "analyse_defect": p4.analyse_defect,
+            "list_defects": p4.list_defects,
+            "automation_status": p4.automation_status,
+            "propose_rerun": p4.propose_rerun,
+        }
+    )
 
 
 _register_p3()
@@ -884,6 +928,21 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
     any_key = re.search(r"\b(?:REQ|AC|TCOND|TC|RISK)-\d{2,6}\b", text, re.IGNORECASE)
     tc = re.search(r"\bTC-\d{2,6}\b", text, re.IGNORECASE)
     feat = re.search(r"\bFEAT-\d{2,6}\b", text, re.IGNORECASE)
+    run_key = re.search(r"\bRUN-\d{2,6}-\d{2,4}\b", text, re.IGNORECASE)
+    def_key = re.search(r"\bDEF-\d{2,6}\b", text, re.IGNORECASE)
+    if re.search(r"\bre-?run\b|\brun (?:the )?(?:failed|failing) tests?\b", t):
+        keys = [m.upper() for m in re.findall(r"\bTC-\d{2,6}\b", text, re.IGNORECASE)]
+        return "propose_rerun", ({"case_keys": keys} if keys else {"only_failed": True})
+    if run_key or (re.search(r"\bexplain\b|\bwhy\b", t) and re.search(r"\bfail", t)):
+        key = run_key.group(0).upper() if run_key else (tc.group(0).upper() if tc else None)
+        return "explain_failed_test", {"key": key} if key else {}
+    if def_key:
+        return "analyse_defect", {"key": def_key.group(0).upper()}
+    if re.search(r"\bdefects?\b|\bbugs?\b", t):
+        status = next((st for st in ("draft", "confirmed", "fixed", "verified", "rejected", "closed") if st in t), None)
+        return "list_defects", {"status": status} if status else {}
+    if re.search(r"\bscripts?\b|\bautomat", t) and not req:
+        return "automation_status", {}
     if "negative" in t and ("test case" in t or "tests" in t or "cases" in t) and (req or feat):
         param = {"requirement_key": req.group(0).upper()} if req else {"feature_key": feat.group(0).upper()}  # type: ignore[union-attr]
         return "propose_negative_cases", param

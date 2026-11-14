@@ -49,7 +49,7 @@ export type P3State = {
 };
 
 const ref = (type: ArtefactRef["type"], key: string, label = ""): ArtefactRef => ({ type, id: `id-${key}`, key, label, path: "" });
-const unavailable = { available: false as const, available_from_phase: 4, message: "Available after test execution (Phase 4)" };
+const unavailable = { available: false as const, available_from_phase: 4, message: "Shown once tests have run" };
 
 export function testCase(n: number, over: Partial<TestCaseDetail> = {}): TestCaseDetail {
   const key = `TC-${String(n).padStart(4, "0")}`;

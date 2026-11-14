@@ -29,6 +29,7 @@ from app.db.models import (
     TestCondition,
     TestData,
 )
+from app.db.touch import touch_project
 from app.db.types import utcnow
 from app.domain.enums import (
     CaseSource,
@@ -236,7 +237,7 @@ async def _finish(
     ctx: AppContext, s: ScopedSession, p: MemberPrincipal, project: Project, reopen: bool, reason: str
 ) -> None:
     orch = await c.reopen_if_approved(ctx, s, project, GateKey.G5, reason, p.user.id) if reopen else None
-    project.updated_at = utcnow()
+    await touch_project(s, project)
     await s.commit()
     await c.after_commit(orch, p.scope, project.id)
 

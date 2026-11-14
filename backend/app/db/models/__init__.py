@@ -2,6 +2,17 @@
 
 from app.db.models.agents import AgentEvent, AgentTask, Job, WorkerHeartbeat
 from app.db.models.assistant import AssistantMessage, AssistantProposal, AssistantThread, SourceDocument
+from app.db.models.automation import (
+    Approval,
+    AutomationAssessment,
+    AutomationAsset,
+    AutomationScript,
+    Defect,
+    DefectLink,
+    DefectOccurrence,
+    ExecutionResult,
+    ExecutionRun,
+)
 from app.db.models.discovery import (
     ApplicationFeature,
     DiscoveredPage,
@@ -46,13 +57,22 @@ __all__ = [
     "AgentEvent",
     "AgentTask",
     "ApplicationFeature",
+    "Approval",
     "AssistantMessage",
     "AssistantProposal",
     "AssistantThread",
     "AuditLog",
+    "AutomationAssessment",
+    "AutomationAsset",
+    "AutomationScript",
+    "Defect",
+    "DefectLink",
+    "DefectOccurrence",
     "DiscoveredPage",
     "EntityRevision",
     "Evidence",
+    "ExecutionResult",
+    "ExecutionRun",
     "GateDecision",
     "Invitation",
     "Job",

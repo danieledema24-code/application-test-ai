@@ -24,8 +24,9 @@ from app.services import testdesign as tds
 from app.services import traceability as trace
 
 DESIGN_FIRST = "Design test cases first"
-EXECUTION_NOTE = "Execution status: Not run. Execution arrives in Phase 4."
-PHASE4 = "Not available until Phase 4"
+EXECUTION_NOTE = "Execution status: test cases are run from Test Execution; see the Test Execution Report for results."
+RTM_EXECUTED = "Script, result and defect columns show the latest result per test case when this version was generated."
+RTM_NOT_RUN = "No tests had been run when this version was generated, so the result columns are empty."
 DISCLAIMER = (
     "Test cases are designed from the observable user interface and the approved requirements; backend behaviour is "
     "not verified. Test data is synthetic. Nothing in this document has been executed."
@@ -146,7 +147,7 @@ async def _rtm(s: AsyncSession, project: Project) -> dict[str, Any]:
         "backward": [trace.public(r) for r in trace.backward_rows(t)],
         "coverage": cov,
         "gaps": await trace.gaps(s, t),
-        "phase4_note": PHASE4,
+        "phase4_note": RTM_EXECUTED if t.executed else RTM_NOT_RUN,
         "summary": (
             f"{cov['requirements']['with_approved_case']} of {cov['requirements']['approved']} approved requirement(s) "
             f"have an approved test case; {cov['acceptance_criteria']['covered']} of "
@@ -158,6 +159,17 @@ async def _rtm(s: AsyncSession, project: Project) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ CSV
+
+
+def _exec_cells(tc: dict[str, Any] | None) -> tuple[str, str, str]:
+    """Automation · Results · Defects cells of one RTM row (P4-12); blank when there is no test case."""
+    if tc is None:
+        return "", "", ""
+    sc, res = tc.get("script"), tc.get("result")
+    script = f"{sc['state']} · {sc['file']} v{sc['version']}" if sc else "No script"
+    result = f"{res['status']} · {res['result_key']}" if res else "Not run"
+    defects = ", ".join(str(d.get("key")) for d in tc.get("defects") or []) or "None"
+    return script, result, defects
 
 
 def safe_cell(value: Any) -> str:
@@ -233,7 +245,7 @@ def to_csv(content: dict[str, Any]) -> bytes:
                         for x in (
                             req.get("key", ""), title, row["requirement_status"], risk, acs,
                             tc["case"]["key"] if tc else "No test case", tc["status"] if tc else "",
-                            tc["priority"] if tc else "", PHASE4, PHASE4, PHASE4,
+                            tc["priority"] if tc else "", *_exec_cells(tc),
                         )
                     ]
                 )  # fmt: skip

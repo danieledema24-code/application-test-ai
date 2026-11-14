@@ -178,7 +178,10 @@ class Evidence(IdMixin, TenantMixin, CreatedMixin, Base):
     page_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("discovered_pages.id", ondelete="RESTRICT"), default=None, index=True
     )
-    execution_result_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    # Phase 4 (P4-00, migration 0016): FK and index added.
+    execution_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("execution_results.id", ondelete="RESTRICT"), default=None, index=True
+    )
     performance_run_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     # Phase 2 (P2-08). No FK: source_documents references evidence.
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(default=None)

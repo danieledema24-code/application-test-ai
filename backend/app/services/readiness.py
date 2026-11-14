@@ -137,6 +137,16 @@ async def _phase3_facts(
         "without_case": [str(x["key"]) for x in g["requirements_without_test_cases"]["none"]],
         "orphans": [str(x["key"]) for x in g["test_cases_without_requirements"]],
     }
+    # Phase 4 (P4-12): latest results per requirement and the open defects.
+    if t.executed:
+        facts.executed = {}
+        for r in reqs:
+            views = [v for v in t.cases if v.status == "approved" and str(r.lineage_id) in v.requirement_lineages]
+            facts.executed[str(r.id)] = [str((t.result(v) or {}).get("status")) for v in views if t.result(v)]
+    if t.executed or t.all_defects:
+        facts.open_defects = [
+            (str(d["key"]), str(d["severity"])) for d in t.all_defects if d["status"] in trace.OPEN_DEFECT
+        ]
 
 
 def evaluate_row(row: ReadinessCriterion, facts: Facts, *, requirement_id: str | None = None) -> dict[str, Any] | None:

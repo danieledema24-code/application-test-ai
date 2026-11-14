@@ -5,6 +5,7 @@ import { useSWRConfig } from "swr";
 import { api, errorMessage } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { AgentEvent, ProjectDetail, ScanSettings, StageState, Workflow } from "@/lib/contract";
+import { isExecSummaryKey } from "@/lib/execution";
 import { activeStage } from "@/lib/lifecycle";
 import { mergeEvents, openEventStream, type StreamHandle, type StreamState } from "@/lib/sse";
 import { useToast } from "@/components/ui";
@@ -116,7 +117,8 @@ export function ProjectProvider({ id, children, onOpenRescan, onOpenCancel }: { 
   const refresh = useCallback(() => {
     void workflow.mutate();
     void project.mutate();
-  }, [workflow, project]);
+    void globalMutate((k) => isExecSummaryKey(id, k));
+  }, [workflow, project, globalMutate, id]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   const announceAllRef = useRef(announceAll);

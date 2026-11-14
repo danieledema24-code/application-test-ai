@@ -1,5 +1,8 @@
 # Application Test AI — REST API contract (v1)
 
+> Historical: the contract of the retired Node API (deleted in P4-15, decision D16; it remains on `main`). The
+> current backend's contract is `docs/architecture/api-contracts.md`.
+
 Base URL: `http://localhost:4000/api`. All bodies are JSON. All timestamps ISO-8601 strings.
 Auth: `POST /auth/login` / `/auth/register` return `{ token, user, organisation }`. Send
 `Authorization: Bearer <token>` on every other request. 401 → redirect to /login.

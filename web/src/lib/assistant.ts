@@ -87,7 +87,7 @@ export async function sendAssistantMessage(
 }
 
 /** ID-like tokens the citation guard knows (roadmap P2-10; P3-06 adds TCOND- and TD-). */
-export const CITATION_TOKEN = /\b(?:REQ|AC|FEAT|JRN|EV|RISK|DOR|DOD|DOC|SCAN|PROP|TCOND|TC|TD|RUN|DEF)-\d{2,}\b|\bG[1-9]\b/g;
+export const CITATION_TOKEN = /\b(?:REQ|AC|FEAT|JRN|EV|RISK|DOR|DOD|DOC|SCAN|PROP|TCOND|TC|TD|DEF|APR)-\d{2,}\b|\bRUN-\d{2,}(?:-\d{2,})?\b|\bG[1-9]\b/g;
 
 export type ContentPart = { kind: "text"; text: string } | { kind: "token"; text: string };
 

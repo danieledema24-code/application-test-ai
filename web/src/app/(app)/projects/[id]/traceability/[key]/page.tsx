@@ -14,6 +14,13 @@ const SHOW = 5;
 const LATER: Record<string, string> = { automation_script: "Script", execution_result: "Result", defect: "Defect" };
 
 function ItemLink({ item, projectId, here }: { item: ArtefactRef; projectId: string; here?: boolean }) {
+  // Scripts are named by file, and open in Automation (their key is the file path).
+  if (item.type === "automation_script")
+    return (
+      <Link href={item.path} className="text-navy-700 underline underline-offset-2">
+        {item.label}
+      </Link>
+    );
   return (
     <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
       <Link href={keyHref(projectId, item.key)} className="font-mono text-navy-700 underline underline-offset-2">

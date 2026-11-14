@@ -321,13 +321,27 @@ async def require_g5_signoff(ctx: AppContext) -> int:
     organisations (system task, tenant filter bypassed) and only touches projects still storing `recommended`, so a
     second start changes nothing.
     """
+    return await _switch_stored_default(ctx, "G5", "recommended", "required")
+
+
+async def apply_g6_hybrid_default(ctx: AppContext) -> int:
+    """Startup data step (P4-00, decision D10): G6 moves from the old `required` default to `recommended`.
+
+    Under D10 static validation always blocks and AI-written scripts need a review (P4-04), so a bundle of
+    rule-written valid scripts needs no human sign-off. Projects that chose G6 explicitly keep their choice;
+    idempotent like `require_g5_signoff`.
+    """
+    return await _switch_stored_default(ctx, "G6", "required", "recommended")
+
+
+async def _switch_stored_default(ctx: AppContext, gate: str, old: str, new: str) -> int:
     from app.db.models import AuditLog
     from app.db.tenant import BYPASS
 
     n = 0
     async with ctx.session_factory() as s:
         projects = (await s.execute(select(Project).execution_options(**BYPASS))).scalars().all()
-        candidates = [p for p in projects if (p.approval_policy or {}).get("G5") == "recommended"]
+        candidates = [p for p in projects if (p.approval_policy or {}).get(gate) == old]
         if not candidates:
             return 0
         explicit: set[uuid.UUID] = set()
@@ -342,12 +356,12 @@ async def require_g5_signoff(ctx: AppContext) -> int:
             )
         ).all()
         for pid, meta in rows:
-            if pid is not None and "G5" in ((meta or {}).get("approval_policy") or {}):
+            if pid is not None and gate in ((meta or {}).get("approval_policy") or {}):
                 explicit.add(pid)
         for p in candidates:
             if p.id in explicit:
                 continue
-            p.approval_policy = {**(p.approval_policy or {}), "G5": "required"}
+            p.approval_policy = {**(p.approval_policy or {}), gate: new}
             n += 1
         if n:
             await s.commit()

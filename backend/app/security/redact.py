@@ -1,6 +1,6 @@
 """Removes secrets from anything that may be logged, stored as evidence text or sent to an AI provider.
 
-Ported from `api/src/lib/redact.ts` (same patterns), plus a process-wide registry of known secret values.
+Ported from the legacy Node API's `src/lib/redact.ts` (on `main`) (same patterns), plus a process-wide registry of known secret values.
 """
 
 from __future__ import annotations

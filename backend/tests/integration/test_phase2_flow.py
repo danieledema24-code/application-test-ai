@@ -141,7 +141,7 @@ async def test_readiness_runs_and_evaluates(flow: Flow) -> None:
     assert cred["evaluation"]["status"] == "not_met" and cred["key"].startswith("DOR-")
     executed = dod["Tests executed with evidence"]
     assert executed["evaluation"]["status"] == "unknown"
-    assert executed["evaluation"]["detail"] == "No test execution exists yet (Phase 4)"
+    assert executed["evaluation"]["detail"] == "No test has run yet"
     assert rc["requirements_version"] == (await flow.stage("requirements"))["current_version"]
     per_req = (await flow.get(f"/requirements/{flow.state['req']['id']}/readiness")).json()
     assert per_req and all("status" in e for e in per_req)

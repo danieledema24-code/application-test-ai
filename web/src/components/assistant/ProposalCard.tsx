@@ -23,6 +23,7 @@ const KIND_LABEL: Record<Proposal["kind"], string> = {
   add_test_cases: "Add test cases",
   update_test_case: "Update test cases",
   set_suite: "Regression suite",
+  request_run: "Request a test run",
 };
 
 const STATUS_LABEL: Record<Proposal["status"], string> = {
@@ -213,6 +214,11 @@ function Item({
             <CasePreview cases={proposedCases(p)} />
           ) : p.kind === "set_suite" ? (
             <SuitePreview changes={suiteChanges(p)} />
+          ) : p.kind === "request_run" ? (
+            <p className="text-small text-fg">
+              Test cases: {((p.payload as { case_keys?: string[] }).case_keys ?? []).join(", ")}. Chromium · Desktop. Accepting creates a run request; it
+              starts only after someone who can approve gates authorises it (Gate 7).
+            </p>
           ) : isAcList(p.preview) ? (
             <ul className="space-y-1 text-small text-fg">
               {p.preview.map((ac, i) => (

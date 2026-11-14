@@ -21,7 +21,7 @@ from app.db.models import (
     User,
     risk_requirements,
 )
-from app.domain.enums import ItemStatus, RiskLevel
+from app.domain.enums import ItemStatus, RiskLevel, Role
 from app.services import serialize as ser
 from app.services.revisions import jsonable
 
@@ -31,6 +31,19 @@ LEVEL_ORDER = {RiskLevel.low: 0, RiskLevel.medium: 1, RiskLevel.high: 2, RiskLev
 def user_dict(u: User | None) -> dict[str, Any] | None:
     ref = ser.user_ref(u)
     return ref.model_dump(mode="json") if ref else None
+
+
+def person(u: User | None, *, see_email: bool) -> dict[str, Any] | None:
+    """A user as Phase 4 responses show them (P3-07 rule): the name for everyone, the email only for owners and
+    admins (`see_email`)."""
+    d = user_dict(u)
+    if d is not None and not see_email:
+        d["email"] = None
+    return d
+
+
+def sees_email(role: Role) -> bool:
+    return role in (Role.owner, Role.admin)
 
 
 async def users(s: AsyncSession, ids: Iterable[uuid.UUID | None]) -> dict[uuid.UUID, User]:
@@ -75,6 +88,11 @@ def path(project_id: uuid.UUID, kind: str, key: str) -> str:
         "test_case": f"{base}/test-cases/{key}",
         "test_condition": f"{base}/test-cases?tab=conditions&condition={key}",
         "test_data": f"{base}/test-cases?tab=data&data={key}",
+        # Phase 4 (P4-12): result keys are "{run key}-{n}".
+        "defect": f"{base}/defects/{key}",
+        "automation_script": f"{base}/automation?view=scripts&file={key}",
+        "execution_result": f"{base}/execution/{key.rsplit('-', 1)[0]}/results/{key}",
+        "execution_run": f"{base}/execution/{key}",
     }.get(kind, base)
 
 

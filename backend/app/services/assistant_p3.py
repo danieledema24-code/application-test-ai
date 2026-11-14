@@ -10,6 +10,7 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from app.db.models import TestCase
 from app.domain.enums import CaseStatus
 from app.domain.testdesign import generate as gen
 from app.services import serialize_p3 as p3
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 NO_MORE_NEGATIVES = "No further negative test cases can be derived from the discovered constraints."
 NEGATIVE_RULES = ("design.ep.", "design.eg.", "design.bva.")
 SCOPE_LABELS = {
-    "high_risk": "high-risk cases",
+    "high_risk": "high-risk cases and safe negative form checks",
     "changed_since_g5": "changed since Gate 5",
     "all": "every approved case",
 }
@@ -120,7 +121,9 @@ async def explain_test_case(t: Turn, p: dict[str, Any]) -> Answer:
         lines.append(f"Priority {p3.effective_priority(c)}.")
     if c.lint:
         lines.append("Checks: " + "; ".join(str(i.get("message")) for i in c.lint[:5]) + ".")
-    lines.append("It hasn't been run: execution arrives in Phase 4.")
+    from app.services import assistant_p4
+
+    lines.append(await assistant_p4.last_result_line(t, a, c))
     a.content = "\n".join(lines)
     a.follow_ups = [_follow("traceability_for", key=c.key)]
     return a
@@ -143,7 +146,6 @@ async def traceability_for(t: Turn, p: dict[str, Any]) -> Answer:
             if group["items"]:
                 names = ", ".join(a.cite(x) for x in group["items"][:12])
                 lines.append(f"- {label} {group['type'].replace('_', ' ')}: {names}")
-    lines.append("Automation scripts, results and defects: available after test execution (Phase 4).")
     a.content = "\n".join(lines)
     return a
 
@@ -178,7 +180,16 @@ async def coverage_v2(t: Turn, a: Answer) -> list[str]:
             + ", ".join(a.cite(x) for x in gaps["test_cases_without_requirements"][:10])
             + "."
         )
-    lines.append("Execution coverage is available from Phase 4.")
+    ex = cov.get("execution") or {}
+    if ex.get("executed"):
+        res = ex["results"]
+        lines.append(
+            f"Execution: {ex['requirements']['with_result']} of {ex['requirements']['approved']} approved requirements "
+            f"have a pass or fail result. Latest result per approved case: {res['passed']} passed, {res['failed']} "
+            f"failed, {res['flaky']} flaky, {res['error']} errors, {res['blocked']} blocked ({res['tests']} tests)."
+        )
+    else:
+        lines.append("No test has run yet, so there is no execution coverage.")
     return lines
 
 
@@ -372,8 +383,24 @@ def _preview_step(st: dict[str, Any], design: gen.DesignOutput) -> dict[str, Any
         if d is not None:
             short = d.value is not None and 0 < len(d.value) <= 40 and d.kind != "secret_ref"
             shown = f'"{d.value}"' if short else d.display
+            if not short and d.kind == "valid":
+                # P4-02: "Enter a valid Message", never "Enter valid in Message".
+                action = action.replace(f"{{d{i}}} in {d.field_label}", f"a valid {d.field_label}")
+                shown = f"a valid {d.field_label}"
         action = action.replace(f"{{d{i}}}", shown or "the value")
     return {"action": action, "expected": st.get("expected", "")}
+
+
+def _safe_negative(c: TestCase) -> bool:
+    """The generator's Regression rule for negative form checks (QA P4-BUG-01), applied to a stored case (QA L1).
+    Cases designed before the rule don't record what they may submit, so they don't qualify until regenerated."""
+    basis = c.design_basis_ref or {}
+    return gen.safe_negative_for_regression(
+        positive=bool(basis.get("positive")),
+        expected_result_status=c.expected_result_status.value,
+        blocked_side_effects=[str(x) for x in basis.get("blocked_side_effects") or []],
+        risk_level=c.risk_level,
+    )
 
 
 async def propose_regression_suite(t: Turn, p: dict[str, Any]) -> Answer:
@@ -399,6 +426,14 @@ async def propose_regression_suite(t: Turn, p: dict[str, Any]) -> Answer:
                     level = str(c.risk_level).replace("_", " ")
                     reasons[c.id] = (
                         f"Covers {risk.key} ({level} risk)" if risk is not None else f"Covers a {level} risk"
+                    )
+                elif _safe_negative(c):
+                    risk = lk.risks.get(str(c.risk_lineage_id)) if c.risk_lineage_id else None
+                    level = str(c.risk_level).replace("_", " ")
+                    reasons[c.id] = (
+                        f"Negative form check that only submits the form, for {risk.key} ({level} risk)"
+                        if risk is not None
+                        else f"Negative form check that only submits the form ({level} risk)"
                     )
         else:
             last = await tds.last_g5(t.s, t.project_id)
@@ -484,8 +519,7 @@ async def apply(ctx: Any, s: Any, p: Any, pr: Any, after: list[Any]) -> list[dic
     from app.api.errors import Conflict
     from app.api.routers import p2common as c
     from app.api.routers import testdesign as td_api
-    from app.db.models import TestCase
-    from app.db.types import utcnow
+    from app.db.touch import touch_project
     from app.domain.enums import CaseSource, GateKey, GeneratedBy, Provenance
     from app.services import serialize_p2 as out
 
@@ -582,6 +616,6 @@ async def apply(ctx: Any, s: Any, p: Any, pr: Any, after: list[Any]) -> list[dic
             )
             if orch is not None:
                 after.append(orch)
-        project.updated_at = utcnow()
+        await touch_project(s, project)
         await s.flush()
     return applied

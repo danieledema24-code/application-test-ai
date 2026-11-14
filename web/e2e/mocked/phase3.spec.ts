@@ -265,7 +265,7 @@ test.describe("Phase 3 · traceability", () => {
     const chain = page.getByRole("region", { name: "Chain" }).or(page.locator("section[aria-labelledby=chain-h]"));
     await expect(chain.getByText("Requirement", { exact: true })).toBeVisible();
     await expect(chain.getByText("(you are here)")).toBeVisible();
-    await expect(chain.getByText(/not available until Phase 4/)).toBeVisible();
+    await expect(chain.getByText(/not recorded in this version/)).toBeVisible();
     expect(await axe(page)).toEqual([]);
   });
 

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowRight, ChevronRight, Circle, Square, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type { ArtefactRef, AssistantCapabilities, AssistantIntent, AssistantMessage, Feature, RequirementSummary, StageKey, TestCaseSummary } from "@/lib/contract";
-import { Button, Callout, Checkbox, Disclosure, InlineError, SelectField, Skeleton, TextArea } from "@/components/ui";
+import { Button, Callout, Checkbox, Disclosure, InlineError, SelectField, Skeleton, TextArea, TextField } from "@/components/ui";
 import type { AiMode } from "@/components/domain/AiStatus";
 import { AnswerCard } from "./AnswerCard";
 import { ProposalCard } from "./ProposalCard";
@@ -47,6 +47,10 @@ export const TASKS: TaskDef[] = [
   { id: "coverage", label: "Review test coverage", hint: "Uncovered requirements, untested high risks, cases without requirements", intent: "coverage_summary", group: "no_ai" },
   { id: "attention", label: "What needs my attention?", intent: "needs_attention", group: "no_ai" },
   { id: "status", label: "Summarise project status", intent: "workflow_status", group: "no_ai" },
+  { id: "tests_pass", label: "Did the tests pass?", hint: "The latest run, its failures and their likely causes", intent: "execution_results", group: "no_ai" },
+  { id: "explain_failed", label: "Explain a failed test", hint: "Cause, signals, expected vs actual, defect", intent: "explain_failed_test", group: "no_ai" },
+  { id: "analyse_defect", label: "Analyse a defect", hint: "Fields, occurrences, links and what's needed to verify it", intent: "analyse_defect", group: "no_ai" },
+  { id: "rerun", label: "Re-run failed tests", hint: "Creates a run request; Gate 7 still decides", intent: "propose_rerun", group: "no_ai" },
   { id: "explain_case", label: "Explain a test case", hint: "Why it exists, its technique, values and links", intent: "explain_test_case", group: "no_ai" },
   { id: "neg_cases", label: "Generate more negative test cases", intent: "propose_negative_cases", group: "no_ai" },
   { id: "regression", label: "Generate regression scenarios", hint: "Suggests changes to the Regression suite", intent: "propose_regression_suite", group: "no_ai" },
@@ -54,6 +58,7 @@ export const TASKS: TaskDef[] = [
   { id: "plan", label: "Create a new test plan", hint: "from the approved strategy", intent: "propose_regenerate", group: "no_ai" },
   { id: "risk", label: "Reassess application risk", intent: "propose_risk_reassessment", group: "no_ai" },
   { id: "negative", label: "Add negative criteria", hint: "Rule-based negative acceptance criteria", intent: "propose_negative_criteria", group: "no_ai" },
+  { id: "improve_scripts", label: "Improve existing test scripts", intent: "propose_script_improvement", group: "ai" },
   { id: "update_cases", label: "Update test cases", intent: "propose_test_case_update", group: "ai" },
   { id: "missing_cases", label: "Suggest missing test cases", intent: "propose_missing_test_cases", group: "ai" },
   { id: "update", label: "Update requirements", intent: "propose_requirement_update", group: "ai" },
@@ -62,9 +67,7 @@ export const TASKS: TaskDef[] = [
 ];
 
 export const LATER_TASKS_FALLBACK: { label: string; available_from_phase: number; needs: string }[] = [
-  { label: "Explain a failed test", available_from_phase: 4, needs: "test runs" },
-  { label: "Improve existing test scripts", available_from_phase: 4, needs: "test runs" },
-  { label: "Analyse a defect", available_from_phase: 4, needs: "defects" },
+  { label: "Performance, accessibility and security checks", available_from_phase: 5, needs: "Phase 5" },
 ];
 
 type TaskData = {
@@ -87,6 +90,10 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
   const [keep, setKeep] = useState(true);
   const ctxReq = data.context?.type === "requirement" ? data.context.key : "";
   const ctxCase = data.context?.type === "test_case" ? data.context.key : "";
+  const ctxFailed = data.context?.type === "execution_result" || data.context?.type === "test_case" ? data.context.key : "";
+  const ctxDefect = data.context?.type === "defect" ? data.context.key : "";
+  const [failedKey, setFailedKey] = useState(ctxFailed);
+  const [defectKey, setDefectKey] = useState(ctxDefect);
   const [caseKey, setCaseKey] = useState(ctxCase);
   const [caseKeys, setCaseKeys] = useState<string[]>(ctxCase ? [ctxCase] : []);
   const [target, setTarget] = useState(ctxReq ? `req:${ctxReq}` : "");
@@ -148,6 +155,30 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
       );
     case "attention":
       return runBtn("Check now", () => run("needs_attention", {}, "What needs my attention?"));
+    case "tests_pass":
+      return runBtn("Check now", () => run("execution_results", {}, "Did the tests pass?"));
+    case "explain_failed":
+      return (
+        <div className="space-y-2">
+          <TextField
+            id={`task-${task.id}-first`}
+            label="Result or test case (optional)"
+            hint="For example RUN-0003-01 or TC-0019. Leave empty for the first failure of the latest run."
+            value={failedKey}
+            onChange={(e) => setFailedKey(e.target.value.toUpperCase())}
+          />
+          {runBtn("Explain", () => run("explain_failed_test", failedKey.trim() ? { key: failedKey.trim() } : {}, failedKey.trim() ? `Explain the failed test ${failedKey.trim()}` : "Explain a failed test"))}
+        </div>
+      );
+    case "analyse_defect":
+      return (
+        <div className="space-y-2">
+          <TextField id={`task-${task.id}-first`} label="Defect" hint="For example DEF-0001" value={defectKey} onChange={(e) => setDefectKey(e.target.value.toUpperCase())} />
+          {runBtn("Analyse", () => run("analyse_defect", { key: defectKey.trim() }, `Analyse ${defectKey.trim()}`), !/^DEF-\d{2,}$/.test(defectKey.trim()))}
+        </div>
+      );
+    case "rerun":
+      return runBtn("Propose a run request", () => run("propose_rerun", { only_failed: true }, "Re-run the failed tests"));
     case "explain_case":
       return (
         <div className="space-y-2">

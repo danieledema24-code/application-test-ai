@@ -45,9 +45,24 @@ async def run_migrations_online() -> None:
         if db_path and db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(url)
+    sqlite = url.startswith("sqlite")
     async with engine.connect() as connection:
-        await connection.run_sync(_do_run)
-        await connection.commit()
+        if sqlite:
+            # As in app.db.migrate: batch migrations recreate tables, which fails with foreign keys enforced once
+            # the table holds referenced rows (and SQLite does not roll that DDL back). Checked again afterwards.
+            await connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            await connection.commit()
+        try:
+            await connection.run_sync(_do_run)
+            if sqlite:
+                bad = (await connection.exec_driver_sql("PRAGMA foreign_key_check")).fetchall()
+                if bad:
+                    raise RuntimeError(f"Migration left {len(bad)} dangling foreign key(s): {bad[:3]}")
+            await connection.commit()
+        finally:
+            if sqlite:
+                await connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+                await connection.commit()
     await engine.dispose()
 
 

@@ -528,7 +528,14 @@ class TestDesignAgent:
             technique=c.technique,
             suites=c.suites,
             side_effects=c.side_effects,
-            design_basis_ref={"coverage_item": c.coverage_item, "explanation": c.explanation, "positive": c.positive},
+            design_basis_ref={
+                "coverage_item": c.coverage_item,
+                "explanation": c.explanation,
+                "positive": c.positive,
+                # What the case may cause if the application fails to block it (QA L1: the assistant's regression
+                # proposal applies the generator's rule to stored cases).
+                "blocked_side_effects": list(c.blocked_side_effects),
+            },
             automation_suitability=AutomationSuitability(c.automation[0]),
             automation_reason=c.automation[1],
             automation_assessed="preliminary",

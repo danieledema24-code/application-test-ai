@@ -48,7 +48,8 @@ class Worker:
 
     @property
     def group_limits(self) -> dict[str, int]:
-        return {"scan": self.ctx.settings.max_concurrent_scans_per_org}
+        # P4-06: at most 2 test runs per organisation at once (1 per project, enforced by the run job itself).
+        return {"scan": self.ctx.settings.max_concurrent_scans_per_org, "execution": 2}
 
     async def start(self) -> None:
         self._stop.clear()

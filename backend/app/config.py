@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     ai_max_output_tokens: int = 8000
     ai_timeout_s: float = 120.0
 
+    # Phase 4 (P4-01): the automation/ Node toolkit and the Node binary that runs it.
+    automation_dir: Path = BACKEND_DIR.parent / "automation"
+    node_binary: str = "node"
+    toolkit_timeout_s: float = 120.0
+
     # Discovery limits (lead decisions: default 30 / max 100 pages, 20 min, 2 concurrent per org).
     scan_default_max_pages: int = 30
     scan_max_pages_cap: int = 100

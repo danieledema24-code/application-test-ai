@@ -51,4 +51,4 @@ def test_csv_formula_guard_and_bom() -> None:
     raw = to_csv(content)
     assert raw.startswith("﻿".encode())
     text = raw.decode("utf-8-sig")
-    assert "'=cmd" in text and "No test case" in text and "Not available until Phase 4" in text
+    assert "'=cmd" in text and "No test case" in text and "Phase 4" not in text

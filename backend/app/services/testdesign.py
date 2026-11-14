@@ -48,15 +48,15 @@ from app.domain.testdesign import priority as prio
 from app.services import gates
 
 ACTIVE_CASE = (CaseStatus.draft, CaseStatus.approved)
-NOT_RUN_YET = "Execution arrives in Phase 4"
+NOT_RUN_YET = "Run it from Test Execution; its last result is shown on the test case."
 UNAVAILABLE = {
     "available": False,
     "available_from_phase": 4,
-    "message": "Available after test execution (Phase 4)",
+    "message": "Shown once tests have run",
 }
 
 
-def unavailable(message: str = "Available after test execution (Phase 4)") -> dict[str, Any]:
+def unavailable(message: str = "Shown once tests have run") -> dict[str, Any]:
     return {**UNAVAILABLE, "message": message}
 
 

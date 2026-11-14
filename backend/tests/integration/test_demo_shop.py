@@ -1,6 +1,6 @@
 """Real discovery of the demo shop on http://localhost:4100 producing the Discovery Report as JSON, HTML and PDF.
 
-Start the shop first: `cd api && npx tsx src/demo/target-app.ts`. Skipped when it is not running.
+Start the shop first: `cd demo-shop && npm start`. Skipped when it is not running.
 The three files are also written to backend/data/test-artifacts/ for manual inspection.
 """
 

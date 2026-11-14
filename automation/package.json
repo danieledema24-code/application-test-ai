@@ -1,0 +1,30 @@
+{
+  "name": "@ata/automation",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Trusted toolkit that validates and runs generated Playwright tests (Phase 4).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "bin": {
+    "qa": "bin/qa.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p platform/tsconfig.json",
+    "lint": "eslint .",
+    "test": "node --experimental-strip-types --no-warnings=ExperimentalWarning --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@playwright/test": "1.65.0",
+    "acorn": "8.19.0",
+    "acorn-walk": "8.3.5",
+    "esbuild": "0.28.2",
+    "eslint": "10.15.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5"
+  }
+}

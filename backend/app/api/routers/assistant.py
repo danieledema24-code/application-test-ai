@@ -51,6 +51,12 @@ Intent = Literal[
     "propose_requirement_update",
     "propose_missing_requirements",
     "propose_risk_update",
+    "explain_failed_test",
+    "analyse_defect",
+    "list_defects",
+    "automation_status",
+    "propose_rerun",
+    "propose_script_improvement",
 ]
 
 
@@ -462,6 +468,10 @@ async def _apply(
                 pr.project_id, api.StageRunRequest(reason=payload.get("reason") or reason), ctx, s, p, stage=stage
             )
         applied.append({"type": "stage", "id": None, "key": stage, "label": stage, "path": None})
+    elif pr.kind == "request_run":
+        from app.services import assistant_p4
+
+        applied += await assistant_p4.apply(ctx, s, p, pr)
     elif pr.kind in ("add_test_cases", "set_suite"):
         from app.services import assistant_p3
 

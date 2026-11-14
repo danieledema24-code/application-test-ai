@@ -324,3 +324,29 @@ def test_extra_negatives_go_beyond_the_baseline() -> None:
     name = gen.extra_negatives(inp, {"lin-REQ-0003"})
     paste = next(c for c in name.cases if c.title == "Name: paste 81 characters")
     assert paste.provenance == "inferred" and any(st["action"].startswith("Paste") for st in paste.steps)
+
+
+def test_negative_form_validation_joins_regression_from_medium_risk() -> None:
+    """P4-BUG-01: the demo's blocked-submission cases run in Regression, so "May submit…" is part of that run."""
+
+    def design(level: str, purpose: str = "contact") -> gen.DesignOutput:
+        inp = _input()
+        inp.forms[0].purpose = purpose
+        inp.risks = [prio.RiskFact("r1", "RISK-001", level, 9, "open", frozenset({"lin-REQ-0001", "lin-REQ-0002"}),
+                                   frozenset())]  # fmt: skip
+        return gen.design(inp)
+
+    def empty_name(out: gen.DesignOutput) -> gen.CaseDraft:
+        return next(c for c in out.cases if c.title == "Name with 0 characters")
+
+    medium = empty_name(design("medium"))
+    assert not medium.positive and medium.blocked_side_effects == ["submits_form"]
+    assert medium.side_effects == [] and "regression" in medium.suites
+    assert "regression" in empty_name(design("high")).suites
+    assert "regression" not in empty_name(design("low")).suites
+    # A registration form could create data if the application let the submission through: not repeated by default.
+    reg = empty_name(design("medium", "registration"))
+    assert reg.blocked_side_effects == ["submits_form", "creates_data"] and "regression" not in reg.suites
+    # The open "is Message optional?" case (the demo's empty-Message case before it is answered) is kept too.
+    oq = next(c for c in design("medium").cases if c.expected_result_status == "open_question")
+    assert oq.blocked_side_effects == ["submits_form"] and "regression" in oq.suites

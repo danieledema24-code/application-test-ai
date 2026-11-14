@@ -56,7 +56,8 @@ async def evidence_content(
                 metadata={"filename": (ev.meta or {}).get("filename")},
             )
             await s.commit()
-    is_image = ev.mime.startswith("image/")
+    # Images and test videos (P4-07 `<video controls>`) are shown inline; everything else downloads.
+    is_image = ev.mime.startswith("image/") or ev.mime == "video/webm"
     filename = str((ev.meta or {}).get("filename") or f"{ev.key or ev.id}").replace('"', "")
     disposition = "inline" if is_image else "attachment"
     return Response(

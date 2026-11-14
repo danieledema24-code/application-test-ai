@@ -10,7 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ProjectCounter
 
-PREFIXES = {"scan": "SCAN", "evidence": "EV", "feature": "FEAT", "journey": "JRN", "report": "RPT"}
+PREFIXES = {
+    "scan": "SCAN",
+    "evidence": "EV",
+    "feature": "FEAT",
+    "journey": "JRN",
+    "report": "RPT",
+    "approval": "APR",  # P4-05
+    "run": "RUN",  # P4-06
+    "defect": "DEF",  # P4-09
+}
 # Key widths per api-contracts.md (REQ-0001, AC-0001, DOR-01, RISK-001, TS-001, TP-001, DOC-001, PROP-0001).
 WIDTHS = {"DOR": 2, "DOD": 2, "RISK": 3, "TS": 3, "TP": 3, "DOC": 3}
 

@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Clock, TriangleAlert } from "lucide-react";
-import type { ArtefactRef, BackwardRow, Coverage, ForwardRow, Gaps } from "@/lib/contract";
+import type { ArtefactRef, BackwardRow, CaseExec, Coverage, ForwardRow, Gaps } from "@/lib/contract";
 import { CASE_STATUS_TEXT, PRIORITY_TEXT, techniqueInfo } from "@/lib/testcases";
-import { GAP_EMPTY, PHASE4_SR, PHASE4_TEXT, coverageTiles, gapCounts, keyHref } from "@/lib/traceability";
+import { GAP_EMPTY, PHASE4_SR, PHASE4_TEXT, coverageTiles, defectText, execLine, gapCounts, isAvailable, keyHref, resultText, scriptText } from "@/lib/traceability";
 import { Card, Disclosure, StatTile, StatusPill } from "@/components/ui";
 
 // ---- Coverage tiles and gap lists (§14.2) ---------------------------------------------------------------
@@ -148,9 +148,20 @@ export function GapLists({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: 
       <GapCard id="gap-features" title="Features without requirements" count={n.features}>
         <RefList items={gaps.features_without_requirements ?? []} projectId={projectId} empty={GAP_EMPTY.features} />
       </GapCard>
+      <ExecutionGaps gaps={gaps} projectId={projectId} canEdit={canEdit} />
+    </div>
+  );
+}
+
+/** The four Phase 4 gap lists (design P4 §12) plus the flaky sub-list; before Phase 4 content, one "Needs test
+ * execution" note. */
+function ExecutionGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: string; canEdit: boolean }) {
+  const ev = gaps.requirements_without_execution_evidence;
+  if (!isAvailable(ev) || !isAvailable(gaps.failed_tests) || !isAvailable(gaps.outdated_automation_scripts) || !isAvailable(gaps.defects_without_regression_coverage))
+    return (
       <section aria-labelledby="needs-exec" className="space-y-2">
         <h3 id="needs-exec" className="text-body-lg font-semibold text-fg-strong">
-          Needs test execution (Phase 4)
+          Needs test execution
         </h3>
         <div className="grid gap-3 sm:grid-cols-2">
           {["Requirements without execution evidence", "Failed tests", "Outdated automation scripts", "Defects without regression coverage"].map((t) => (
@@ -164,7 +175,90 @@ export function GapLists({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: 
           ))}
         </div>
       </section>
-    </div>
+    );
+  const n = gapCounts(gaps);
+  const flaky = gaps.flaky_tests ?? [];
+  const failedRow = (x: (typeof gaps.failed_tests extends infer T ? (T extends (infer U)[] ? U : never) : never)) => (
+    <li key={x.result_key} className="flex flex-wrap items-center gap-x-2 text-body">
+      <Link href={keyHref(projectId, x.case.key)} className="font-mono text-navy-700 underline underline-offset-2">
+        {x.case.key}
+      </Link>
+      <span>{x.label ?? (x.status === "flaky" ? "Flaky" : x.status === "error" ? "Error" : "Failed")}</span>
+      {x.classification && <span className="text-small text-fg-muted">(Hypothesis)</span>}
+      <Link href={keyHref(projectId, x.result_key)} className="text-small font-medium text-navy-700 underline underline-offset-2">
+        {x.run_key}
+        <span className="sr-only"> result {x.result_key}</span>
+      </Link>
+    </li>
+  );
+  return (
+    <>
+      <GapCard id="gap-execution" title="Requirements without execution evidence" count={n.execution}>
+        {!ev.executed && <p className="text-body text-fg-muted">No test has run yet.</p>}
+        <div>
+          <h4 className="text-body font-semibold text-fg-strong">Automated but not run ({ev.automated_not_run.length})</h4>
+          <RefList items={ev.automated_not_run} projectId={projectId} empty="None." />
+        </div>
+        <div>
+          <h4 className="text-body font-semibold text-fg-strong">Manual only, no recorded result ({ev.manual_only.length})</h4>
+          <RefList items={ev.manual_only} projectId={projectId} empty="None." />
+        </div>
+        {n.execution === 0 && ev.executed && <p className="text-body text-fg-muted">{GAP_EMPTY.execution}</p>}
+      </GapCard>
+      <GapCard id="gap-failed" title="Failed tests" count={n.failed}>
+        {gaps.failed_tests.length ? <ul className="space-y-1">{gaps.failed_tests.map(failedRow)}</ul> : <p className="text-body text-fg-muted">{GAP_EMPTY.failed}</p>}
+        <div>
+          <h4 className="text-body font-semibold text-fg-strong">Flaky tests ({flaky.length})</h4>
+          <p className="text-small text-fg-muted">Passed only on retry. Counted separately, never as passed.</p>
+          {flaky.length ? <ul className="mt-1 space-y-1">{flaky.map(failedRow)}</ul> : <p className="text-body text-fg-muted">{GAP_EMPTY.flaky}</p>}
+        </div>
+      </GapCard>
+      <GapCard id="gap-outdated" title="Outdated automation scripts" count={n.outdated}>
+        {gaps.outdated_automation_scripts.length ? (
+          <>
+            <ul className="space-y-1">
+              {gaps.outdated_automation_scripts.map((x) => (
+                <li key={x.case.key} className="text-body">
+                  <span className="font-mono">{x.file}</span> v{x.version} ·{" "}
+                  <Link href={keyHref(projectId, x.case.key)} className="text-navy-700 underline underline-offset-2">
+                    {x.case.key}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            {canEdit && (
+              <Link href={`/projects/${projectId}/automation`} className="text-small font-medium text-navy-700 underline underline-offset-2">
+                Regenerate scripts…
+              </Link>
+            )}
+          </>
+        ) : (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.outdated}</p>
+        )}
+      </GapCard>
+      <GapCard id="gap-regression" title="Defects without regression coverage" count={n.regression}>
+        {gaps.defects_without_regression_coverage.length ? (
+          <ul className="space-y-1">
+            {gaps.defects_without_regression_coverage.map((x) => (
+              <li key={`${x.defect.key}-${x.case?.key ?? ""}`} className="flex flex-wrap items-center gap-x-2 text-body">
+                <Link href={keyHref(projectId, x.defect.key)} className="font-mono text-navy-700 underline underline-offset-2">
+                  {x.defect.key}
+                </Link>
+                <span>{defectText(x.defect).replace(`${x.defect.key} `, "")}</span>
+                {x.case && (
+                  <Link href={keyHref(projectId, x.case.key)} className="text-small font-medium text-navy-700 underline underline-offset-2">
+                    Open {x.case.key}
+                    <span className="sr-only"> to add it to Regression</span>
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.regression}</p>
+        )}
+      </GapCard>
+    </>
   );
 }
 
@@ -196,6 +290,40 @@ function Trace({ projectId, k }: { projectId: string; k: string }) {
     <Link href={`/projects/${projectId}/traceability/${k}`} className="font-mono text-navy-700 underline underline-offset-2" aria-label={`Trace ${k}`}>
       {k}
     </Link>
+  );
+}
+
+/** Scripts · Results · Defects cells (design P4 §12): text, never colour alone; gaps read "No script" / "Not run". */
+function ExecCells({ items, projectId, kind }: { items: ({ case: ArtefactRef } & Partial<CaseExec>)[]; projectId: string; kind: "script" | "result" | "defects" }) {
+  if (!items.length) return <span className="text-fg-muted">None</span>;
+  return (
+    <Chips>
+      {items.map((t) =>
+        kind === "script" ? (
+          <li key={t.case.key} className="whitespace-nowrap">
+            {t.script ? scriptText(t.script) : <span className="text-fg-muted">No script</span>}
+          </li>
+        ) : kind === "result" ? (
+          <li key={t.case.key} className="whitespace-nowrap">
+            {t.result ? (
+              <Link href={keyHref(projectId, t.result.result_key)} className="text-navy-700 underline underline-offset-2" aria-label={`Result for ${t.case.key}: ${t.result.status} in ${t.result.run_key}`}>
+                {resultText(t.result)}
+              </Link>
+            ) : (
+              <span className="text-fg-muted">Not run</span>
+            )}
+          </li>
+        ) : (
+          (t.defects ?? []).map((d) => (
+            <li key={`${t.case.key}-${d.key}`} className="whitespace-nowrap">
+              <Link href={keyHref(projectId, d.key)} className="text-navy-700 underline underline-offset-2">
+                {defectText(d)}
+              </Link>
+            </li>
+          ))
+        ),
+      )}
+    </Chips>
   );
 }
 
@@ -250,6 +378,7 @@ function forwardCells(r: ForwardRow, projectId: string) {
 }
 
 export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Traceability matrix, scrolls sideways" }: { rows: ForwardRow[]; projectId: string; more?: boolean; regionLabel?: string }) {
+  const phase4 = rows.some((r) => isAvailable(r.automation));
   return (
     <>
       <div className="hidden rounded-lg border border-line bg-surface md:block">
@@ -262,7 +391,7 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
               <tr>
                 <td colSpan={5} />
                 <th scope="colgroup" colSpan={3} className="px-3 py-1.5 text-left text-caption font-semibold text-fg-muted">
-                  Later phases · Not available until Phase 4
+                  {phase4 ? "Execution" : "Execution · not recorded"}
                 </th>
               </tr>
               <tr>
@@ -286,15 +415,31 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
                     <td className="px-3 py-2">{c.acs}</td>
                     <td className="px-3 py-2">{c.conditions}</td>
                     <td className="px-3 py-2">{c.cases}</td>
-                    <td className="px-3 py-2">
-                      <Later />
-                    </td>
-                    <td className="px-3 py-2">
-                      <Later />
-                    </td>
-                    <td className="px-3 py-2">
-                      <Later />
-                    </td>
+                    {phase4 ? (
+                      <>
+                        <td className="px-3 py-2">
+                          <ExecCells items={r.test_cases ?? []} projectId={projectId} kind="script" />
+                        </td>
+                        <td className="px-3 py-2">
+                          <ExecCells items={r.test_cases ?? []} projectId={projectId} kind="result" />
+                        </td>
+                        <td className="px-3 py-2">
+                          {(r.test_cases ?? []).some((t) => (t.defects ?? []).length) ? <ExecCells items={r.test_cases ?? []} projectId={projectId} kind="defects" /> : <span className="text-fg-muted">None</span>}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-3 py-2">
+                          <Later />
+                        </td>
+                        <td className="px-3 py-2">
+                          <Later />
+                        </td>
+                        <td className="px-3 py-2">
+                          <Later />
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
@@ -329,7 +474,17 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
                   <dd>{c.cases}</dd>
                 </div>
               </dl>
-              <p className="mt-2 text-small text-fg-muted">Scripts, results, defects: not available until Phase 4</p>
+              {phase4 ? (
+                <ul className="mt-2 space-y-0.5 text-small text-fg">
+                  {(r.test_cases ?? []).map((t) => (
+                    <li key={t.case.key}>
+                      <span className="font-mono">{t.case.key}</span>: {execLine(t)}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-small text-fg-muted">Scripts, results, defects: not recorded in this version</p>
+              )}
             </article>
           );
         })}
@@ -339,6 +494,7 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
 }
 
 export function BackwardMatrix({ rows, projectId, more = false, regionLabel = "Traceability matrix, scrolls sideways" }: { rows: BackwardRow[]; projectId: string; more?: boolean; regionLabel?: string }) {
+  const phase4 = rows.some((r) => r.script !== undefined);
   const refs = (l: ArtefactRef[] | undefined, empty: React.ReactNode) =>
     (l ?? []).length ? (
       <Chips>
@@ -359,7 +515,7 @@ export function BackwardMatrix({ rows, projectId, more = false, regionLabel = "T
             <caption className="px-3 py-2 text-left text-body font-semibold text-fg-strong">Backward traceability: test cases to requirements, {rows.length} test cases{more ? " on this page" : ""}</caption>
             <thead className="bg-elevated">
               <tr>
-                {["Test case", "Status", "Priority", "Technique", "Conditions", "Acceptance criteria", "Requirements", "Risks"].map((h) => (
+                {["Test case", "Status", "Priority", "Technique", "Conditions", "Acceptance criteria", "Requirements", "Risks", ...(phase4 ? ["Script", "Last result", "Defects"] : [])].map((h) => (
                   <th key={h} scope="col" className={`whitespace-nowrap px-3 py-2 text-left text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted ${h === "Test case" ? "sticky left-0 bg-elevated" : ""}`}>
                     {h}
                   </th>
@@ -379,6 +535,17 @@ export function BackwardMatrix({ rows, projectId, more = false, regionLabel = "T
                   <td className="px-3 py-2">{refs(r.acceptance_criteria, <span className="text-fg-muted">None</span>)}</td>
                   <td className="px-3 py-2">{refs(r.requirements, <NoCase text="No requirement" />)}</td>
                   <td className="px-3 py-2">{refs(r.risks, <span className="text-fg-muted">None</span>)}</td>
+                  {phase4 && (
+                    <>
+                      <td className="px-3 py-2">
+                        <ExecCells items={[{ ...r, case: r.test_case }]} projectId={projectId} kind="script" />
+                      </td>
+                      <td className="px-3 py-2">
+                        <ExecCells items={[{ ...r, case: r.test_case }]} projectId={projectId} kind="result" />
+                      </td>
+                      <td className="px-3 py-2">{(r.defects ?? []).length ? <ExecCells items={[{ ...r, case: r.test_case }]} projectId={projectId} kind="defects" /> : <span className="text-fg-muted">None</span>}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -409,7 +576,7 @@ export function BackwardMatrix({ rows, projectId, more = false, regionLabel = "T
                 <dd>{refs(r.risks, <span className="text-fg-muted">None</span>)}</dd>
               </div>
             </dl>
-            <p className="mt-2 text-small text-fg-muted">Scripts, results, defects: not available until Phase 4</p>
+            {phase4 ? <p className="mt-2 text-small text-fg">{execLine(r)}</p> : <p className="mt-2 text-small text-fg-muted">Scripts, results, defects: not recorded in this version</p>}
           </article>
         ))}
       </div>

@@ -1,6 +1,7 @@
 """ORM -> API mapping for Phase 3 test design (api-contracts.md "Phase 3 endpoints"). Plain dicts in contract shape.
 
-Nothing here is ever an execution result: `execution_status` is "not_run" and `last_result` is null in Phase 3.
+`execution_status` and `last_result` come from the latest finished test run that ran the case (P4, design §6.6);
+"not_run" and null before any run.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ class Lookup:
     users: dict[uuid.UUID, User] = field(default_factory=dict)
     features: dict[str, ApplicationFeature] = field(default_factory=dict)  # id -> row
     changed: set[str] = field(default_factory=set)  # case lineages new or changed vs the run this one replaced
+    results: dict[str, dict[str, Any]] = field(default_factory=dict)  # case lineage -> last result (P4)
 
     def feature_ref(self, c: TestCase) -> dict[str, Any] | None:
         """The feature of the case's first linked requirement that has one."""
@@ -120,6 +122,8 @@ async def lookup(
         lk.data = {str(d.lineage_id): d for d in await tds.data_of(s, run.id)}
         lk.cases = await tds.cases_of(s, run.id)
         lk.changed = await _changed_cases(s, run, lk.cases)
+    if lk.cases:
+        lk.results = await last_results(s, project_id)
     fids = {str(f) for r in reqs for f in r.feature_ids or []}
     if fids:
         q = select(ApplicationFeature).where(ApplicationFeature.id.in_([uuid.UUID(x) for x in fids]))
@@ -129,6 +133,54 @@ async def lookup(
         ids += [c.updated_by, c.status_changed_by, c.priority_overridden_by]
     lk.users = await users(s, ids)
     return lk
+
+
+# Worst first: the list shows the worst status of the case's results in its latest run (design §6.6).
+_WORST = ("error", "failed", "blocked", "flaky", "skipped", "passed")
+
+
+async def last_results(s: AsyncSession, project_id: uuid.UUID) -> dict[str, dict[str, Any]]:
+    """Per case lineage: the results of the latest run that ran it (one per browser and size). Cancelled or
+    interrupted rows are not results."""
+    from app.db.models import ExecutionResult, ExecutionRun
+    from app.services.execution import NOT_RESULTS
+
+    rows = (
+        await s.execute(
+            select(ExecutionResult, ExecutionRun.key, ExecutionRun.finished_at, ExecutionRun.mode)
+            .join(ExecutionRun, ExecutionRun.id == ExecutionResult.execution_run_id)
+            .where(ExecutionResult.project_id == project_id)
+            .order_by(ExecutionResult.created_at.desc())
+            .limit(5000)
+        )
+    ).all()
+    latest_run: dict[str, uuid.UUID] = {}
+    picked: dict[str, list[tuple[ExecutionResult, str, Any, Any]]] = {}
+    for r, run_key, finished_at, mode in rows:
+        if r.error in NOT_RESULTS:
+            continue
+        lin = str(r.case_lineage_id)
+        if latest_run.setdefault(lin, r.execution_run_id) != r.execution_run_id:
+            continue
+        picked.setdefault(lin, []).append((r, run_key, finished_at, mode))
+    out: dict[str, dict[str, Any]] = {}
+    for lin, items in picked.items():
+        items.sort(key=lambda x: _WORST.index(x[0].status.value) if x[0].status.value in _WORST else 0)
+        worst, run_key, finished_at, mode = items[0]
+        out[lin] = {
+            "status": worst.status.value,
+            "run_key": run_key,
+            "result_key": worst.key,
+            "at": (finished_at or worst.updated_at).isoformat(),
+            "manual": getattr(mode, "value", mode) == "manual",
+            "classification": worst.classification.value if worst.classification else None,
+            "label": (worst.analysis or {}).get("label"),
+            "results": [
+                {"browser": x.browser, "viewport": x.viewport, "status": x.status.value, "result_key": x.key}
+                for x, *_ in items
+            ],
+        }
+    return out
 
 
 CASE_CHANGE_FIELDS = ("title", "objective", "preconditions", "steps", "expected_result", "technique", "test_type")
@@ -224,8 +276,8 @@ def case_summary(c: TestCase, lk: Lookup) -> dict[str, Any]:
         "requirement_keys": req_keys,
         "lint_summary": lint_rules.summary(list(c.lint or [])),
         "expected_result_status": c.expected_result_status.value,
-        "execution_status": "not_run",
-        "last_result": None,
+        "execution_status": (lk.results.get(str(c.lineage_id)) or {}).get("status", "not_run"),
+        "last_result": lk.results.get(str(c.lineage_id)),
         "stage_run_version": lk.run.version if lk.run else None,
         "version": c.version,
         "locked": c.locked,
@@ -350,7 +402,7 @@ def case_detail(ctx: AppContext, c: TestCase, lk: Lookup, evidence: dict[Any, An
         "side_effects": list(c.side_effects or []),
         "automation_suitability": {
             "value": c.automation_suitability.value,
-            # `assessed: "preliminary"` already says "Preliminary: assessed in Phase 4."; the reason doesn't repeat it.
+            # `assessed: "preliminary"` already says the preliminary sentence; the reason doesn't repeat it.
             "reason": automation_reason(c.automation_reason),
             "assessed": c.automation_assessed,
         },

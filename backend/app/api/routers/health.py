@@ -26,6 +26,7 @@ async def health(ctx: Ctx) -> api.Health:
     except Exception:  # noqa: BLE001 - reported as db=false
         db_ok = False
     browser_ok = await ctx.browser_pool.available()
+    tk = await ctx.toolkit.version()
     mode = ctx.settings.worker_mode
     worker_ok = mode == "off" or (last_beat_s is not None and last_beat_s < 60)
     return api.Health(
@@ -37,4 +38,9 @@ async def health(ctx: Ctx) -> api.Health:
         browser=api.BrowserHealth(available=browser_ok),
         version=ctx.settings.app_version,
         allow_private_targets=ctx.settings.allow_private_targets and ctx.settings.env != "production",
+        automation=api.AutomationHealth(
+            node=tk.node, toolkit=tk.toolkit, playwright=tk.playwright, browsers=tk.browsers
+        )
+        if tk is not None
+        else api.AutomationHealth(),
     )

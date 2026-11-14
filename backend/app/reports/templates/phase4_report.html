@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ c.title }} · {{ c.project.name }}</title>
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; color: #1D2433; font-size: 11px; line-height: 1.45; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 1px solid #E4E7EC; }
+  h3 { font-size: 12px; margin: 12px 0 4px; }
+  .muted { color: #535D70; } .band { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+  .draft { background: #FFFAEB; color: #B54708; border: 1px solid #FEDF89; }
+  .note { background: #F0F4FA; color: #1D2433; border: 1px solid #D0D9E8; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0; } th, td { border: 1px solid #E4E7EC; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #F9FAFB; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ c.title }}{% if c.run %} · {{ c.run.key }}{% endif %}</h1>
+  <p class="muted">{{ c.project.name }} · version {{ c.version }} · generated {{ c.generated_at[:16].replace('T', ' ') }} UTC</p>
+  {% if c.report_type == 'defect' and c.draft_note %}<p><span class="band draft">{{ c.draft_note }}</span></p>{% endif %}
+  <p><span class="band note">{{ c.hypothesis_note }}</span></p>
+</header>
+<section><h2>Summary</h2><p>{{ c.summary }}</p><p class="muted">Written by rules.</p></section>
+
+{% if c.report_type == 'execution' %}
+<section><h2>Run</h2>
+  {% if c.run %}
+  <table><tbody>
+    <tr><th>Run</th><td>{{ c.run.key }} · {{ c.run.selection }}</td></tr>
+    <tr><th>Status</th><td>{{ c.run.status }}</td></tr>
+    <tr><th>Requested</th><td>{{ c.run.requested_by or 'Unknown' }}{% if c.run.requested_at %} · {{ c.run.requested_at[:16].replace('T', ' ') }}{% endif %}</td></tr>
+    <tr><th>Authorised (Gate 7)</th><td>{% if c.run.authorised %}Yes · {{ c.run.authorised_by or 'Unknown' }}{% if c.run.authorised_at %} · {{ c.run.authorised_at[:16].replace('T', ' ') }}{% endif %}{% if c.run.self_authorised %} (self-authorised){% endif %}{% else %}No{% endif %}</td></tr>
+    <tr><th>Browsers</th><td>{{ c.run.browsers|join(', ') }}</td></tr>
+    <tr><th>Sizes</th><td>{{ (c.run.sizes or c.run.viewports)|join(', ') }}</td></tr>
+    <tr><th>Workers and retries</th><td>{{ c.run.workers }} worker{{ '' if c.run.workers == 1 else 's' }} · {{ c.run.retries }} retr{{ 'y' if c.run.retries == 1 else 'ies' }} per failed test</td></tr>
+    <tr><th>Started</th><td>{{ (c.run.started_at or '')[:16].replace('T', ' ') }}</td></tr>
+    <tr><th>Finished</th><td>{{ (c.run.finished_at or '')[:16].replace('T', ' ') }}</td></tr>
+  </tbody></table>
+  {% else %}<p>Latest result per test case, across runs.</p>{% endif %}
+  <p>{{ c.totals.passed }} passed · {{ c.totals.failed }} failed · {{ c.totals.flaky }} flaky · {{ c.totals.error }} errors · {{ c.totals.blocked }} blocked · {{ c.totals.skipped }} skipped ({{ c.totals.tests }} tests)</p>
+  <p class="muted">{{ c.flaky_note }}</p>
+</section>
+<section><h2>Results</h2>
+  <table><thead><tr><th>Result</th><th>Test case</th><th>Browser · size</th><th>Status</th><th>Failed step</th><th>Likely cause</th><th>Defect</th></tr></thead><tbody>
+  {% for x in c.results %}<tr><td>{{ x.result_key }}</td><td>{{ x.case_key or '' }} {{ x.title or '' }}</td><td>{{ x.browser }} · {{ x.size }}</td>
+    <td>{{ x.status }}{% if x.reason or x.error_reason %}: {{ x.reason or x.error_reason }}{% endif %}</td><td>{{ x.failed_step or '' }}</td>
+    <td>{% if x.cause %}{{ x.cause.label }} ({{ 'set by a person' if x.cause.set_by_person else 'Hypothesis' }}){% endif %}</td>
+    <td>{% if x.defect %}{{ x.defect.key }}{% if x.defect.occurrence > 1 %} (occurrence {{ x.defect.occurrence }}){% endif %}{% endif %}</td></tr>
+  {% else %}<tr><td colspan="7">No results.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<section><h2>Not automated</h2>
+  {% if c.not_automated %}
+  <p>Approved test cases that need a person, so no test ran for them:</p>
+  <table><thead><tr><th>Test case</th><th>Why it isn't automated</th></tr></thead><tbody>
+  {% for x in c.not_automated %}<tr><td>{{ x.case_key }} {{ x.title }}</td><td>{{ x.reasons|join('; ') }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% else %}<p>None. Every approved test case can be automated.</p>{% endif %}
+</section>
+<section><h2>Limitations</h2><ul>{% for x in c.limitations %}<li>{{ x }}</li>{% endfor %}</ul></section>
+<section><h2>Defects from this report</h2><ul>{% for d in c.defects %}<li>{{ d.key }} {{ d.summary }} · {{ d.status }} · {{ d.severity }}{% if d.raised_here is defined and not d.raised_here %} · seen again{% endif %}</li>{% else %}<li>None</li>{% endfor %}</ul></section>
+{% else %}
+<section><h2>Defects</h2>
+  {% for d in c.defects %}
+  <h3>{{ d.key }} {{ d.summary }}</h3>
+  <p class="muted">{{ d.status }} · severity {{ d.severity }} · priority {{ d.priority }} · test cases {{ d.cases|join(', ') or 'none' }} · {{ d.reproducibility }}</p>
+  {% if d.steps %}<ol>{% for st in d.steps %}<li>{{ st }}</li>{% endfor %}</ol>{% endif %}
+  <p><strong>Expected:</strong> {{ d.expected }}</p><p><strong>Actual:</strong> {{ d.actual }}</p>
+  {% if d.root_cause_hypothesis %}<p class="muted">Hypothesis: {{ d.root_cause_hypothesis }}</p>{% endif %}
+  {% if d.status_reason %}<p class="muted">Status reason: {{ d.status_reason }}</p>{% endif %}
+  {% else %}<p>No defects.</p>{% endfor %}
+</section>
+{% endif %}
+</body>
+</html>

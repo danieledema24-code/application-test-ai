@@ -30,7 +30,7 @@ import {
 import { BULK_BAR_PADDING, BulkActionBar, Button, Checkbox, Disclosure, Drawer, EmptyState, FilterChips, InlineError, LinkButton, Modal, Segmented, SelectField, TextField, useToast } from "@/components/ui";
 import { ProvenanceLabel, ProvenanceLegend } from "@/components/domain/ObservationLabel";
 import { noteGateReopened } from "@/components/requirements/hooks";
-import { CaseFlags, CaseStatusPill, LintChip, NotDecided, NotRunYet, PriorityValue, TechniqueLegend } from "./Bits";
+import { CaseFlags, CaseStatusPill, LastResult, LintChip, NotDecided, PriorityValue, TechniqueLegend } from "./Bits";
 import { CaseRejectDialog, DeprecateDialog } from "./Dialogs";
 import { claimRouteFocus } from "@/lib/focusReturn";
 
@@ -469,7 +469,7 @@ export function TestCasesTable({
         <ReqKeys c={c} projectId={projectId} />
       </td>
       <td className="px-3 py-3 align-top">
-        <NotRunYet />
+        <LastResult c={c} projectId={projectId} />
       </td>
     </tr>
   );
@@ -630,7 +630,7 @@ export function TestCasesTable({
                             </span>
                           </p>
                           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small">
-                            <LintChip c={c} /> · <ReqKeys c={c} projectId={projectId} /> · <NotRunYet />
+                            <LintChip c={c} /> · <ReqKeys c={c} projectId={projectId} /> · <LastResult c={c} projectId={projectId} />
                           </p>
                         </div>
                       </div>
