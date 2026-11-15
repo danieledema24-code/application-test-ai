@@ -191,6 +191,10 @@ class Approval(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base):
     execution_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("execution_runs.id", ondelete="RESTRICT"), default=None, index=True
     )
+    # Phase 5 (P5-00, migration 0017): the performance run a `load_test` approval authorises (decision D18).
+    performance_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("performance_runs.id", ondelete="RESTRICT"), default=None, index=True
+    )
     scope: Mapped[dict[str, Any]] = mapped_column(default=json_default_dict)
     requested_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
     decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)

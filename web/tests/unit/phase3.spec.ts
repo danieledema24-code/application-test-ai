@@ -444,7 +444,7 @@ test.describe("traceability (design P3 §14)", () => {
     expect(tiles[0]).toMatchObject({ label: "Requirements covered", value: "18 of 22" });
     expect(tiles.find((t) => t.id === "orphans")).toMatchObject({ value: "2", warn: true, href: "/c?no_req=1" });
     expect(tiles.find((t) => t.id === "exec")).toMatchObject({ value: "Not available", unavailable: true });
-    expect(gapCounts(NO_GAPS)).toEqual({ execution: 0, failed: 0, flaky: 0, outdated: 0, regression: 0, requirements: 0, orphans: 0, risks: 0, acs: 0, features: 0 });
+    expect(gapCounts(NO_GAPS)).toEqual({ execution: 0, failed: 0, flaky: 0, outdated: 0, regression: 0, requirements: 0, orphans: 0, risks: 0, acs: 0, features: 0, nf_open: 0, nf_pages: 0, nf_without: 0 });
   });
 
   test("matrix filters round-trip and map to the API query with a page size of 50", () => {
@@ -516,7 +516,7 @@ test.describe("reports (design P3 §15)", () => {
   test("Phase 3 report types, CSV only where offered, file names and bands", () => {
     expect(reportBySlug("test-case-spec")?.type).toBe("test_case_spec");
     expect(reportBySlug("rtm")?.gate).toBe("G5");
-    expect(downloadFormats("test_case_spec")).toEqual(["pdf", "html", "csv"]);
+    expect(downloadFormats("test_case_spec")).toEqual(["pdf", "html", "csv", "xlsx"]);
     expect(downloadFormats("requirements_spec")).toEqual(["pdf", "html"]);
     expect(phase2ReportFileName("www.acme.com", "test_case_spec", 2, new Date(2026, 10, 13), "csv")).toBe("www.acme.com-test-case-spec-v2-2026-11-13.csv");
     expect(phase2ReportFileName("www.acme.com", "rtm", 1, new Date(2026, 10, 13), "pdf")).toBe("www.acme.com-rtm-v1-2026-11-13.pdf");

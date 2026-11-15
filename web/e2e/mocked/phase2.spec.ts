@@ -295,10 +295,10 @@ test.describe("Phase 2 · AI QA Analyst", () => {
     await expect(tasks.getByRole("heading", { name: "Works without AI" })).toBeVisible();
     await expect(tasks.getByRole("button", { name: /Reassess application risk/ })).toBeVisible();
     await expect(tasks.getByRole("button", { name: /Add negative criteria/ })).toBeVisible();
-    // Phase 3 and Phase 4 built their tasks (design P3 §16.1, P4-13): only Phase 5 remains under "Later phases".
+    // Phases 3–5 built their tasks (design P3 §16.1, P4-13, P5 §12.3): only Phase 6 items remain under "Later phases".
     await expect(tasks.getByText("Available in Phase 3: needs test cases")).toHaveCount(0);
-    await expect(tasks.getByText(/Available in Phase 4/)).toHaveCount(0);
-    await expect(tasks.getByText("Available in Phase 5: needs Phase 5")).toBeVisible();
+    await expect(tasks.getByText(/Available in Phase [45]/)).toHaveCount(0);
+    await expect(tasks.getByText("Available in Phase 6: needs Phase 6")).toHaveCount(2);
     await expect(tasks.getByRole("button", { name: /Did the tests pass\?/ })).toBeVisible();
     await expect(tasks.getByRole("button", { name: /Explain a failed test/ })).toBeVisible();
     await expect(tasks.getByRole("button", { name: /Analyse a defect/ })).toBeVisible();

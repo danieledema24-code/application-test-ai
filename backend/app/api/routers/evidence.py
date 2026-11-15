@@ -7,13 +7,14 @@ from fastapi.responses import Response
 from sqlalchemy import select
 
 from app.api.deps import Ctx, CurrentPrincipal, ScopedSession, client_ip
-from app.api.errors import Forbidden, NotFound
+from app.api.errors import Forbidden, Gone, NotFound
 from app.db.models import Evidence
 from app.db.tenant import BYPASS
 from app.domain.enums import EvidenceKind
 from app.schemas import api
 from app.services import serialize as ser
 from app.services.audit import audit
+from app.services.hardening import removed_text
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
@@ -43,6 +44,8 @@ async def evidence_content(
         ).scalar_one_or_none()
         if ev is None or not ctx.signer.verify(ev.id, ev.organisation_id, exp, sig):
             raise Forbidden("This link is invalid or has expired")
+        if ev.purged_at is not None:  # P5-05b: the record stays, the file is gone
+            raise Gone(removed_text(ev.purged_at))
         data = await ctx.storage.get(ev.storage_key)
         if ev.kind == EvidenceKind.report_render:
             audit(

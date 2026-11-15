@@ -7,6 +7,7 @@ No delete (405). Objects of another organisation are 404.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any, Literal
 
@@ -75,6 +76,16 @@ async def _links(s: Any, ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, list
     return outd
 
 
+def why_line(d: Defect) -> str | None:
+    """Gate 8 "Why" line of a non-functional draft (design P5 §10): what was observed, and in which check or run."""
+    if d.source not in dsvc.NON_FUNCTIONAL:
+        return None
+    env = d.environment or {}
+    text = re.sub(r"^\[[^\]]*\]\s*", "", d.actual or d.description or "").strip()
+    ref = env.get("scan_key") or env.get("run_key")
+    return f"{text} · {ref}" if ref and text else (text or None)
+
+
 def summary(d: Defect, links: dict[str, list[str]], p: Principal) -> dict[str, Any]:
     env = d.environment or {}
     return {
@@ -85,6 +96,7 @@ def summary(d: Defect, links: dict[str, list[str]], p: Principal) -> dict[str, A
         "priority": d.priority.value,
         "status": d.status.value,
         "source": d.source.value,
+        "why": why_line(d),
         "reproducibility": d.reproducibility,
         "cases": links.get("cases", []),
         "requirements": links.get("requirements", []),
@@ -126,8 +138,8 @@ async def list_defects(
         stmt = stmt.where(Defect.severity.in_(severity.split(",")))
     if priority:
         stmt = stmt.where(Defect.priority.in_(priority.split(",")))
-    if source:
-        stmt = stmt.where(Defect.source == source)
+    if source:  # P5: comma-separated ("analysis,user" is the Functional filter)
+        stmt = stmt.where(Defect.source.in_([x for x in source.split(",") if x]))
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Defect.key.ilike(like), Defect.summary.ilike(like)))
@@ -444,9 +456,13 @@ async def edit_defect(
 class StatusInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["confirm", "reject", "fixed", "verified", "closed"]
-    reason: Literal["not_a_defect", "duplicate", "works_as_intended", "cannot_reproduce", "test_problem"] | None = None
+    reason: (
+        Literal["not_a_defect", "duplicate", "works_as_intended", "cannot_reproduce", "test_problem", "accepted_risk"]
+        | None
+    ) = None
     comment: str | None = Field(default=None, max_length=2000)
     duplicate_of: str | None = Field(default=None, max_length=32)
+    mark_findings: bool = False  # with `accepted_risk`: also mark the draft's findings (non-functional drafts)
 
 
 async def _after_g8(ctx: Ctx, project: Project, keys: list[str], action: str) -> None:
@@ -480,6 +496,7 @@ async def defect_status(
             reason=body.reason,
             comment=body.comment,
             duplicate_of=body.duplicate_of,
+            mark_findings=body.mark_findings,
         )
     except PermissionError as exc:
         raise Forbidden(str(exc)) from exc
@@ -526,8 +543,9 @@ async def bulk_status(
                 reason=body.reason,
                 comment=body.comment,
                 duplicate_of=body.duplicate_of,
+                mark_findings=body.mark_findings,
             )
-        except Conflict as exc:
+        except (Conflict, ValidationFailed) as exc:
             skipped.append({"key": d.key, "reason": exc.message})
             continue
         done.append(d.key)

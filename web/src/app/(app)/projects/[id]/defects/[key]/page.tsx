@@ -3,6 +3,7 @@
 // Defect detail (design P4 §11.4): every §11 field labelled ("None" when empty), status actions with one primary per
 // state, G8 per defect, verify only after a passing re-run. `?edit=1` edits drafts and confirmed defects. No delete.
 
+import { RemovedEvidence, removedText } from "@/components/domain/RemovedEvidence";
 import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
@@ -11,7 +12,7 @@ import { api, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { CONFIDENCE_TEXT } from "@/lib/execution";
-import { DEFECT_STATUS, PRIORITY_TEXT, rejectReasonText, reproText, type DefectAction, type DefectDetail, type DefectList } from "@/lib/defects";
+import { DEFECT_STATUS, environmentLine, isNonFunctional, NF_ROOT_CAUSE, nfOccurrences, PRIORITY_TEXT, rejectReasonText, SOURCE_TEXT, reproText, type DefectAction, type DefectDetail, type DefectList } from "@/lib/defects";
 import { Button, Callout, EmptyState, ErrorState, LinkButton, Skeleton, useToast } from "@/components/ui";
 import { ClassificationLabel, DefectStatusPill, HypothesisLabel, ObservedLabel, SeverityValue } from "@/components/domain/ExecutionLabels";
 import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
@@ -123,6 +124,7 @@ function DefectPage() {
   const permNote = "You can read and edit this draft, but confirming or rejecting needs gate-approval permission. Ask someone who can approve gates.";
   const rerun = caseKey && member ? <LinkButton href={`/projects/${p.id}/execution?new=1&cases=${caseKey}`}>Re-run {caseKey}…</LinkButton> : null;
   const env = d.environment ?? {};
+  const nf = isNonFunctional(d.source);
 
   if (editing)
     return (
@@ -213,7 +215,7 @@ function DefectPage() {
         <div className="space-y-5">
           <Field label="Description">{none(d.description)}</Field>
           <Field label="Environment">
-            {[env.url, env.browser, env.viewport ? env.viewport.replace("x", " × ") : null, env.run_key, env.date ? fmtDateTime(env.date) : null].filter(Boolean).join(" · ") || "None"}
+            {environmentLine(d, fmtDateTime)}
           </Field>
           <Field label="Preconditions">
             {d.preconditions?.length ? (
@@ -240,23 +242,40 @@ function DefectPage() {
           <Field label="Expected result">
             {none(d.expected)}
           </Field>
-          <Field label="Actual result" badge={d.source === "analysis" ? <ObservedLabel text="Observed on the page" /> : undefined}>
+          <Field
+            label="Actual result"
+            badge={
+              d.source === "analysis" ? (
+                <ObservedLabel text="Observed on the page" />
+              ) : d.source === "performance" ? (
+                <ObservedLabel text={`Measured during ${env.run_key ?? "the load test"}`} />
+              ) : nf ? (
+                <ObservedLabel text="Observed" />
+              ) : undefined
+            }
+          >
             {none(d.actual)}
           </Field>
-          <Field label="Root cause" badge={<HypothesisLabel />}>
+          {nf ? (
+            <Field label="Root cause">{NF_ROOT_CAUSE}</Field>
+          ) : (
+            <Field label="Root cause" badge={<HypothesisLabel />}>
             {d.analysis ? (
               <span className="flex flex-wrap items-center gap-2">
                 <ClassificationLabel classification={d.analysis.classification} /> ({CONFIDENCE_TEXT[d.analysis.confidence] ?? d.analysis.confidence})
               </span>
             ) : null}
             <span className="mt-1 block">{none(d.root_cause_hypothesis)}</span>
-          </Field>
+            </Field>
+          )}
           <Field label="Evidence">
             {d.evidence.length ? (
               <ul className="flex flex-wrap gap-3">
                 {d.evidence.map((e) => (
                   <li key={e.id}>
-                    {e.kind === "screenshot" ? (
+                    {removedText(e) ? (
+                      <RemovedEvidence text={removedText(e)!} className="h-24 w-40 min-h-0 px-2 py-1" />
+                    ) : e.kind === "screenshot" ? (
                       <a href={e.content_url} target="_blank" rel="noreferrer" className="block">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={e.content_url} alt={`Screenshot from ${env.result_key ?? d.key}`} className="h-24 w-40 rounded object-cover object-top ring-1 ring-line" />
@@ -311,6 +330,27 @@ function DefectPage() {
               </Link>
             )}
           </Side>
+          {nf ? (
+            <Side label={`Occurrences (${nfOccurrences(d).length})`}>
+              {nfOccurrences(d).length ? (
+                <ul>
+                  {nfOccurrences(d).map((o) => (
+                    <li key={o}>{o}</li>
+                  ))}
+                </ul>
+              ) : (
+                "None"
+              )}
+              {(env.scan_key || env.run_key) && (
+                <Link
+                  href={`/projects/${p.id}/non-functional/${env.scan_key ? `checks/${env.scan_key}` : `load-tests/${env.run_key}`}`}
+                  className="mt-1 block font-medium text-navy-700 underline underline-offset-2"
+                >
+                  Open {env.scan_key ?? env.run_key}
+                </Link>
+              )}
+            </Side>
+          ) : (
           <Side label={`Occurrences (${d.occurrences.length})`}>
             {d.occurrences.length ? (
               <ul>
@@ -324,11 +364,14 @@ function DefectPage() {
               "None"
             )}
           </Side>
+          )}
           <Side label="Source">
             {d.source === "analysis" ? (
               <span className="flex flex-wrap items-center gap-2">
                 Drafted by the Defect Analysis Agent <GeneratedByLabel generatedBy={d.analysis?.generated_by ?? "rules"} />
               </span>
+            ) : nf ? (
+              `${SOURCE_TEXT[d.source]} · drafted from ${env.scan_key ?? env.run_key ?? "a check"}`
             ) : (
               "Raised by a person"
             )}
@@ -344,6 +387,7 @@ function DefectPage() {
         projectId={p.id}
         duplicates={(others.data?.items ?? []).filter((x) => x.id !== d.id).map((x) => ({ key: x.key, summary: x.summary }))}
         onReject={(v) => act("reject", v)}
+        nonFunctional={isNonFunctional(d.source)}
       />
     </div>
   );

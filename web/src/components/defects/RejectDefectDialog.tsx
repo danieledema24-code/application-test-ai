@@ -4,10 +4,10 @@
 // "Works as intended" points to the test case: if the application is right, the expected result is wrong.
 
 import { useEffect, useState } from "react";
-import { Button, InlineError, LinkButton, Modal, SelectField, TextArea } from "@/components/ui";
-import { REJECT_REASONS, type RejectReason } from "@/lib/defects";
+import { Button, Checkbox, InlineError, LinkButton, Modal, SelectField, TextArea } from "@/components/ui";
+import { ACCEPTED_RISK_REASON, REJECT_REASONS, type RejectReason } from "@/lib/defects";
 
-export type RejectInput = { reason: RejectReason; comment: string; duplicate_of: string | null };
+export type RejectInput = { reason: RejectReason; comment: string; duplicate_of: string | null; mark_findings?: boolean };
 
 export function RejectDefectDialog({
   open,
@@ -18,6 +18,7 @@ export function RejectDefectDialog({
   projectId,
   duplicates,
   onReject,
+  nonFunctional = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -29,10 +30,13 @@ export function RejectDefectDialog({
   /** Other defects a duplicate can point to. */
   duplicates: { key: string; summary: string }[];
   onReject: (v: RejectInput) => Promise<void>;
+  /** Accessibility, security or performance drafts: "Accepted risk" is offered (design P5 §10). */
+  nonFunctional?: boolean;
 }) {
   const [reason, setReason] = useState<RejectReason | "">("");
   const [dup, setDup] = useState("");
   const [comment, setComment] = useState("");
+  const [markFindings, setMarkFindings] = useState(false);
   const [err, setErr] = useState<{ reason?: string; dup?: string; comment?: string }>({});
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -41,6 +45,7 @@ export function RejectDefectDialog({
       setReason("");
       setDup("");
       setComment("");
+      setMarkFindings(false);
       setErr({});
       setError(null);
     }
@@ -54,7 +59,7 @@ export function RejectDefectDialog({
     if (Object.keys(e).length || !reason) return;
     setBusy(true);
     try {
-      await onReject({ reason, comment: comment.trim(), duplicate_of: reason === "duplicate" ? dup : null });
+      await onReject({ reason, comment: comment.trim(), duplicate_of: reason === "duplicate" ? dup : null, ...(reason === "accepted_risk" ? { mark_findings: markFindings } : {}) });
     } catch (x) {
       setError(x);
     } finally {
@@ -84,7 +89,7 @@ export function RejectDefectDialog({
           <legend className="mb-1 text-body font-medium text-fg-strong">
             Reason<span aria-hidden className="text-danger-fg"> *</span>
           </legend>
-          {REJECT_REASONS.map((r) => (
+          {(nonFunctional ? [...REJECT_REASONS, ACCEPTED_RISK_REASON] : REJECT_REASONS).map((r) => (
             <label key={r.value} className="flex min-h-11 items-center gap-2">
               <input type="radio" name="reject-reason" className="h-4 w-4" checked={reason === r.value} onChange={() => setReason(r.value)} />
               {r.label}
@@ -111,6 +116,14 @@ export function RejectDefectDialog({
             </p>
             <p className="mt-1 text-small text-fg-muted">Editing it moves the case back to draft and Gate 5 needs approval again. Nothing changes automatically.</p>
           </div>
+        )}
+        {reason === "accepted_risk" && (
+          <Checkbox
+            label="Also mark the findings as Accepted risk with this comment"
+            description="Otherwise the next check reports the same problem again as an occurrence."
+            checked={markFindings}
+            onChange={(e) => setMarkFindings(e.target.checked)}
+          />
         )}
         <TextArea label="Comment" required value={comment} onChange={(e) => setComment(e.target.value)} rows={3} error={err.comment} maxLength={2000} />
         {error !== null && <InlineError error={error} />}

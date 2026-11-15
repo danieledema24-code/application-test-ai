@@ -76,4 +76,7 @@ async def chain(
     project_id: uuid.UUID, s: ScopedSession, _p: CurrentPrincipal, key: str = Query(min_length=3, max_length=40)
 ) -> dict[str, Any]:
     await c.project_of(s, project_id)
-    return trace.chain(await trace.load(s, project_id), key)
+    t = await trace.load(s, project_id)
+    if trace.is_nf_key(key):
+        return await trace.nf_chain(s, t, key)
+    return trace.chain(t, key)

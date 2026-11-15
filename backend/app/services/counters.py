@@ -19,9 +19,13 @@ PREFIXES = {
     "approval": "APR",  # P4-05
     "run": "RUN",  # P4-06
     "defect": "DEF",  # P4-09
+    "a11y_scan": "A11Y",  # P5-02 (findings: A11Y-0001-01)
+    "security_scan": "SEC",  # P5-03 (findings: SEC-0001-01)
+    "perf_profile": "PRF",  # P5-01b
+    "perf_run": "PERF",  # P5-01b
 }
 # Key widths per api-contracts.md (REQ-0001, AC-0001, DOR-01, RISK-001, TS-001, TP-001, DOC-001, PROP-0001).
-WIDTHS = {"DOR": 2, "DOD": 2, "RISK": 3, "TS": 3, "TP": 3, "DOC": 3}
+WIDTHS = {"DOR": 2, "DOD": 2, "RISK": 3, "TS": 3, "TP": 3, "DOC": 3, "PRF": 2}
 
 
 async def next_number(session: AsyncSession, org_id: uuid.UUID, project_id: uuid.UUID, kind: str) -> int:

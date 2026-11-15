@@ -275,18 +275,57 @@ Changes to existing tables in `0016`: `gate_decisions` + `subject_type` (null/`e
 - `test_cases.execution_status` now also takes `flaky`, `error`, `blocked` and `skipped` from the latest result per lineage.
 - Manual results (P4-14) were not built: `0017_manual_results` is not written.
 
+### Non-functional testing (Phase 5)
+
+Migration `0017_nonfunctional` (written by P5-00 with every column P5-01b, P5-02, P5-03 and P5-07 use created up front; see roadmap Phase 5). All new tables are tenant tables (`organisation_id`, `project_id`).
+
+| Table | Key columns | Indexes / constraints |
+|---|---|---|
+| `quality_scans` (P5-02, P5-03) | `key` (A11Y-0001 / SEC-0001), `kind` (accessibility/security), `stage_run_id?`, `config JSON` (pages, viewports, keyboard pass, signed-in pages), `status` (queued/running/completed/partial/failed/cancelled), `summary JSON` (computed counts), `not_checked JSON` ([{item, reason}]), `tool_versions JSON`, `requested_by?`, `started_at?`, `finished_at?`, `error?` | unique `(project_id, key)`; `(project_id, kind, created_at)`; `(stage_run_id)` |
+| `quality_findings` (P5-02, P5-03) | `key` (A11Y-0001-01), `scan_id`, `kind`, `rule_id`, `severity` (critical/serious/moderate/minor for accessibility; high/medium/low/info for security), `title`, `page_id?`, `url`, `viewport?`, `nodes JSON` (≤ 20 per rule per page: target, redacted HTML ≤ 500 chars, summary), `references JSON`, `fingerprint` (rule + normalised path + target), `status` (open/accepted_risk/false_positive/fixed), `status_reason?`, `status_by?`, `defect_id?`, `evidence_refs JSON`, `mapped JSON` (feature, requirement and case lineages) | unique `(scan_id, key)`; `(project_id, kind, status)`; `(project_id, fingerprint)`; `(scan_id)`, `(page_id)`, `(defect_id)` |
+| `performance_profiles` (P5-01b) | `key` (PRF-01), `name`, `type` (load/stress/spike/soak), `stages JSON` ([{duration_s, target_vus}]), `max_rps`, `think_time_ms JSON` ({min, max}), `targets JSON` ([{path, weight, page_id?}]), `thresholds JSON` ([{metric p95/p99/error_rate, scope all/path, path?, op, value, source requirement_lineage_id/default}]), `status` (draft/ready/stale/retired), `stale_reason?`, `generated_by` (rules/ai/human/mixed), `rationale?`, `created_by?`, `version` (optimistic concurrency) | unique `(project_id, key)`; `(project_id, status)` |
+| `performance_runs` (P5-01b) | `key` (PERF-0001), `profile_id`, `profile_snapshot JSON`, `profile_hash`, `stage_run_id?`, `approval_id?` (no FK; `approvals.performance_run_id` is the FK side), `engine JSON` ({name, version}), `status` (awaiting_approval/rejected/expired/queued/running/passed/failed/stopped/aborted/error), `metrics JSON` (overall and per target; `live` while running), `threshold_results JSON`, `aborted_reason?`, `stopped_by?`, `requested_by?`, `started_at?`, `finished_at?`, `error?` | unique `(project_id, key)`; `(project_id, created_at)`; `(project_id, status)`; `(profile_id)`, `(stage_run_id)` |
+
+Changes to existing tables in `0017`:
+- `approvals.performance_run_id` (nullable FK, indexed). Kind `load_test` already existed in `0016`.
+- `evidence.performance_run_id` gains its FK and index; new `evidence.quality_scan_id` (nullable FK, indexed). The `evidence.kind` CHECK adds `perf_summary`, `perf_timeseries` and `security_headers` (`axe_result` and `k6_summary` already existed).
+- `defects.source` CHECK adds `accessibility`, `security` and `performance`.
+- `workflow_stages.stage_key` and `stage_runs.stage_key` CHECKs add `accessibility` and `security_assessment` (`performance` already existed).
+- New `organisations.settings JSON NOT NULL`, server default `{"load_ceiling": {"vus": 20, "rps": 20, "duration_s": 300}}` (decision D18), so every existing organisation has the default ceiling after the upgrade. New organisations get the same value from the ORM default.
+- Counter kinds `a11y_scan` (A11Y), `security_scan` (SEC), `perf_profile` (PRF, two digits) and `perf_run` (PERF) in `services/counters.py` (no migration: `project_counters.kind` is a plain string).
+
+**As built (P5-00) — differences from the roadmap's list:**
+- `organisations` had no `settings` column before Phase 5 (only `limits`, used for the page cap and assistant quota); `0017` creates it.
+- Added beyond the roadmap: `performance_profiles.stale_reason`, `rationale`, `created_by`; `performance_runs.stage_run_id` and `error`. `quality_scans.stage_run_id` is nullable (a queued scan may exist before its stage run). `performance_profiles.version` is SQLAlchemy's `version_id_col`; whether "editing creates a new version" also keeps the old row is P5-01b's call.
+- Workflow rows for the two new stage keys are **not** written by the migration. The startup data step `services.projects.ensure_stage_rows` adds a `not_started` row for every missing stage key of every project (idempotent; new projects get all rows from `init_stages`). This way a Phase 4 process still running on a migrated database never reads a stage key it doesn't know. Until the new code has started once, an old project has no `accessibility`/`security_assessment` row.
+- Downgrade to `0016` deletes Phase 5 rows that can't exist under the Phase 4 CHECKs and foreign keys: evidence of the new kinds or linked to a scan or run, `load_test` approvals of performance runs, defects with a non-functional source (with their G8 decisions, links and occurrences), and the stage rows and stage runs of the two new stage keys. Stored files are left in storage.
+- Tested in `tests/integration/test_p5_foundation.py`: a database with Phase 4 rows (run, result, approval, defect, evidence, report) goes `0016 → head`, every Phase 4 row is unchanged on its Phase 4 columns, the batch-rebuilt `evidence` keeps its CHECK and FKs, every organisation has the default ceiling, then `downgrade base → upgrade head` succeeds.
+
+**As built (P5-01b, P5-02, P5-03) — no new migration:**
+- Non-functional defect occurrences live in `defects.environment.occurrences` (`[{scan_key|run_key, url?, measured?, at}]`) plus `quality_findings.defect_id`, because `defect_occurrences` requires an `execution_result_id`. Grouping keys: `environment.rule_id` (accessibility/security) and `environment.threshold_key` (`p95|/path`, performance).
+- Finding extras without columns are in `quality_findings.mapped`: `seen_before` (key of the earlier finding with the same fingerprint), `reopened`, `details` (security `observed`, `why`, `fix`, `subject`).
+- Profile versions: `performance_profiles.version` is the `version_id_col` (it also bumps on status changes); every saved version is kept in `entity_revisions` (`entity_type = "performance_profile"`), read by `?v=`.
+- Scan cancellation is `quality_scans.config.cancel_requested`; run stop is `performance_runs.stopped_by` (as built, R3-BUG-01: set by one conditional `UPDATE ... WHERE status IN (queued, running)`, never inside `metrics`, so a progress write can't erase it). Live progress is `performance_runs.metrics.live` / `live_series` (numbers only), written with a single `json_set` (SQLite) / `jsonb ||` (PostgreSQL) that touches only those two keys.
+
+**As built (P5-04a, P5-05c) — migration `0018_retention`:**
+- `evidence.purged_at` (nullable): set when the retention clean-up deleted the stored file. The row, its metadata and `sha256` stay; the content URL then answers 410.
+- `projects.purge_scheduled_at` (nullable) and `projects.purge_requested_by` (nullable FK to `users`, RESTRICT): the owner's scheduled permanent deletion of an archived project, cancellable until then; unarchiving clears both. The worker's purge (every minute) deletes the project's rows in every table, children first, and its stored files once the time has passed; `audit_logs` rows stay (no foreign key on `project_id`).
+- `qa_reports.report_type` CHECK adds `accessibility` and `security` (batch-recreated on SQLite). Downgrade to `0017` deletes reports of those two types (their files stay in storage).
+- Retention of load test time series also empties `performance_runs.metrics.timeseries` and sets `metrics.timeseries_removed_at` (no column).
+- No column for the retention policy: it lives in `organisations.settings.retention` (`{videos_traces_days, screenshots_days, timeseries_days}`); the defaults 30/90/90 are only a suggestion until saved.
+
 ### Performance and reports
 
 | Table | Phase | Key columns | Indexes |
 |---|---|---|---|
-| `performance_runs` | P5 | `project_id`, `approval_id`, `profile JSON` (type, vus, ramp, duration, thresholds, max_rps, target), `script_storage_key`, `status`, `metrics JSON` (p50/p90/p95/p99, rps, error_rate), `threshold_results JSON`, `aborted_reason?` | `(project_id, created_at desc)` |
+| `performance_runs` | P5 | Superseded by the Phase 5 table above ("Non-functional testing (Phase 5)"). | – |
 | `qa_reports` | P1 | `project_id`, `report_type` (discovery, requirements_spec, test_strategy, test_plan, test_case_spec, rtm, execution, defect, performance, completion, release_readiness), `version`, `stage_run_id?`, `source_versions JSON`, `content JSON` (structured, source of truth), `files JSON` ([{format, storage_key, size, sha256}]), `ai_sections JSON` (labelled), `generated_by`, `created_by` | `(project_id, report_type, version desc)` |
 
 ### Evidence, AI and infrastructure
 
 | Table | Phase | Key columns | Indexes |
 |---|---|---|---|
-| `evidence` | P1 | `project_id`, `kind`, `storage_key`, `mime`, `size`, `sha256`, `source_url?`, `viewport?`, `scan_session_id?`, `page_id?`, `execution_result_id?` (P4), `performance_run_id?` (P5), `captured_at`, `metadata JSON`, no `updated_at` (immutable) | `(project_id, kind)`, `(scan_session_id)`, `(page_id)` |
+| `evidence` | P1 | `project_id`, `kind`, `storage_key`, `mime`, `size`, `sha256`, `source_url?`, `viewport?`, `scan_session_id?`, `page_id?`, `execution_result_id?` (P4), `performance_run_id?` and `quality_scan_id?` (P5), `captured_at`, `metadata JSON`, no `updated_at` (immutable) | `(project_id, kind)`, `(scan_session_id)`, `(page_id)` |
 | `knowledge_items` | P1 | `project_id`, `kind`, `title`, `content`, `provenance`, `evidence_refs JSON`, `source`, `status`, `version`, `superseded_by?` | `(project_id, kind, status)` |
 | `agent_tasks` | P1 | `project_id`, `stage_run_id?`, `agent_key`, `status` (queued/running/succeeded/failed/cancelled/paused), `input JSON` (ids + parameters, no secrets), `output_ref JSON`, `error JSON`, `attempt`, `llm JSON` (provider, model, tokens_in/out, repairs, fallback_used), `started_at`, `finished_at`, `heartbeat_at` | `(project_id, created_at desc)`; partial unique on `(project_id, agent_key, stage_run_id)` where status in (queued, running) — emulated by service check + unique `dedupe_key` |
 | `agent_events` | P1 | `id BIGINT autoincrement` (monotonic cursor; not UUID), `organisation_id`, `project_id`, `agent_task_id?`, `stage_key?`, `agent_key?`, `type`, `level` (info/warn/error), `message` (user-readable), `data JSON`, `created_at` | `(project_id, id)`, `(organisation_id, id)` |

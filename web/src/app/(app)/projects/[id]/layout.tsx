@@ -11,6 +11,7 @@ import { LifecycleProgress } from "@/components/domain/LifecycleProgress";
 import { useExecSummary } from "@/components/execution/hooks";
 import { ProjectProvider, useProject } from "@/components/workspace/ProjectContext";
 import { ProjectHeader } from "@/components/workspace/ProjectHeader";
+import { DeletionCallout } from "@/components/settings/ArchiveDelete";
 import { CancelDiscoveryDialog, RescanDialog } from "@/components/workspace/ProjectDialogs";
 
 function Frame({ section, children }: { section: string; children: React.ReactNode }) {
@@ -34,6 +35,7 @@ function FrameBody({ overview, children }: { overview: boolean; children: React.
   return (
     <div className="space-y-6">
       <ProjectHeader asHeading={overview} />
+      <DeletionCallout />
       {!overview && <LifecycleProgress variant="compact" workflow={p.workflow} projectId={p.id} subjects={subjects} />}
       <div>{children}</div>
     </div>

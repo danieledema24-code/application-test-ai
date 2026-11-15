@@ -41,6 +41,11 @@ class Project(IdMixin, TenantMixin, TimestampMixin, Base):
     settings: Mapped[dict[str, Any]] = mapped_column(default=json_default_dict)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     archived_at: Mapped[datetime | None] = mapped_column(default=None)
+    # P5-05c (migration 0018): an owner's scheduled purge of an archived project; cancellable until it runs.
+    purge_scheduled_at: Mapped[datetime | None] = mapped_column(default=None)
+    purge_requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), default=None
+    )
     version: Mapped[int] = mapped_column(Integer, default=1)
 
     __mapper_args__ = {"version_id_col": version}  # noqa: RUF012 - SQLAlchemy declarative attribute

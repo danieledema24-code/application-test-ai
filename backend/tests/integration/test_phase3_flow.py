@@ -410,7 +410,7 @@ async def test_g5_needs_can_approve_and_freezes_reports(flow: Flow) -> None:
     assert set(p3) == {"test_case_spec", "rtm"}
     for x in p3.values():
         assert x["status"] == "ready" and x["frozen"], x
-        assert x["formats"] == ["json", "html", "pdf", "csv"]
+        assert x["formats"] == ["json", "html", "pdf", "csv", "xlsx"]
         assert x["approval"]["gate"] == "G5" and x["approval"]["status"] == "approved"
     flow.state["reports"] = p3
     items = await flow.events()
@@ -511,6 +511,14 @@ async def test_reports_counts_csv_and_no_credentials(flow: Flow) -> None:
                 if x["report_type"] == "requirements_spec")  # fmt: skip
     bad = await flow.get(f"/reports/{spec['id']}/download?format=csv")
     assert bad.status_code == 422
+    # P5-04b: XLSX only for table reports; the spec's workbook rows equal its CSV, with the DRAFT band until G5.
+    bad = await flow.get(f"/reports/{spec['id']}/download?format=xlsx")
+    assert bad.status_code == 422 and bad.json()["error"]["message"] == "XLSX is available for table reports"
+    from openpyxl import load_workbook
+
+    book = load_workbook(io.BytesIO(await _download(flow, rep["id"], "xlsx")))
+    assert book["Test cases"].max_row == len(rows)
+    assert all(c.data_type != "f" for row in book["Test cases"].iter_rows() for c in row)
     for x in (rep["id"], rtm["id"]):
         for fmt in ("json", "html", "csv"):
             assert PREFILLED_SECRET.encode() not in await _download(flow, x, fmt)

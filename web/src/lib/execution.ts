@@ -183,7 +183,7 @@ export type Analysis = {
 
 export type StepRun = { n: number; title: string; status: "passed" | "failed" | "skipped"; duration_ms: number; error: string | null };
 export type AttemptDetail = { attempt: number; status: string; duration_ms: number; steps: StepRun[]; error: string | null };
-export type ResultEvidence = { id: Uuid; kind: string; mime: string; size: number; captured_at: IsoDate; content_url: string; attempt: number | null; masked?: boolean };
+export type ResultEvidence = { id: Uuid; kind: string; mime: string; size: number; captured_at: IsoDate; content_url: string; attempt: number | null; masked?: boolean; removed?: string | null };
 
 export type ResultDetail = TestRow & {
   run: { id: Uuid; key: string; status: RunStatus } | null;

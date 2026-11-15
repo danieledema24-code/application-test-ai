@@ -17,6 +17,8 @@ import { Card, CardBody, CardHeader, Skeleton } from "@/components/ui";
 import { gateApproved, requirementsStages, useAllRequirements, useAllRisks } from "@/components/requirements/hooks";
 import { lastSignInText } from "@/components/domain/Credentials";
 import { LifecycleProgress } from "@/components/domain/LifecycleProgress";
+import { NonFunctionalGlance, OptionalChecks, useNfOverview } from "@/components/nonfunctional/Summary";
+import { nfAttentionRows } from "@/lib/nonfunctional";
 import { AgentActivityFeed } from "@/components/domain/AgentActivityFeed";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { useExecSummary } from "@/components/execution/hooks";
@@ -140,6 +142,7 @@ function Attention() {
   const proposals = useApi<Page<Proposal>>(`/projects/${p.id}/assistant/proposals`, { status: "pending", limit: 100 }, { shouldRetryOnError: false });
   const secrets = useApi<SecretMeta[]>(`/projects/${p.id}/secrets`, undefined, { shouldRetryOnError: false });
   const cred = secrets.data?.find((x) => x.name === "scan_credentials" || x.kind === "login_credentials");
+  const nf = useNfOverview(p.id, p.workflow);
   const rows = attentionRows({
     projectId: p.id,
     wf: p.workflow,
@@ -152,6 +155,8 @@ function Attention() {
     exec,
     scripts: automation.data?.bundle ? scriptCounts(automation.data) : null,
     viewer: role === "viewer" || role === null,
+    // Phase 5 (design P5 §4.5): load tests waiting or missed, severe accessibility findings, out-of-date checks.
+    nonFunctional: nfAttentionRows(nf.overview, p.id, canApprove, role === "viewer" || role === null),
   });
   const shown = all ? rows : rows.slice(0, 5);
   return (
@@ -165,7 +170,7 @@ function Attention() {
             {shown.map((r) => (
               <li key={r.text} className="flex flex-wrap items-baseline justify-between gap-2 text-body text-fg">
                 <span>{r.text}</span>
-                {r.href && (
+                {r.href && r.action && (
                   <Link href={r.href} className="shrink-0 font-medium text-navy-700 underline underline-offset-2">
                     {r.action}
                   </Link>
@@ -424,6 +429,8 @@ export default function ProjectOverviewPage() {
     defects: `/projects/${p.id}/defects?view=review`,
   };
   const exec = useExecSummary(p.id, p.workflow);
+  const nf = useNfOverview(p.id, p.workflow);
+  const { canApprove } = useAuth();
   if (exec?.waiting[0]) stageHref.execution = `/projects/${p.id}/execution/${exec.waiting[0]}`;
   useEffect(() => {
     if (p.project) document.title = `${p.project.name} · QA Analyst`;
@@ -449,6 +456,7 @@ export default function ProjectOverviewPage() {
           ) : (
             <Skeleton className="h-16" />
           )}
+          {p.workflow && <OptionalChecks projectId={p.id} g2={nf.g2} overview={nf.overview} canApprove={canApprove} />}
         </CardBody>
       </Card>
       <div className="grid gap-6 lg:grid-cols-3">
@@ -473,6 +481,7 @@ export default function ProjectOverviewPage() {
           <AutomationGlance />
           <LastRunGlance exec={exec} />
           <DefectsGlance exec={exec} />
+          <NonFunctionalGlance projectId={p.id} g2={nf.g2} overview={nf.overview} />
           <Scope />
         </div>
       </div>

@@ -10,6 +10,8 @@ export interface VersionReport {
   playwright: string | null;
   browsers_installed: string[];
   browsers_path: string;
+  /** P5-01a: the `qa perf` load generator ships with the toolkit and has its version. */
+  loadgen: string;
 }
 
 function readJson(file: string): Record<string, unknown> | null {
@@ -54,5 +56,6 @@ export function version(): VersionReport {
     playwright: pw ? String(pw.version) : null,
     browsers_installed: installed,
     browsers_path: dir,
+    loadgen: String(pkg?.version ?? "unknown"),
   };
 }

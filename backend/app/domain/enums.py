@@ -52,6 +52,9 @@ class StageKey(StrEnum):
     defects_summary = "defects_summary"
     release_readiness = "release_readiness"
     performance = "performance"
+    # Phase 5 (P5-00): optional branches after G2, never queued by advance().
+    accessibility = "accessibility"
+    security_assessment = "security_assessment"
 
 
 class StageStatus(StrEnum):
@@ -168,6 +171,10 @@ class EvidenceKind(StrEnum):
     report_render = "report_render"
     document_file = "document_file"
     document_text = "document_text"
+    # Phase 5 (P5-00): load-test summary and one-second time series, observed response headers of a page.
+    perf_summary = "perf_summary"
+    perf_timeseries = "perf_timeseries"
+    security_headers = "security_headers"
 
 
 class KnowledgeKind(StrEnum):
@@ -198,6 +205,8 @@ class ReportType(StrEnum):
     performance = "performance"
     completion = "completion"
     release_readiness = "release_readiness"
+    accessibility = "accessibility"
+    security = "security"
 
 
 class ReportStatus(StrEnum):
@@ -535,3 +544,71 @@ class DefectStatus(StrEnum):
 class DefectSource(StrEnum):
     analysis = "analysis"
     user = "user"
+    # Phase 5 (P5-00): drafts from non-functional findings (decision D20).
+    accessibility = "accessibility"
+    security = "security"
+    performance = "performance"
+
+
+# ---------------------------------------------------------------- Phase 5: non-functional testing
+
+
+class QualityScanKind(StrEnum):
+    accessibility = "accessibility"
+    security = "security"
+
+
+class QualityScanStatus(StrEnum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    partial = "partial"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class FindingSeverity(StrEnum):
+    """Accessibility uses critical/serious/moderate/minor (axe impact); security uses high/medium/low/info."""
+
+    critical = "critical"
+    serious = "serious"
+    moderate = "moderate"
+    minor = "minor"
+    high = "high"
+    medium = "medium"
+    low = "low"
+    info = "info"
+
+
+class FindingStatus(StrEnum):
+    open = "open"
+    accepted_risk = "accepted_risk"
+    false_positive = "false_positive"
+    fixed = "fixed"
+
+
+class PerfProfileType(StrEnum):
+    load = "load"
+    stress = "stress"
+    spike = "spike"
+    soak = "soak"
+
+
+class PerfProfileStatus(StrEnum):
+    draft = "draft"
+    ready = "ready"
+    stale = "stale"
+    retired = "retired"
+
+
+class PerfRunStatus(StrEnum):
+    awaiting_approval = "awaiting_approval"
+    rejected = "rejected"
+    expired = "expired"
+    queued = "queued"
+    running = "running"
+    passed = "passed"
+    failed = "failed"
+    stopped = "stopped"
+    aborted = "aborted"
+    error = "error"

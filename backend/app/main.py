@@ -27,8 +27,10 @@ from app.api.routers import (
     events,
     evidence,
     execution,
+    hardening,
     health,
     members,
+    nonfunctional,
     projects,
     reports,
     requirements,
@@ -128,11 +130,13 @@ def create_app(
 
         await backfill(context)
         # P3-00 data step (decision D1): G5 becomes a required sign-off on existing projects (idempotent).
-        from app.services.projects import apply_g6_hybrid_default, require_g5_signoff
+        from app.services.projects import apply_g6_hybrid_default, ensure_stage_rows, require_g5_signoff
 
         await require_g5_signoff(context)
         # P4-00 data step (decision D10): G6 defaults to the hybrid policy on existing projects (idempotent).
         await apply_g6_hybrid_default(context)
+        # P5-00 data step: workflow rows for the Phase 5 stage keys on existing projects (idempotent).
+        await ensure_stage_rows(context)
         worker: Worker | None = None
         run_worker = start_worker if start_worker is not None else settings.worker_mode == "inline"
         if run_worker:
@@ -212,6 +216,7 @@ def create_app(
         automation,
         execution,
         defects,
+        nonfunctional,
         traceability,
         secrets,
         documents,
@@ -221,6 +226,7 @@ def create_app(
         reports,
         events,
         dashboard,
+        hardening,
     ):
         app.include_router(r.router, prefix="/api/v1")
     return app

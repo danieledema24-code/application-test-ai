@@ -62,6 +62,7 @@ class ToolkitVersion:
     toolkit: str
     playwright: str | None
     browsers: list[str]
+    loadgen: str | None = None  # P5-01a: the `qa perf` load generator's version (None before 0.5.0)
 
 
 @dataclass(frozen=True)
@@ -199,6 +200,7 @@ class Toolkit:
                 toolkit=str(d.get("toolkit", "")),
                 playwright=str(d["playwright"]) if d.get("playwright") else None,
                 browsers=[str(b) for b in d.get("browsers_installed", [])],
+                loadgen=str(d["loadgen"]) if d.get("loadgen") else None,
             )
         except (ToolkitError, OSError) as exc:
             log.info("automation toolkit unavailable: %s", str(exc).splitlines()[0][:200])

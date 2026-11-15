@@ -10,8 +10,9 @@ import { Button, Card, CardBody, CardHeader, InlineError, TabPanel, Tabs, useToa
 import { ScanSettingsFields, toForm, validateScanSettings, type ScanSettingsErrors, type ScanSettingsForm } from "@/components/domain/ScanSettingsFields";
 import { CredentialsCard, projectHosts } from "@/components/domain/Credentials";
 import { useProject } from "@/components/workspace/ProjectContext";
+import { ArchiveDelete } from "@/components/settings/ArchiveDelete";
 
-const VIEWS = ["scan", "credentials"] as const;
+const VIEWS = ["scan", "credentials", "archive"] as const;
 type View = (typeof VIEWS)[number];
 
 /** Default scan settings for future scans (PATCH /projects/{id} with the project version). */
@@ -95,6 +96,7 @@ function Settings() {
           tabs={[
             { id: "scan", label: "Scan settings" },
             { id: "credentials", label: "Test credentials" },
+            { id: "archive", label: "Archive and delete" },
           ]}
           value={view}
           onChange={(v) => router.replace(`/projects/${p.id}/settings?view=${v}`, { scroll: false })}
@@ -104,6 +106,8 @@ function Settings() {
         <TabPanel id={view} idPrefix="settings">
           {view === "scan" ? (
             <ScanSettingsCard />
+          ) : view === "archive" ? (
+            <ArchiveDelete />
           ) : (
             <CredentialsCard projectId={p.id} secrets={secrets.data} hosts={projectHosts(p.project)} onChanged={() => void secrets.mutate()} onRescan={p.openRescan} />
           )}

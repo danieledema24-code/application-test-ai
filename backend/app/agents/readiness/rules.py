@@ -46,6 +46,10 @@ class Facts:
     executed: dict[str, list[str]] | None = None
     # Phase 4 (None = no defects yet): open defects as (key, severity), for "No open critical or high defects"
     open_defects: list[tuple[str, str]] | None = None
+    # Phase 5 (P5-07; None = no check or judged load test yet):
+    # accessibility/security: {"scan_key", "open": [(finding key, severity)], "accepted": [(key, by, reason)]}
+    # performance: {"run_key", "approved_at", "missed": [text], "thresholds": n}
+    nf: dict[str, dict[str, Any] | None] = field(default_factory=dict)
 
 
 DOR, DOD = ReadinessKind.dor, ReadinessKind.dod
@@ -84,6 +88,45 @@ LATER_PHASE_DETAIL: dict[str, str] = {}
 FORM_CATEGORIES = frozenset({"form_input", "validation"})
 
 
+# P5-07: DoD items that mention accessibility, security or performance become evaluable by these rules, whether a
+# template wrote them or a person did (design §12.2). Order matters: the first word found wins.
+NF_RULES = (
+    ("dod.nf.accessibility", ("accessib", "wcag", "screen reader", "keyboard")),
+    ("dod.nf.security", ("security", "secure", "https", "header")),
+    ("dod.nf.performance", ("performance", "load test", "under load", "response time", "page speed", "fast", "slow")),
+)
+NOT_EVALUABLE = "Not evaluable: no check has run"
+
+
+def nf_rule_for(kind: ReadinessKind, text: str) -> str | None:
+    if kind != DOD:
+        return None
+    low = text.lower()
+    return next((rule for rule, words in NF_RULES if any(w in low for w in words)), None)
+
+
+def _nf(rule_id: str, facts: Facts) -> dict[str, Any]:
+    kind = rule_id.rsplit(".", 1)[1]
+    data = facts.nf.get(kind)
+    if data is None:
+        return _result("unknown", NOT_EVALUABLE if kind != "performance" else "Not evaluable: no load test has run")
+    if kind == "performance":
+        if data["missed"]:
+            return _result("not_met", f"Not met: {_names(data['missed'])} in {data['run_key']}")
+        when = f" (approved {data['approved_at']})" if data.get("approved_at") else ""
+        return _result("met", f"Met: all thresholds met in {data['run_key']}{when}")
+    severe = ("critical", "serious") if kind == "accessibility" else ("high", "medium")
+    bad = [(k, sev) for k, sev in data["open"] if sev in severe]
+    if bad:
+        named = _names([f"{k} ({sev.capitalize()})" for k, sev in bad])
+        return _result("not_met", f"Not met: {named} {'is' if len(bad) == 1 else 'are'} open")
+    accepted = [f"{k} accepted as a risk by {by} ('{why}')" for k, by, why in data.get("accepted") or []]
+    what = "critical or serious accessibility" if kind == "accessibility" else "high or medium security"
+    return _result(
+        "met", f"Met: no open {what} findings in {data['scan_key']}" + (f"; {_names(accepted)}" if accepted else "")
+    )
+
+
 def _result(status: str, detail: str, evidence: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {"status": status, "detail": detail, "evidence": evidence or []}
 
@@ -94,6 +137,8 @@ def evaluate(rule_id: str | None, facts: Facts, *, requirement_id: str | None = 
         return None
     if rule_id in LATER_PHASE_DETAIL:
         return _result("unknown", LATER_PHASE_DETAIL[rule_id])
+    if rule_id.startswith("dod.nf."):
+        return _nf(rule_id, facts)
     reqs = facts.requirements
     if requirement_id is not None:
         reqs = [r for r in reqs if r["id"] == requirement_id]

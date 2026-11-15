@@ -45,6 +45,7 @@ from app.domain.stages import (
     merged_policy,
 )
 from app.schemas import api
+from app.services.hardening import removed_text
 
 
 def user_ref(u: User | None) -> api.UserRef | None:
@@ -71,6 +72,7 @@ def evidence_link(ctx: AppContext, ev: Evidence) -> api.EvidenceLink:
         viewport=ev.viewport,
         source_url=ev.source_url,
         page_id=ev.page_id,
+        removed=removed_text(ev.purged_at) if ev.purged_at else None,
     )
 
 
@@ -746,6 +748,7 @@ async def project_summary(session: AsyncSession, project: Project) -> api.Projec
         current_activity=activity,
         requirements=requirements,
         last_run=last_run,
+        purge_scheduled_at=project.purge_scheduled_at,
     )
 
 

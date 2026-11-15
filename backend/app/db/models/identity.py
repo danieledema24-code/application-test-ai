@@ -12,6 +12,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, CreatedMixin, IdMixin, TenantMixin, TimestampMixin
 from app.db.types import json_default_dict, str_enum
 from app.domain.enums import ActorType, Role
+from app.domain.performance.limits import default_org_settings
+
+# Server default of `organisations.settings` (migration 0017): the D18 load ceiling, so existing rows get it too.
+ORG_SETTINGS_SERVER_DEFAULT = '{"load_ceiling": {"vus": 20, "rps": 20, "duration_s": 300}}'
 
 
 class Organisation(IdMixin, TimestampMixin, Base):
@@ -21,6 +25,11 @@ class Organisation(IdMixin, TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(140), unique=True)
     plan: Mapped[str] = mapped_column(String(32), default="free")
     limits: Mapped[dict[str, Any]] = mapped_column(default=json_default_dict)
+    # Phase 5 (P5-00): owner/admin settings. `load_ceiling {vus, rps, duration_s}` (decision D18); retention arrives
+    # with P5-05c.
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        default=default_org_settings, server_default=ORG_SETTINGS_SERVER_DEFAULT
+    )
 
 
 class User(IdMixin, TimestampMixin, Base):

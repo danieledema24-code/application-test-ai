@@ -156,12 +156,15 @@ export function StatusPill({
   label,
   tone,
   dot = true,
+  wrap = false,
   className = "",
 }: {
   status: string | null | undefined;
   label?: string;
   tone?: Tone;
   dot?: boolean;
+  /** Let a long label wrap (narrow screens) instead of pushing the page sideways. */
+  wrap?: boolean;
   className?: string;
 }) {
   const t = tone || statusTone(status);
@@ -170,7 +173,7 @@ export function StatusPill({
   const spinning = key === "RUNNING" || key === "RENDERING" || key === "EXTRACTING" || key === "UPLOADING";
   return (
     <span
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES[t]} ${className}`}
+      className={`inline-flex items-center gap-1.5 ${wrap ? "max-w-full" : "whitespace-nowrap"} rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES[t]} ${className}`}
     >
       {Icon ? (
         <>

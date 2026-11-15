@@ -1,7 +1,9 @@
 // The toolkit CLI, called only by the backend (backend/app/automation/toolkit.py) and by the toolkit's tests.
-// Prints one JSON document on stdout. Exit codes: 0 = ok, 1 = validation failed / tests failed, 2 = could not run.
+// Prints one JSON document on stdout (`perf` also prints a progress line a second before it). Exit codes: 0 = ok,
+// 1 = validation failed / tests failed / load test stopped or aborted, 2 = could not run (or refused).
 import { parseArgs } from "node:util";
 import { init } from "./init.ts";
+import { perf } from "./perf/index.ts";
 import { run } from "./run.ts";
 import { validate } from "./validate.ts";
 import { version } from "./version.ts";
@@ -22,6 +24,14 @@ export async function main(argv: string[]): Promise<number> {
       progress: { type: "string" },
       grep: { type: "string" },
       live: { type: "boolean" },
+      // perf (P5-01a)
+      config: { type: "string" },
+      summary: { type: "string" },
+      control: { type: "string" },
+      "export-k6": { type: "string" },
+      "max-vus": { type: "string" },
+      "max-rps": { type: "string" },
+      "max-duration": { type: "string" },
     },
     strict: true,
   });
@@ -53,7 +63,12 @@ export async function main(argv: string[]): Promise<number> {
       print(report);
       return report.exit_code === 0 ? 0 : report.exit_code === 1 ? 1 : 2;
     }
+    case "perf": {
+      const { code, result } = await perf(values, version().toolkit);
+      print(result);
+      return code;
+    }
     default:
-      throw new Error(`Unknown command ${command ?? "(none)"}; use version, init, validate or run`);
+      throw new Error(`Unknown command ${command ?? "(none)"}; use version, init, validate, run or perf`);
   }
 }

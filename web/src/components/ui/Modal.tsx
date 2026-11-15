@@ -37,6 +37,7 @@ export function Modal({
     const node = ref.current;
     // Focus first form field, else first focusable, else dialog itself.
     const first =
+      node?.querySelector<HTMLElement>("[data-autofocus]") ||
       node?.querySelector<HTMLElement>("input:not([type=hidden]):not([disabled]), textarea, select") ||
       node?.querySelector<HTMLElement>(FOCUSABLE);
     (first || node)?.focus();
@@ -125,6 +126,7 @@ export function ConfirmDialog({
   danger,
   loading,
   onCancel,
+  focusConfirm,
 }: {
   open: boolean;
   onClose: () => void;
@@ -137,6 +139,8 @@ export function ConfirmDialog({
   cancelLabel?: string;
   danger?: boolean;
   loading?: boolean;
+  /** Start with focus on the confirm button (e.g. "Stop now", where confirming is the safe direction). */
+  focusConfirm?: boolean;
 }) {
   return (
     <Modal
@@ -149,7 +153,7 @@ export function ConfirmDialog({
           <Button variant="secondary" onClick={onCancel ?? onClose}>
             {cancelLabel}
           </Button>
-          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading}>
+          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading} data-autofocus={focusConfirm || undefined}>
             {confirmLabel}
           </Button>
         </>

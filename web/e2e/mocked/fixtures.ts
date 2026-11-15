@@ -75,6 +75,8 @@ export type MockState = {
   rescanned: boolean;
   /** Mobile captures differ from desktop (collapsed navigation). */
   responsiveDiffs: boolean;
+  /** Phase 5 retention: the page screenshots were removed (records keep `removed`). */
+  removedShots?: string;
   /** POST /auth/register answers 422 with this field error (raw validator text, as the backend sends it). */
   registerFieldError?: { field: string; message: string };
   /** Phase 2: the scan signed in with saved test credentials ("failed" = the site rejected them). */
@@ -431,7 +433,8 @@ export async function mockApi(page: Page, s: MockState) {
     if (path === "/scans/scan1") return json(route, 200, scan(s));
     // After a successful sign-in the account page was visited with the session (the sitemap node still says requires_auth).
     const signedInPages = s.signIn === "succeeded" ? PAGES.map((x) => (x.id === "pg3" ? { ...x, http_status: 200, auth_context: "authenticated" as const } : { ...x, auth_context: "anonymous" as const })) : PAGES;
-    if (path === "/scans/scan1/pages") return json(route, 200, { items: signedInPages, next_cursor: null });
+    if (path === "/scans/scan1/pages")
+      return json(route, 200, { items: s.removedShots ? signedInPages.map((x) => (x.screenshot ? { ...x, screenshot: { ...x.screenshot, removed: s.removedShots } } : x)) : signedInPages, next_cursor: null });
     if (path === "/scans/scan1/sitemap")
       return json(route, 200, { url: "https://acme.com/", path: "/", title: "Home", page_id: "pg1", children: [{ path: "/contact", title: "Contact us", page_id: "pg2" }, { path: "/account", title: "My account", requires_auth: true, ...(s.signIn === "succeeded" ? { page_id: "pg3" } : {}) }] });
     if (path === "/scans/scan1/features") return json(route, 200, FEATURES);
@@ -446,8 +449,8 @@ export async function mockApi(page: Page, s: MockState) {
         forms: base.id === "pg2" ? [{ name: "Contact", method: "post", action: "/contact", purpose_guess: "contact", submit_label: "Send", fields: [{ name: "name", type: "text", label: "Name", required: true, placeholder: null, constraints: { min: null, max: null, maxlength: null, pattern: null }, options: null, locator: "#name" }] }] : [],
         components: [{ kind: "button", role: "button", name: "Send", locator: "button[type=submit]", fingerprint: "b1", details: {} }],
         responsive: {
-          desktop: { viewport: "Desktop 1440 × 900", nav_collapsed: false, horizontal_overflow: false, screenshot: base.screenshot },
-          mobile: { viewport: "Mobile 390 × 844", nav_collapsed: s.responsiveDiffs, horizontal_overflow: false, screenshot: base.screenshot },
+          desktop: { viewport: "Desktop 1440 × 900", nav_collapsed: false, horizontal_overflow: false, screenshot: s.removedShots && base.screenshot ? { ...base.screenshot, removed: s.removedShots } : base.screenshot },
+          mobile: { viewport: "Mobile 390 × 844", nav_collapsed: s.responsiveDiffs, horizontal_overflow: false, screenshot: s.removedShots && base.screenshot ? { ...base.screenshot, removed: s.removedShots } : base.screenshot },
         },
         console_issues: [],
         network_issues: [],

@@ -40,7 +40,9 @@ export type StageKey =
   | "failure_analysis"
   | "defects_summary"
   | "release_readiness"
-  | "performance";
+  | "performance"
+  | "accessibility"
+  | "security_assessment";
 
 export type StageStatus =
   | "not_started"
@@ -102,6 +104,9 @@ export type Health = {
   version: string;
   /** Being added by the backend: true when the server allows loopback/private targets (dev/test only). */
   allow_private_targets?: boolean;
+  /** Phase 5 (P5-00, design P5 §13.2): the network safety proxy and the non-functional tools (null: not installed). */
+  egress_proxy?: "on" | "off";
+  tools?: { loadgen: string | null; axe: string | null; k6: string | null; docker: string | null };
 };
 
 export type ActivityItem = {
@@ -128,6 +133,8 @@ export type ProjectSummary = {
   updated_at: IsoDate;
   /** Phase 4: the latest finished test run; null before any run. */
   last_run?: { key: string; status: string; tests: number; totals: Partial<Record<"passed" | "failed" | "error" | "flaky" | "skipped" | "blocked", number>>; finished_at: IsoDate | null } | null;
+  /** Phase 5 (P5-05c): when a permanent deletion is scheduled; null otherwise. */
+  purge_scheduled_at?: IsoDate | null;
 };
 
 export type Dashboard = {
@@ -348,6 +355,8 @@ export type EvidenceLink = {
   size: number;
   captured_at: IsoDate;
   content_url: string;
+  /** P5-05c: retention removed the file; the record stays. The text to show instead of the file. */
+  removed?: string | null;
 };
 
 export type EvidenceDetail = EvidenceLink & { metadata?: Record<string, unknown> | null };
@@ -582,7 +591,15 @@ export type ArtefactType =
   | "automation_script"
   | "execution_result"
   | "execution_run"
-  | "defect";
+  | "defect"
+  // Phase 5 (P5-07)
+  | "page"
+  | "quality_scan"
+  | "quality_finding"
+  | "performance_profile"
+  | "performance_run"
+  | "threshold_result"
+  | "approval";
 
 export type ArtefactRef = { type: ArtefactType; id: Uuid | null; key: string; label: string; path: string };
 
@@ -999,7 +1016,14 @@ export type AssistantIntent =
   | "list_defects"
   | "automation_status"
   | "propose_rerun"
-  | "propose_script_improvement";
+  | "propose_script_improvement"
+  // Phase 5 (P5-07)
+  | "performance_summary"
+  | "accessibility_summary"
+  | "security_summary"
+  | "explain_finding"
+  | "propose_scan"
+  | "propose_performance_run";
 
 export type AssistantMessageCreate = { content?: string | null; intent?: AssistantIntent | null; params?: Record<string, unknown>; context?: ArtefactRef | null };
 
@@ -1040,7 +1064,10 @@ export type Proposal = {
     | "update_test_case"
     | "set_suite"
     // Phase 4 (P4-13): accepting creates a run request that still needs Gate 7
-    | "request_run";
+    | "request_run"
+    // Phase 5 (P5-07): starts a check now (no approval), or creates a load test request waiting for approval
+    | "start_check"
+    | "request_load_test";
   target: ArtefactRef | null;
   summary: string;
   payload: Record<string, unknown>;
@@ -1389,6 +1416,19 @@ export type ForwardRow = {
   automation: ({ case_key: string } & NonNullable<CaseExec["script"]>)[] | Unavailable;
   results: ({ case_key: string } & NonNullable<CaseExec["result"]>)[] | Unavailable;
   defects: CaseExec["defects"] | Unavailable;
+  /** Phase 5 (P5-07): one cell per checked type; null (or absent before Phase 5) means "Not checked". */
+  accessibility?: NfA11yCell | null;
+  security?: NfSecCell | null;
+  performance?: NfPerfCell | null;
+};
+
+export type NfA11yCell = { open: number; by_severity: Partial<Record<string, number>>; findings: string[]; scan_key: string };
+export type NfSecCell = { open: number; findings: string[]; scan_key: string };
+export type NfPerfCell = { last_run: string; thresholds: number; thresholds_failed: number };
+export type NfGaps = {
+  requirements_with_open_accessibility_findings: ({ requirement: ArtefactRef } & NfA11yCell)[];
+  pages_not_checked_for_accessibility: ArtefactRef[];
+  non_functional_requirements_without_evidence: { requirement: ArtefactRef; category: string }[];
 };
 
 export type BackwardRow = {
@@ -1413,6 +1453,8 @@ export type Coverage = {
   techniques: { condition: ArtefactRef; technique: Technique; items: number; covered: number }[];
   test_cases: { by_status: Partial<Record<CaseStatus, number>>; orphans: number };
   execution: ExecutionCoverage | Unavailable;
+  /** Phase 5 (P5-07): counts equal to the three non-functional gap lists. */
+  non_functional?: Record<keyof NfGaps, number>;
   /** Assumed: when basis=approved, the G5 approval date. */
   approved_at?: IsoDate | null;
 };
@@ -1429,7 +1471,7 @@ export type Gaps = {
   flaky_tests?: FailedTest[];
   outdated_automation_scripts: { case: ArtefactRef; file: string; version: number }[] | Unavailable;
   defects_without_regression_coverage: { defect: ArtefactRef & { status: string; severity: string }; case: ArtefactRef | null }[] | Unavailable;
-};
+} & Partial<NfGaps>;
 
 export type FailedTest = { case: ArtefactRef; status: string; run_key: string; result_key: string; classification: string | null; label: string | null };
 

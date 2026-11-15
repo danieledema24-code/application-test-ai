@@ -48,7 +48,7 @@ test("discovery running shows step n of 8 and later stages show Phase n", () => 
   );
   expect(stages[0].status).toBe("running");
   expect(stageStatusText(stages[0])).toBe("Running, step 4 of 8");
-  expect(stages.slice(1).map(stageStatusText)).toEqual(["Phase 2", "Phase 2", "Phase 3", "Phase 4", "Phase 4", "Phase 4", "Phase 5"]);
+  expect(stages.slice(1).map(stageStatusText)).toEqual(["Phase 2", "Phase 2", "Phase 3", "Phase 4", "Phase 4", "Phase 4", "Phase 6"]);
 });
 
 test("gate waiting → Discovery shows Waiting for your approval", () => {

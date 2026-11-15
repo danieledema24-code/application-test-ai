@@ -1,10 +1,10 @@
 // Phase 2 and 3 report types (design P2 §10, P3 §15): slugs, names, gates and file names. Unit-tested.
 
-export type Phase2ReportSlug = "requirements" | "test-strategy" | "test-plan" | "test-case-spec" | "rtm" | "test-execution" | "defects";
-export type ReportType = "discovery" | "requirements_spec" | "test_strategy" | "test_plan" | "test_case_spec" | "rtm" | "execution" | "defect";
-export type DownloadFormat = "pdf" | "html" | "csv";
+export type Phase2ReportSlug = "requirements" | "test-strategy" | "test-plan" | "test-case-spec" | "rtm" | "test-execution" | "defects" | "performance" | "accessibility" | "security";
+export type ReportType = "discovery" | "requirements_spec" | "test_strategy" | "test_plan" | "test_case_spec" | "rtm" | "execution" | "defect" | "performance" | "accessibility" | "security";
+export type DownloadFormat = "pdf" | "html" | "csv" | "csv_timeseries" | "xlsx";
 
-export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportType; name: string; gate: "G2" | "G3" | "G4" | "G5" | "G7" | "G8" | null; file: string; source: string; csv?: boolean; phase?: 4 }[] = [
+export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportType; name: string; gate: "G2" | "G3" | "G4" | "G5" | "G7" | "G8" | null; file: string; source: string; csv?: boolean; phase?: 4 | 5; unavailable?: string }[] = [
   { slug: "discovery", type: "discovery", name: "Application Discovery Report", gate: "G2", file: "discovery-report", source: "Scan" },
   { slug: "requirements", type: "requirements_spec", name: "Requirements Specification", gate: "G3", file: "requirements-spec", source: "Requirements" },
   { slug: "test-strategy", type: "test_strategy", name: "Test Strategy", gate: "G4", file: "test-strategy", source: "Strategy" },
@@ -13,7 +13,15 @@ export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportT
   { slug: "rtm", type: "rtm", name: "Requirements Traceability Matrix", gate: "G5", file: "rtm", source: "Design run", csv: true },
   { slug: "test-execution", type: "execution", name: "Test Execution Report", gate: null, file: "test-execution", source: "Run", csv: true, phase: 4 },
   { slug: "defects", type: "defect", name: "Defect Report", gate: "G8", file: "defects", source: "Defects", csv: true, phase: 4 },
+  // Phase 5 (design P5 §11.1): one per finished load test or check.
+  { slug: "performance", type: "performance", name: "Performance Report", gate: null, file: "performance", source: "Load test", csv: true, phase: 5, unavailable: "Run a load test first" },
+  { slug: "accessibility", type: "accessibility", name: "Accessibility Report", gate: null, file: "accessibility", source: "Accessibility check", csv: true, phase: 5, unavailable: "Check accessibility first" },
+  { slug: "security", type: "security", name: "Security Report", gate: null, file: "security", source: "Security check", csv: true, phase: 5, unavailable: "Run a security check first" },
 ];
+
+export function isPhase5Report(type: ReportType | string): type is "performance" | "accessibility" | "security" {
+  return type === "performance" || type === "accessibility" || type === "security";
+}
 
 export function isPhase4Report(type: ReportType | string): type is "execution" | "defect" {
   return type === "execution" || type === "defect";
@@ -30,20 +38,27 @@ export function isPhase3Report(type: ReportType): boolean {
   return type === "test_case_spec" || type === "rtm";
 }
 
-/** Formats in the Download menu: CSV only for the Phase 3 reports (JSON is never offered). */
+/** Formats in the Download menu: CSV and XLSX only for table reports (design P5 §11.3); JSON is never offered. */
 export function downloadFormats(type: ReportType): DownloadFormat[] {
-  return REPORT_TYPES.find((r) => r.type === type)?.csv ? ["pdf", "html", "csv"] : ["pdf", "html"];
+  if (type === "performance") return ["pdf", "html", "csv", "csv_timeseries", "xlsx"];
+  return REPORT_TYPES.find((r) => r.type === type)?.csv ? ["pdf", "html", "csv", "xlsx"] : ["pdf", "html"];
 }
 
-export const FORMAT_TEXT: Record<DownloadFormat, string> = { pdf: "PDF", html: "HTML (single file)", csv: "CSV (spreadsheet)" };
+export const FORMAT_TEXT: Record<DownloadFormat, string> = { pdf: "PDF", html: "HTML (single file)", csv: "CSV (spreadsheet)", csv_timeseries: "CSV: time series", xlsx: "XLSX (Excel workbook)" };
+export const FORMAT_HINT: Partial<Record<DownloadFormat, string>> = {
+  csv: "Opens in Excel, Numbers or Google Sheets.",
+  csv_timeseries: "One row per second",
+  xlsx: "One sheet per table, with filters. No formulas.",
+};
 export const CSV_HINT = "Opens in Excel, Numbers or Google Sheets.";
 
 export function downloadFailedText(format: DownloadFormat): string {
+  if (format === "xlsx") return "Couldn’t create the Excel file. Try again.";
   return format === "pdf" ? "Couldn’t create the PDF. Try again." : format === "html" ? "Couldn’t create the HTML file. Try again." : "Couldn’t create the CSV file. Try again.";
 }
 
 export function preparingText(format: DownloadFormat): string {
-  return `Preparing ${format === "pdf" ? "PDF" : format === "html" ? "HTML" : "CSV"}…`;
+  return `Preparing ${format === "pdf" ? "PDF" : format === "html" ? "HTML" : format === "xlsx" ? "XLSX" : "CSV"}…`;
 }
 
 export function reportBySlug(slug: string) {
@@ -56,6 +71,8 @@ export function phase2ReportFileName(host: string, type: ReportType, version: nu
   const safeHost = host.replace(/[^a-z0-9.-]/gi, "-") || "site";
   // `{host}-test-execution-RUN-0003-{date}` and `{host}-defects-v{n}-{date}` (design P4 §13).
   if (type === "execution") return `${safeHost}-test-execution-${runKey || `latest-v${version}`}-${d}.${format}`;
+  // `{host}-performance-PERF-0001-{date}.pdf` and `…-PERF-0001-timeseries-{date}.csv` (design P5 §11.3).
+  if (isPhase5Report(type)) return format === "csv_timeseries" ? `${safeHost}-${type}-${runKey ?? "latest"}-timeseries-${d}.csv` : `${safeHost}-${type}-${runKey ?? "latest"}-${d}.${format}`;
   const file = REPORT_TYPES.find((r) => r.type === type)?.file ?? type;
   return `${safeHost}-${file}-v${version}-${d}.${format}`;
 }

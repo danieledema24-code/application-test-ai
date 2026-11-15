@@ -57,6 +57,12 @@ Intent = Literal[
     "automation_status",
     "propose_rerun",
     "propose_script_improvement",
+    "performance_summary",
+    "accessibility_summary",
+    "security_summary",
+    "explain_finding",
+    "propose_scan",
+    "propose_performance_run",
 ]
 
 
@@ -317,6 +323,7 @@ async def post_message(
     await s.flush()
     ans, _used_ai = await _answer(ctx, s, p, t, body)
     await asst.citation_guard(s, t.project_id, ans)
+    asst.security_tail(ans, body.content or "")
     reply = AssistantMessage(
         organisation_id=t.organisation_id,
         thread_id=t.id,
@@ -472,6 +479,10 @@ async def _apply(
         from app.services import assistant_p4
 
         applied += await assistant_p4.apply(ctx, s, p, pr)
+    elif pr.kind in ("start_check", "request_load_test"):
+        from app.services import assistant_p5
+
+        applied += await assistant_p5.apply(ctx, s, p, pr, after)
     elif pr.kind in ("add_test_cases", "set_suite"):
         from app.services import assistant_p3
 
@@ -533,7 +544,10 @@ async def accept_proposal(
     )
     await s.commit()
     for orch in after:
-        await c.after_commit(orch, p.scope, project_id)
+        if callable(orch):  # P5-07: work that must follow the commit (queueing an accepted check)
+            await orch()
+        else:
+            await c.after_commit(orch, p.scope, project_id)
     for ref in applied:
         if ref.get("type") in ("requirement", "acceptance_criterion", "risk", "test_case", "test_data"):
             await ctx.events.emit(

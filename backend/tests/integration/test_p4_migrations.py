@@ -52,6 +52,9 @@ async def test_up_down_up_keeps_phase3_data(tmp_path: Path, template_db: Path) -
     assert "ck_gate_decisions_decision_gate_key" in gd and "ck_gate_decisions_gate_decision_subject_type" in gd
     ev = await _sql(ctx, "evidence")
     assert "ck_evidence_evidence_kind" in ev and "fk_evidence_execution_result_id_execution_results" in ev
+    # Start from the database as Phase 4 left it: 0017's downgrade removes the Phase 5 stage rows (P5-00, covered
+    # in test_p5_foundation.py), which are not Phase 3 data.
+    await downgrade(ctx.engine, "0016")
     async with ctx.engine.connect() as conn:
         counts = {
             t: int((await conn.execute(text(f"SELECT COUNT(*) FROM {t}"))).scalar_one())  # noqa: S608 - fixed names

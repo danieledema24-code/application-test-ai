@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { useAuth } from "@/lib/auth";
 
-/** Settings sections (design P3 §17.1): two pages, so these are links with aria-current, not ARIA tabs. */
-export function SettingsTabs({ current }: { current: "profile" | "members" }) {
-  const item = (id: "profile" | "members", href: string, label: string) => (
+type Section = "profile" | "members" | "load-limits" | "retention" | "audit-log";
+
+/** Settings sections (design P3 §17.1, P5 §13.1): links with aria-current, not ARIA tabs. Load limits, Retention and Audit log are owner/admin only. */
+export function SettingsTabs({ current }: { current: Section }) {
+  const { role } = useAuth();
+  const admin = role === "owner" || role === "admin";
+  const item = (id: Section, href: string, label: string) => (
     <Link
       href={href}
       aria-current={current === id ? "page" : undefined}
@@ -17,6 +22,9 @@ export function SettingsTabs({ current }: { current: "profile" | "members" }) {
     <nav aria-label="Settings sections" className="mb-6 flex flex-wrap border-b border-line">
       {item("profile", "/settings", "Profile & organisation")}
       {item("members", "/settings/members", "Members")}
+      {admin && item("load-limits", "/settings/load-limits", "Load limits")}
+      {admin && item("retention", "/settings/retention", "Retention")}
+      {admin && item("audit-log", "/settings/audit-log", "Audit log")}
     </nav>
   );
 }

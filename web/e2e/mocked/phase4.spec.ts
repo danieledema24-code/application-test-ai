@@ -39,14 +39,14 @@ async function setup(page: Page, over: Partial<P4State> = {}) {
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 
 test.describe("Phase 4 · automation", () => {
-  test("sidebar: Automation, Test Execution and Defects built; Performance still Phase 5 (check 1)", async ({ page }) => {
+  test("sidebar: Automation, Test Execution and Defects built; Non-functional built in Phase 5 (check 1)", async ({ page }) => {
     await setup(page);
     await page.goto("/projects/p1/automation");
     const nav = page.getByRole("navigation", { name: "Project sections" });
     await expect(nav.getByRole("link", { name: "Automation", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: /^Test Execution/ })).toBeVisible();
     await expect(nav.getByRole("link", { name: /coming in Phase 4/ })).toHaveCount(0);
-    await expect(nav.getByRole("link", { name: "Performance, coming in Phase 5" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Non-functional", exact: true })).toBeVisible();
   });
 
   test("overview: counts from the API, grouped reasons quote the step, legend; no serious axe violations (check 6)", async ({ page }) => {

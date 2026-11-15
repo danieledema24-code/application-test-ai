@@ -11,7 +11,7 @@ import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { useScans } from "@/components/discovery/hooks";
 import { hostOf, scanNumber } from "@/lib/url";
-import { CSV_HINT, FORMAT_TEXT, REPORT_TYPES, downloadFailedText, downloadFormats, isPhase3Report, phase2ReportFileName, preparingText, type DownloadFormat, type ReportType } from "@/lib/reports";
+import { FORMAT_HINT, FORMAT_TEXT, REPORT_TYPES, downloadFailedText, downloadFormats, isPhase3Report, phase2ReportFileName, preparingText, type DownloadFormat, type ReportType } from "@/lib/reports";
 import { useAuth } from "@/lib/auth";
 import { gateApproved, requirementsStages } from "@/components/requirements/hooks";
 
@@ -44,7 +44,7 @@ function DownloadMenu({ report, name, host }: { report: ReportSummary; name: str
           {formats.map((f) => (
             <button key={f} role="menuitem" type="button" className={item} onClick={() => void get(f)}>
               {FORMAT_TEXT[f]}
-              {f === "csv" && <span className="text-small text-fg-muted">{CSV_HINT}</span>}
+              {FORMAT_HINT[f] && <span className="text-small text-fg-muted">{FORMAT_HINT[f]}</span>}
             </button>
           ))}
         </div>
@@ -81,7 +81,11 @@ export default function ReportsPage() {
     const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
     return { ...t, versions, latest: versions[0], unavailable: !ran && !versions.length ? "Needs a test run" : null };
   });
-  const phase2 = REPORT_TYPES.filter((t) => t.type !== "discovery" && t.phase !== 4).map((t) => {
+  const phase5 = REPORT_TYPES.filter((t) => t.phase === 5).map((t) => {
+    const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
+    return { ...t, versions, latest: versions[0] };
+  });
+  const phase2 = REPORT_TYPES.filter((t) => t.type !== "discovery" && !t.phase).map((t) => {
     const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
     const unavailable =
       t.type === "test_plan" && !gateApproved(stages.g4)
@@ -357,8 +361,82 @@ export default function ReportsPage() {
           </Table>
         )}
       </Card>
+      <Card>
+        <CardHeader title="Non-functional" description="A frozen report is created when each load test or check finishes." />
+        {!reports.data ? (
+          <LoadingBlock label="Loading reports…" />
+        ) : (
+          <>
+            <Table label="Non-functional reports">
+              <THead>
+                <tr>
+                  <Th>Report</Th>
+                  <Th>Latest</Th>
+                  <Th>Status</Th>
+                  <Th srOnly>Actions</Th>
+                </tr>
+              </THead>
+              <TBody>
+                {phase5.map((t) => (
+                  <Tr key={t.type}>
+                    <Td rowHeader>
+                      {t.latest ? (
+                        <Link href={`/projects/${p.id}/reports/${t.slug}`} className="text-navy-700 underline underline-offset-2">
+                          {t.name}
+                        </Link>
+                      ) : (
+                        t.name
+                      )}
+                    </Td>
+                    <Td className="tabular-nums">{t.latest ? `Version ${t.latest.version}${t.latest.run_key ? ` · ${t.latest.run_key}` : ""}` : "—"}</Td>
+                    <Td>
+                      {!t.latest ? (
+                        <span className="text-fg-muted">Not available yet · {t.unavailable}</span>
+                      ) : (
+                        <StatusPill
+                          status={t.latest.status === "failed" ? "failed" : t.latest.status === "rendering" ? "running" : "approved"}
+                          label={t.latest.status === "rendering" ? "Preparing" : t.latest.status === "failed" ? "Failed" : "Ready"}
+                        />
+                      )}
+                    </Td>
+                    <Td className="text-right">
+                      <span className="inline-flex flex-wrap justify-end gap-2">
+                        {t.latest && role !== "viewer" && role !== null && (
+                          <Button size="sm" variant="secondary" onClick={() => void generateDraft(t.type)} loading={drafting === t.type}>
+                            Generate<span className="sr-only"> {t.name} from the latest {t.source.toLowerCase()}</span>
+                          </Button>
+                        )}
+                        {t.latest && t.latest.status === "ready" ? <DownloadMenu report={t.latest} name={t.name} host={host} /> : null}
+                      </span>
+                    </Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+            {phase5
+              .filter((t) => t.versions.length > 1)
+              .map((t) => (
+                <div key={t.type} className="border-t border-line px-5 py-3">
+                  <Disclosure label={`${t.name}: earlier (${t.versions.length - 1})`}>
+                    <ul className="mt-2 space-y-1 text-body">
+                      {t.versions.slice(1).map((r) => (
+                        <li key={r.id} className="flex flex-wrap items-center gap-2">
+                          <Link href={`/projects/${p.id}/reports/${t.slug}?version=${r.version}`} className="text-navy-700 underline underline-offset-2">
+                            Version {r.version}
+                            {r.run_key ? ` · ${r.run_key}` : ""}
+                          </Link>
+                          <span className="text-fg-muted">{fmtDateTime(r.created_at)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Disclosure>
+                </div>
+              ))}
+          </>
+        )}
+      </Card>
       <Card className="px-5 py-4">
-        <p className="text-body text-fg-muted">More reports arrive with Phase 5: performance, completion and release readiness.</p>
+        <p className="text-body text-fg-muted">Test Completion and Release Readiness reports arrive in Phase 6.</p>
       </Card>
     </div>
   );

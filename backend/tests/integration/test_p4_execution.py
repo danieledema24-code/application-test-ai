@@ -454,9 +454,12 @@ async def test_cancel_a_running_run_keeps_finished_results(flow: Flow) -> None:
     run = await _run(flow, keys, flow.approver, authorise=True)
     worker = asyncio.create_task(flow.idle())
     try:
-        for _ in range(600):
+        # P5-00: cancel only once a test has passed and another is running, so "finished results are kept" is about
+        # a real finished test even under load (the cancel could land before any test had finished: QA note 2).
+        for _ in range(1200):
             cur = (await flow.get(f"/execution-runs/{run['id']}")).json()
-            if cur["status"] == "running" and any(r["status"] == "running" for r in cur["tests_rows"]):
+            passed = int(((cur.get("totals") or {}).get("progress") or {}).get("passed") or 0)
+            if cur["status"] == "running" and passed and any(r["status"] == "running" for r in cur["tests_rows"]):
                 break
             await asyncio.sleep(0.1)
         assert cur["status"] == "running", cur["status"]

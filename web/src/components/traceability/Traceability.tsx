@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Clock, TriangleAlert } from "lucide-react";
 import type { ArtefactRef, BackwardRow, CaseExec, Coverage, ForwardRow, Gaps } from "@/lib/contract";
 import { CASE_STATUS_TEXT, PRIORITY_TEXT, techniqueInfo } from "@/lib/testcases";
-import { GAP_EMPTY, PHASE4_SR, PHASE4_TEXT, coverageTiles, defectText, execLine, gapCounts, isAvailable, keyHref, resultText, scriptText } from "@/lib/traceability";
+import { GAP_EMPTY, PHASE4_SR, PHASE4_TEXT, a11yCellText, coverageTiles, defectText, execLine, gapCounts, isAvailable, keyHref, perfCellText, resultText, scriptText, secCellText } from "@/lib/traceability";
 import { Card, Disclosure, StatTile, StatusPill } from "@/components/ui";
 
 // ---- Coverage tiles and gap lists (§14.2) ---------------------------------------------------------------
@@ -149,8 +149,115 @@ export function GapLists({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: 
         <RefList items={gaps.features_without_requirements ?? []} projectId={projectId} empty={GAP_EMPTY.features} />
       </GapCard>
       <ExecutionGaps gaps={gaps} projectId={projectId} canEdit={canEdit} />
+      {gaps.pages_not_checked_for_accessibility !== undefined && <NonFunctionalGaps gaps={gaps} projectId={projectId} canEdit={canEdit} />}
     </div>
   );
+}
+
+/** The three non-functional gap lists (design P5 §12.1); their counts equal the coverage `non_functional` counts. */
+function NonFunctionalGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: string; canEdit: boolean }) {
+  const n = gapCounts(gaps);
+  const open = gaps.requirements_with_open_accessibility_findings ?? [];
+  const without = gaps.non_functional_requirements_without_evidence ?? [];
+  const nf = `/projects/${projectId}/non-functional`;
+  return (
+    <>
+      <GapCard id="gap-nf-open" title="Requirements with open accessibility findings" count={n.nf_open}>
+        {open.length === 0 ? (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.nf_open}</p>
+        ) : (
+          <ul className="space-y-1">
+            {open.map((o) => (
+              <li key={o.requirement.key} className="text-body">
+                <Trace projectId={projectId} k={o.requirement.key} /> {o.requirement.label} · {a11yCellText(o)} in{" "}
+                <Link href={keyHref(projectId, o.scan_key)} className="font-mono text-navy-700 underline underline-offset-2">
+                  {o.scan_key}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </GapCard>
+      <GapCard id="gap-nf-pages" title="Pages not checked for accessibility" count={n.nf_pages}>
+        {(gaps.pages_not_checked_for_accessibility ?? []).length === 0 ? (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.nf_pages}</p>
+        ) : (
+          <>
+            <ul className="space-y-1">
+              {(gaps.pages_not_checked_for_accessibility ?? []).slice(0, 20).map((pg) => (
+                <li key={pg.key} className="break-words font-mono text-body">
+                  {pg.key}
+                </li>
+              ))}
+            </ul>
+            {canEdit && (
+              <Link href={`${nf}?tab=accessibility`} className="text-small font-medium text-navy-700 underline underline-offset-2">
+                Check accessibility…
+              </Link>
+            )}
+          </>
+        )}
+      </GapCard>
+      <GapCard id="gap-nf-without" title="Non-functional requirements without evidence" count={n.nf_without}>
+        {without.length === 0 ? (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.nf_without}</p>
+        ) : (
+          <>
+            <ul className="space-y-1">
+              {without.map((w) => (
+                <li key={w.requirement.key} className="text-body">
+                  <Trace projectId={projectId} k={w.requirement.key} /> {w.requirement.label} · {w.category}
+                </li>
+              ))}
+            </ul>
+            <Link href={nf} className="text-small font-medium text-navy-700 underline underline-offset-2">
+              Open Non-functional
+            </Link>
+          </>
+        )}
+      </GapCard>
+    </>
+  );
+}
+
+function NfCell({ text, sr, href }: { text: string; sr: string; href?: string }) {
+  if (text === "Not checked") return <span className="text-fg-muted">Not checked</span>;
+  const body = (
+    <>
+      <span aria-hidden="true">{text}</span>
+      <span className="sr-only">{sr}</span>
+    </>
+  );
+  return href ? (
+    <Link href={href} className="whitespace-nowrap text-navy-700 underline underline-offset-2">
+      {body}
+    </Link>
+  ) : (
+    <span className="whitespace-nowrap">{body}</span>
+  );
+}
+
+function nfCells(r: ForwardRow, projectId: string) {
+  const k = r.requirement.key;
+  const a = r.accessibility;
+  const sc = r.security;
+  const pf = r.performance;
+  const crit = a?.by_severity.critical ?? 0;
+  return {
+    a11y: <NfCell text={a11yCellText(a)} href={a ? keyHref(projectId, a.scan_key) : undefined} sr={a ? `Accessibility for ${k}: ${a.open} open finding${a.open === 1 ? "" : "s"}${crit ? `, ${crit} critical` : ""}` : ""} />,
+    sec: <NfCell text={secCellText(sc)} href={sc ? keyHref(projectId, sc.scan_key) : undefined} sr={sc ? `Security for ${k}: ${sc.open} open finding${sc.open === 1 ? "" : "s"}` : ""} />,
+    perf: <NfCell text={perfCellText(pf)} href={pf ? keyHref(projectId, pf.last_run) : undefined} sr={pf ? `Performance for ${k}: ${pf.thresholds_failed ? `missed ${pf.thresholds_failed} of ${pf.thresholds} thresholds in ${pf.last_run}` : `all ${pf.thresholds} thresholds met`}` : ""} />,
+  };
+}
+
+/** The 375 px card's last line (design P5 §12.1): "Accessibility 2 open · Performance ✗ Missed". */
+function nfLine(r: ForwardRow): string {
+  const parts = [
+    r.accessibility ? `Accessibility ${a11yCellText(r.accessibility)}` : null,
+    r.security ? `Security ${secCellText(r.security)}` : null,
+    r.performance ? `Performance ${r.performance.thresholds_failed ? "✗ Missed" : "✓ Met"}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 /** The four Phase 4 gap lists (design P4 §12) plus the flaky sub-list; before Phase 4 content, one "Needs test
@@ -379,6 +486,7 @@ function forwardCells(r: ForwardRow, projectId: string) {
 
 export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Traceability matrix, scrolls sideways" }: { rows: ForwardRow[]; projectId: string; more?: boolean; regionLabel?: string }) {
   const phase4 = rows.some((r) => isAvailable(r.automation));
+  const phase5 = rows.some((r) => "accessibility" in r);
   return (
     <>
       <div className="hidden rounded-lg border border-line bg-surface md:block">
@@ -387,15 +495,21 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
             <caption className="px-3 py-2 text-left text-body font-semibold text-fg-strong">Forward traceability: requirements to test cases, {rows.length} requirements{more ? " on this page" : ""}</caption>
             <colgroup span={5} />
             <colgroup span={3} />
+            {phase5 && <colgroup span={3} />}
             <thead className="bg-elevated">
               <tr>
                 <td colSpan={5} />
                 <th scope="colgroup" colSpan={3} className="px-3 py-1.5 text-left text-caption font-semibold text-fg-muted">
                   {phase4 ? "Execution" : "Execution · not recorded"}
                 </th>
+                {phase5 && (
+                  <th scope="colgroup" colSpan={3} className="px-3 py-1.5 text-left text-caption font-semibold text-fg-muted">
+                    Non-functional
+                  </th>
+                )}
               </tr>
               <tr>
-                {["Requirement", "Risk", "Acceptance criteria", "Conditions", "Test cases", "Scripts", "Results", "Defects"].map((h) => (
+                {["Requirement", "Risk", "Acceptance criteria", "Conditions", "Test cases", "Scripts", "Results", "Defects", ...(phase5 ? ["Accessibility", "Security", "Performance"] : [])].map((h) => (
                   <th key={h} scope="col" className={`whitespace-nowrap px-3 py-2 text-left text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted ${h === "Requirement" ? "sticky left-0 bg-elevated" : ""}`}>
                     {h}
                   </th>
@@ -440,6 +554,17 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
                         </td>
                       </>
                     )}
+                    {phase5 &&
+                      (() => {
+                        const nfc = nfCells(r, projectId);
+                        return (
+                          <>
+                            <td className="px-3 py-2">{nfc.a11y}</td>
+                            <td className="px-3 py-2">{nfc.sec}</td>
+                            <td className="px-3 py-2">{nfc.perf}</td>
+                          </>
+                        );
+                      })()}
                   </tr>
                 );
               })}
@@ -485,6 +610,7 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
               ) : (
                 <p className="mt-2 text-small text-fg-muted">Scripts, results, defects: not recorded in this version</p>
               )}
+              {phase5 && nfLine(r) && <p className="mt-1 text-small text-fg">{nfLine(r)}</p>}
             </article>
           );
         })}

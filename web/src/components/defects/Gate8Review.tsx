@@ -7,9 +7,9 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
-import { nextUndecided, reproText, SEVERITY_TEXT, type DefectList, type DefectRow } from "@/lib/defects";
+import { isNonFunctional, nextUndecided, reproText, SEVERITY_TEXT, SOURCE_TEXT, type DefectList, type DefectRow } from "@/lib/defects";
 import { Button, Callout, Disclosure, StatusPill, useToast } from "@/components/ui";
-import { DefectStatusPill } from "@/components/domain/ExecutionLabels";
+import { DefectStatusPill, ObservedLabel } from "@/components/domain/ExecutionLabels";
 import { RejectDefectDialog, type RejectInput } from "./RejectDefectDialog";
 
 export function Gate8Review({ projectId, drafts, decided, list, viewer, onChanged }: { projectId: string; drafts: DefectRow[]; decided: DefectRow[]; list: DefectList; viewer: boolean; onChanged: () => void }) {
@@ -52,8 +52,8 @@ export function Gate8Review({ projectId, drafts, decided, list, viewer, onChange
   async function reject(v: RejectInput) {
     const rows = rejecting ?? [];
     if (rows.length === 1) {
-      await api(`/defects/${rows[0].id}/status`, { method: "POST", body: { action: "reject", ...v } });
-      toast(`${rows[0].key} rejected.`, "success");
+      const r = await api<{ message: string }>(`/defects/${rows[0].id}/status`, { method: "POST", body: { action: "reject", ...v } });
+      toast(r.message || `${rows[0].key} rejected.`, "success");
       moveFocus(rows[0].id);
     } else {
       const r = await api<{ message: string }>(`/projects/${projectId}/defects/bulk-status`, { method: "POST", body: { action: "reject", ids: rows.map((x) => x.id), ...v } });
@@ -88,6 +88,11 @@ export function Gate8Review({ projectId, drafts, decided, list, viewer, onChange
         ) : (
           <>
             <p className="text-body text-fg">Confirm a draft when it&apos;s a real bug in the application. Reject it when it isn&apos;t, and say why.</p>
+            {drafts.some((d) => isNonFunctional(d.source)) && (
+              <p className="text-body text-fg">
+                Non-functional drafts state what was observed. Confirm when it&apos;s a problem you&apos;ll fix; reject with &lsquo;Works as intended&rsquo; or &lsquo;Accepted risk&rsquo; when it isn&apos;t.
+              </p>
+            )}
             <ul className="divide-y divide-line">
               {drafts.map((d) => (
                 <li key={d.id} className="space-y-2 py-3">
@@ -108,8 +113,14 @@ export function Gate8Review({ projectId, drafts, decided, list, viewer, onChange
                       <p className="text-small text-fg-muted">
                         {SEVERITY_TEXT[d.severity]} · {reproText(d.reproducibility)}
                         {d.cases.length ? ` · ${d.cases.join(", ")}` : ""}
-                        {d.source === "analysis" ? " · from analysis" : " · raised by a person"}
+                        {isNonFunctional(d.source) ? ` · ${SOURCE_TEXT[d.source]}` : d.source === "analysis" ? " · from analysis" : " · raised by a person"}
                       </p>
+                      {isNonFunctional(d.source) && d.why && (
+                        <p className="flex flex-wrap items-center gap-2 text-small text-fg">
+                          <span>Why: {d.why}</span>
+                          <ObservedLabel />
+                        </p>
+                      )}
                     </div>
                     <Link href={`/projects/${projectId}/defects/${d.key}`} className="text-small font-medium text-navy-700 underline underline-offset-2">
                       Open {d.key}
@@ -177,6 +188,7 @@ export function Gate8Review({ projectId, drafts, decided, list, viewer, onChange
         projectId={projectId}
         duplicates={list.items.filter((x) => !rejecting?.some((r) => r.id === x.id)).map((x) => ({ key: x.key, summary: x.summary }))}
         onReject={reject}
+        nonFunctional={!!rejecting?.length && rejecting.every((r) => isNonFunctional(r.source))}
       />
     </section>
   );

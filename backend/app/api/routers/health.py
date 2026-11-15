@@ -4,6 +4,8 @@ from fastapi import APIRouter
 from sqlalchemy import func, select, text
 
 from app.api.deps import Ctx
+from app.automation.axe import load_axe
+from app.automation.tools import tool_version
 from app.db.models import WorkerHeartbeat
 from app.db.types import utcnow
 from app.schemas import api
@@ -38,9 +40,17 @@ async def health(ctx: Ctx) -> api.Health:
         browser=api.BrowserHealth(available=browser_ok),
         version=ctx.settings.app_version,
         allow_private_targets=ctx.settings.allow_private_targets and ctx.settings.env != "production",
+        # Design P5 open question 5: the true state until P5-05a adds the egress proxy (there is none yet).
+        egress_proxy="off",
         automation=api.AutomationHealth(
             node=tk.node, toolkit=tk.toolkit, playwright=tk.playwright, browsers=tk.browsers
         )
         if tk is not None
         else api.AutomationHealth(),
+        tools=api.ToolsHealth(
+            loadgen=tk.loadgen if tk is not None else None,
+            axe=axe.version if (axe := load_axe(ctx.settings.automation_dir)) is not None else None,
+            k6=await tool_version("k6"),
+            docker=await tool_version("docker"),
+        ),
     )

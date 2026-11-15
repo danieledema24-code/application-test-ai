@@ -9,6 +9,7 @@ import { api, buildQuery } from "@/lib/api";
 import type { Page, ProjectSummary } from "@/lib/contract";
 import { fmtDateTime } from "@/lib/format";
 import { projectStatusLabel } from "@/lib/projectStatus";
+import { deletionWhen } from "@/lib/hardening";
 import { shortUrl } from "@/lib/url";
 import { Button, Card, EmptyState, ErrorState, LinkButton, LoadingBlock, PageHeader, Segmented, StatusPill, TBody, THead, Table, Td, TextField, Th, Tr } from "@/components/ui";
 import { LifecycleMini } from "@/components/domain/LifecycleProgress";
@@ -106,6 +107,7 @@ function ProjectsList() {
                     </Td>
                     <Td>
                       <StatusPill status={st.status} label={st.label} />
+                      {p.purge_scheduled_at && <span className="mt-1 block text-small text-danger-fg">Deletion scheduled · {deletionWhen(p.purge_scheduled_at).replace(" at ", " ")}</span>}
                     </Td>
                     <Td>
                       <LifecycleMini project={p} />

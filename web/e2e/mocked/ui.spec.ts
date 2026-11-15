@@ -219,7 +219,7 @@ function runningProject(s: MockState) {
 }
 
 test.describe("project workspace", () => {
-  test("sidebar lists 12 sections; unbuilt ones are labelled and honest", async ({ page }) => {
+  test("sidebar lists 12 sections, all built by Phase 5", async ({ page }) => {
     const s = newState();
     runningProject(s);
     await mockApi(page, s);
@@ -231,15 +231,14 @@ test.describe("project workspace", () => {
     await expect(nav.getByRole("link", { name: "Requirements", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "AI QA Analyst", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: /coming in Phase [23]/ })).toHaveCount(0);
-    // Phase 4 built Automation, Test Execution and Defects (design P4 §4.2), so Performance is the next unbuilt section.
+    // Phase 4 built Automation, Test Execution and Defects (design P4 §4.2); Phase 5 builds Non-functional (design P5 §4.1),
+    // so no section is "coming in" a phase any more.
     await expect(nav.getByRole("link", { name: "Test Cases", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Automation", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Test Execution", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Defects", exact: true })).toBeVisible();
-    await nav.getByRole("link", { name: "Performance, coming in Phase 5" }).click();
-    await expect(page.getByText("Performance: coming in Phase 5")).toBeVisible();
-    await expect(page.getByRole("table")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Go to Application Discovery" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Non-functional", exact: true })).toBeVisible();
+    await expect(nav.getByRole("link", { name: /coming in Phase/ })).toHaveCount(0);
   });
 
   test("overview: lifecycle running step, 21 steps, feed with evidence, pause", async ({ page }) => {
@@ -250,7 +249,7 @@ test.describe("project workspace", () => {
     await page.goto("/projects/p1");
     const lifecycle = page.getByRole("list", { name: "QA lifecycle" });
     await expect(lifecycle.getByText("Running, step 4 of 8")).toBeVisible();
-    await expect(lifecycle.getByText("Phase 5")).toBeVisible();
+    await expect(lifecycle.getByText("Phase 6")).toBeVisible();
     await page.getByRole("button", { name: "Show all 21 steps" }).click();
     await expect(page.getByText("Release readiness assessment")).toBeVisible();
     await expect(page.getByText("Gate 9 · Release readiness")).toBeVisible();
@@ -398,6 +397,24 @@ test.describe("project workspace", () => {
     await page.getByRole("checkbox", { name: "Only pages with differences" }).check();
     await expect(page.getByText("No layout differences observed.")).toBeVisible();
     await expect(page.getByRole("img", { name: /Screenshot of Home/ })).toHaveCount(0);
+  });
+
+  test("P5-BUG-03: screenshots removed by retention show the removal text, never a broken image or 'No layout differences' (check 37)", async ({ page }) => {
+    const gone = "Removed by the retention policy on 14 Dec 2026.";
+    const s = newState({ phase: "awaiting", responsiveDiffs: false, removedShots: gone });
+    runningProject(s);
+    await mockApi(page, s);
+    await signedIn(page, s);
+    await page.goto("/projects/p1/discovery?view=responsive");
+    await expect(page.getByTestId("removed-evidence").first()).toHaveText(gone);
+    await expect(page.getByRole("img", { name: /Screenshot of Home/ })).toHaveCount(0);
+    await expect(page.getByText("No layout differences observed.")).toHaveCount(0);
+    await expect(page.getByText(/screenshots were removed by the retention policy, so they can't be compared here/).first()).toBeVisible();
+    // User journeys: each step's screenshot is the placeholder too (QA P5 round 2).
+    await page.goto("/projects/p1/discovery?view=journeys");
+    await page.getByRole("button", { name: "View steps" }).first().click();
+    await expect(page.getByTestId("removed-evidence").first()).toHaveText(gone);
+    await expect(page.getByRole("img", { name: /Screenshot of/ })).toHaveCount(0);
   });
 
   test("BUG-10: at 375 px the sitemap doesn't scroll sideways and the functionality map is cards", async ({ page }) => {

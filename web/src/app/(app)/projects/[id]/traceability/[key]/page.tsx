@@ -14,8 +14,9 @@ const SHOW = 5;
 const LATER: Record<string, string> = { automation_script: "Script", execution_result: "Result", defect: "Defect" };
 
 function ItemLink({ item, projectId, here }: { item: ArtefactRef; projectId: string; here?: boolean }) {
-  // Scripts are named by file, and open in Automation (their key is the file path).
-  if (item.type === "automation_script")
+  // Scripts are named by file, and open in Automation (their key is the file path). Pages and threshold results
+  // (P5-07) have no ID of their own either; they open where they're listed.
+  if (item.type === "automation_script" || item.type === "page" || item.type === "threshold_result")
     return (
       <Link href={item.path} className="text-navy-700 underline underline-offset-2">
         {item.label}

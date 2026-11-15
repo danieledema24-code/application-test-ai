@@ -59,8 +59,11 @@ from app.domain.stages import (
     EXECUTION_STAGE_STATUS,
     GATE_STAGE,
     GATE_TITLES,
+    OPTIONAL_STAGE_BLOCK,
+    OPTIONAL_STAGES,
     OUTPUT_STATUSES,
     REGENERABLE_STAGES,
+    RERUN_STALE_REASONS,
     RUN_DRIVEN_STAGES,
     RUNNABLE_IN_PHASE,
     STAGE_BY_KEY,
@@ -190,6 +193,11 @@ PHASE4_HANDLERS: dict[StageKey, Any] = {
     # Runs are started from Test Execution (job `execution_run`), never as a stage task (RUN_DRIVEN_STAGES).
     StageKey.execution: type("RunDriven_P4_06", (NotAvailableYet,), {"story": "P4-06", "implemented": True}),
     StageKey.failure_analysis: _LazyHandler("app.agents.defects.analysis", "FailureAnalysisAgent"),
+    # Phase 5: checks (job `quality_scan`, P5-02/P5-03) and load tests (job `performance_run`, P5-01b) start from
+    # Non-functional, never as a stage task (RUN_DRIVEN_STAGES).
+    StageKey.accessibility: type("RunDriven_P5_02", (NotAvailableYet,), {"story": "P5-02", "implemented": True}),
+    StageKey.security_assessment: type("RunDriven_P5_03", (NotAvailableYet,), {"story": "P5-03", "implemented": True}),
+    StageKey.performance: type("RunDriven_P5_01b", (NotAvailableYet,), {"story": "P5-01b", "implemented": True}),
 }
 
 
@@ -422,8 +430,8 @@ class Orchestrator:
                 ).scalars()
             }
             for d in STAGES:
-                if d.key not in RUNNABLE_IN_PHASE or not handler_ready(d.key):
-                    continue
+                if d.key not in RUNNABLE_IN_PHASE or d.key in OPTIONAL_STAGES or not handler_ready(d.key):
+                    continue  # optional branches (P5-00) start only from their workspace or the assistant
                 st = stages[d.key]
                 if st.status in ACTIVE_STATUSES or st.status == StageStatus.paused:
                     continue
@@ -757,6 +765,71 @@ class Orchestrator:
             self._pending_events.append((project, StageKey.execution, old, new, srun.version))
         return new
 
+    async def mirror_nonfunctional(
+        self, s: AsyncSession, project: Project, stage_key: StageKey, item: Any, new: StageStatus | None
+    ) -> StageStatus | None:
+        """P5-02/P5-03/P5-01b: the `accessibility`, `security_assessment` and `performance` stages mirror their latest
+        scan or run (QUALITY_SCAN_STAGE_STATUS, PERF_RUN_STAGE_STATUS), each its own stage run, as
+        `mirror_execution_run` does for test runs. `item` is a QualityScan or PerformanceRun; `new` None (a run
+        waiting for or refused its approval) leaves the stage alone. Called inside the caller's transaction."""
+        if new is None:
+            return None
+        st = await self.stage(s, project.id, stage_key)
+        srun = await s.get(StageRun, item.stage_run_id) if item.stage_run_id is not None else None
+        if srun is None:
+            version = (
+                int(
+                    (
+                        await s.execute(
+                            select(func.coalesce(func.max(StageRun.version), 0)).where(
+                                StageRun.workflow_stage_id == st.id
+                            )
+                        )
+                    ).scalar_one()
+                )
+                + 1
+            )
+            disc = await self.current_run(s, await self.stage(s, project.id, StageKey.discovery))
+            srun = StageRun(
+                organisation_id=project.organisation_id,
+                workflow_stage_id=st.id,
+                project_id=project.id,
+                stage_key=stage_key,
+                version=version,
+                status=new,
+                upstream_versions={StageKey.discovery.value: disc.version} if disc is not None else {},
+                parameters={"item_id": str(item.id), "key": item.key},
+                generated_by=GeneratedBy.rules,
+                triggered_by=item.requested_by,
+            )
+            s.add(srun)
+            await s.flush()
+            item.stage_run_id = srun.id
+            st.current_stage_run_id = srun.id
+        srun.status = new
+        if new == StageStatus.running and srun.started_at is None:
+            srun.started_at = item.started_at or utcnow()
+        if new not in ACTIVE_STATUSES:
+            srun.finished_at = item.finished_at or utcnow()
+            srun.output = {"item_id": str(item.id), "key": item.key, "status": item.status.value}
+            srun.error = item.error
+        if st.current_stage_run_id != srun.id:
+            return None
+        old = st.status
+        st.status = new
+        st.stale_reason = None
+        if old != new:
+            self._pending_events.append((project, stage_key, old, new, srun.version))
+        return new
+
+    async def check_optional_upstream(self, s: AsyncSession, project: Project, stage_key: StageKey) -> None:
+        """P5-02/P5-03: a check needs discovery output with G2 satisfied (409 `gate_blocked` otherwise)."""
+        for u in STAGE_BY_KEY[stage_key].upstream:
+            try:
+                await self._check_upstream(s, project, stage_key, await self.stage(s, project.id, u))
+            except GateBlocked as exc:
+                raise GateBlocked(OPTIONAL_STAGE_BLOCK) from exc
+
     async def _enqueue_pending(self, scope: TenantScope, project_id: uuid.UUID) -> None:
         """Enqueues jobs for queued tasks without a job (after the stage rows are committed) and emits events."""
         events, self._pending_events = (
@@ -840,7 +913,13 @@ class Orchestrator:
                 raise Conflict(f"A regenerated version of {d.title} is waiting for review; apply or discard it first")
             for u in d.upstream:
                 ust = await self.stage(s, project.id, u)
-                await self._check_upstream(s, project, stage_key, ust)
+                if stage_key in OPTIONAL_STAGES:
+                    try:
+                        await self._check_upstream(s, project, stage_key, ust)
+                    except GateBlocked as exc:
+                        raise GateBlocked(OPTIONAL_STAGE_BLOCK) from exc
+                else:
+                    await self._check_upstream(s, project, stage_key, ust)
             if not handler_ready(stage_key):
                 raise ValidationFailed(
                     f"{d.title} is not available yet",
@@ -855,7 +934,7 @@ class Orchestrator:
             if run.review_status != ReviewStatus.pending_review:
                 # A candidate changes nothing until it is applied; a direct re-run supersedes downstream outputs.
                 for dk in downstream_of(stage_key):
-                    if dk in DERIVED_STAGES or dk in RUN_DRIVEN_STAGES:
+                    if dk in DERIVED_STAGES or (dk in RUN_DRIVEN_STAGES and dk not in RERUN_STALE_REASONS):
                         continue  # derived on read, or mirrors execution runs (never re-run as a stage)
                     dst = await self.stage(s, project.id, dk)
                     if dst.status in OUTPUT_STATUSES or dst.status in (
@@ -863,7 +942,7 @@ class Orchestrator:
                         StageStatus.changes_requested,
                     ):
                         dst.status = StageStatus.stale
-                        dst.stale_reason = f"{d.title} was re-run (version {run.version})"
+                        dst.stale_reason = RERUN_STALE_REASONS.get(dk, f"{d.title} was re-run (version {run.version})")
                         stale.append(dk)
             audit(
                 s,
@@ -1295,6 +1374,8 @@ class Orchestrator:
         """
         if previous is None or previous.snapshot_hash == digest:
             return []
+        if STAGE_BY_KEY[stage_key].gate == GateKey.G4:
+            await self._mark_profiles_stale(s, project)
         out: list[StageKey] = []
         keys = {
             GateKey.G3: ("g3_hash", "requirements_snapshot_hash"),
@@ -1316,6 +1397,25 @@ class Orchestrator:
                 dst.stale_reason = _STALE_REASONS.get((gate, dk), f"{GATE_TITLES[gate]} was approved with changes")
                 out.append(dk)
         return out
+
+    @staticmethod
+    async def _mark_profiles_stale(s: AsyncSession, project: Project) -> None:
+        """P5-00: a G4 re-approval with a different strategy marks draft and ready performance profiles stale. They
+        keep working (a stale profile can still be run); the Performance workspace suggests regenerating."""
+        from app.db.models import PerformanceProfile
+        from app.domain.enums import PerfProfileStatus
+
+        profiles = (
+            await s.execute(
+                select(PerformanceProfile).where(
+                    PerformanceProfile.project_id == project.id,
+                    PerformanceProfile.status.in_([PerfProfileStatus.draft, PerfProfileStatus.ready]),
+                )
+            )
+        ).scalars()
+        for prof in profiles:
+            prof.status = PerfProfileStatus.stale
+            prof.stale_reason = "The test strategy changed after this profile was written"
 
     async def reopen_gate(
         self,
@@ -1390,6 +1490,14 @@ class Orchestrator:
             from app.agents.execution.engine import execute_run
 
             await execute_run(self.ctx, scope, uuid.UUID(job.payload["run_id"]), job)
+        elif job.kind == "quality_scan":
+            from app.agents.nonfunctional.scan import run_scan
+
+            await run_scan(self.ctx, scope, uuid.UUID(job.payload["scan_id"]), job)
+        elif job.kind == "performance_run":
+            from app.agents.performance.runner import run_load_test
+
+            await run_load_test(self.ctx, scope, uuid.UUID(job.payload["run_id"]), job)
         else:
             raise ValueError(f"Unknown job kind {job.kind}")
 
@@ -1684,6 +1792,16 @@ class Orchestrator:
         """Called when the reaper gives up on a job (attempts exhausted)."""
         if job.kind == "execution_run":
             await self._execution_interrupted(job)
+            return
+        if job.kind == "quality_scan":
+            from app.agents.nonfunctional.scan import scan_interrupted
+
+            await scan_interrupted(self.ctx, job)
+            return
+        if job.kind == "performance_run":
+            from app.agents.performance.runner import run_interrupted
+
+            await run_interrupted(self.ctx, job)
             return
         if job.kind != "agent_task":
             return

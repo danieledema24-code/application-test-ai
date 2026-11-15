@@ -10,7 +10,7 @@ import { api, ApiError, buildQuery } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { useAuth } from "@/lib/auth";
 import { fmtDate } from "@/lib/format";
-import { ACTION_TEXT, bulkPlan, bulkQuestion, emptyDefectsText, reproText, type DefectAction, type DefectList, type DefectRow } from "@/lib/defects";
+import { ACTION_TEXT, bulkPlan, bulkQuestion, emptyDefectsText, reproText, SOURCE_TEXT, type DefectAction, type DefectList, type DefectRow } from "@/lib/defects";
 import { BULK_BAR_PADDING, BulkActionBar, Button, Callout, ConfirmDialog, EmptyState, ErrorState, LinkButton, SelectField, Skeleton, TabPanel, Table, Tabs, TBody, Td, TextField, Th, THead, Tr, useToast } from "@/components/ui";
 import { DefectStatusPill, SeverityValue } from "@/components/domain/ExecutionLabels";
 import { PriorityValue } from "@/components/testcases/Bits";
@@ -30,6 +30,14 @@ const STATUS = [
   { value: "all", label: "All" },
 ];
 const SEVERITY = [{ value: "", label: "Any" }, ...["critical", "major", "minor", "trivial"].map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }))];
+/** Source filter (design P5 check 28). "API" is offered only once an API defect exists (API testing is not built). */
+const SOURCE = [
+  { value: "", label: "Any" },
+  { value: "analysis,user", label: "Functional" },
+  { value: "accessibility", label: "Accessibility" },
+  { value: "security", label: "Security" },
+  { value: "performance", label: "Performance" },
+];
 const PRIORITY = [{ value: "", label: "Any" }, ...["critical", "high", "medium", "low"].map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }))];
 
 function Defects() {
@@ -43,9 +51,10 @@ function Defects() {
   const status = params.get("status") ?? "open";
   const severity = params.get("severity") ?? "";
   const priority = params.get("priority") ?? "";
+  const source = params.get("source") ?? "";
   const qText = params.get("q") ?? "";
   const [search, setSearch] = useState(qText);
-  const list = useApi<DefectList>(`/projects/${p.id}/defects`, { status, severity: severity || undefined, priority: priority || undefined, q: qText || undefined });
+  const list = useApi<DefectList>(`/projects/${p.id}/defects`, { status, severity: severity || undefined, priority: priority || undefined, source: source || undefined, q: qText || undefined });
   const all = useApi<DefectList>(`/projects/${p.id}/defects`, { status: "all" });
   const runs = useApi<{ items: { key: string; analysis?: unknown }[] }>(`/projects/${p.id}/execution-runs`, { limit: 1 }, { shouldRetryOnError: false });
   const fa = p.workflow?.stages.find((s) => s.key === "failure_analysis");
@@ -64,7 +73,7 @@ function Defects() {
   useEffect(() => setSearch(qText), [qText]);
 
   function go(next: Record<string, string | undefined>) {
-    const cur = { view: view === "review" ? "review" : undefined, status: status === "open" ? undefined : status, severity: severity || undefined, priority: priority || undefined, q: qText || undefined };
+    const cur = { view: view === "review" ? "review" : undefined, status: status === "open" ? undefined : status, severity: severity || undefined, priority: priority || undefined, source: source || undefined, q: qText || undefined };
     const merged = { ...cur, ...next };
     if (merged.status === "open") merged.status = undefined;
     router.push(`/projects/${p.id}/defects${buildQuery(merged)}`, { scroll: false });
@@ -166,6 +175,7 @@ function Defects() {
                 <SelectField label="Status" value={status} onChange={(e) => go({ status: e.target.value })} options={STATUS} wrapClassName="w-40" />
                 <SelectField label="Severity" value={severity} onChange={(e) => go({ severity: e.target.value || undefined })} options={SEVERITY} wrapClassName="w-36" />
                 <SelectField label="Priority" value={priority} onChange={(e) => go({ priority: e.target.value || undefined })} options={PRIORITY} wrapClassName="w-36" />
+                <SelectField label="Source" value={source} onChange={(e) => go({ source: e.target.value || undefined })} options={SOURCE} wrapClassName="w-40" />
               </form>
               {status === "open" && hidden && hidden.closed + hidden.rejected > 0 && (
                 <p className="text-small text-fg-muted">
@@ -213,7 +223,10 @@ function Defects() {
                               <Link href={`/projects/${p.id}/defects/${r.key}`} className="font-medium text-navy-700 underline underline-offset-2">
                                 <span className="font-mono">{r.key}</span> {r.summary}
                               </Link>
-                              <span className="block text-caption text-fg-muted">{r.source === "analysis" ? "from analysis" : "raised by a person"}</span>
+                              <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-caption text-fg-muted">
+                                <span className="rounded-sm bg-elevated px-1.5 py-0.5 font-medium text-fg ring-1 ring-line">{SOURCE_TEXT[r.source] ?? r.source}</span>
+                                {r.source === "analysis" ? "from analysis" : r.source === "user" ? "raised by a person" : "from a check"}
+                              </span>
                             </Td>
                             <Td>
                               <SeverityValue severity={r.severity} />
@@ -244,7 +257,7 @@ function Defects() {
                         </p>
                         <p className="text-body text-fg">{r.summary}</p>
                         <p className="text-small text-fg-muted">
-                          {reproText(r.reproducibility)} · {r.cases.join(", ") || "No test case"}
+                          {SOURCE_TEXT[r.source] ?? r.source} · {reproText(r.reproducibility)} · {r.cases.join(", ") || "No test case"}
                         </p>
                       </li>
                     ))}

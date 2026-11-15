@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<title>{{ c.title }} · {{ c.source_key }} · {{ c.project.name }}</title>
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; color: #1D2433; font-size: 11px; line-height: 1.45; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 1px solid #E4E7EC; }
+  h3 { font-size: 12px; margin: 12px 0 4px; }
+  .muted { color: #535D70; } .statement { background: #F0F4FA; border: 1px solid #D0D9E8; padding: 6px 8px; border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0; } th, td { border: 1px solid #E4E7EC; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #F9FAFB; } code, pre { font-family: Menlo, monospace; font-size: 10px; white-space: pre-wrap; word-break: break-all; }
+  figure { margin: 8px 0; page-break-inside: avoid; } svg { max-width: 100%; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ c.title }} · {{ c.source_key }}</h1>
+  <p class="muted">{{ c.project.name }} · version {{ c.version }} · generated {{ c.generated_at[:16].replace('T', ' ') }} UTC</p>
+</header>
+{% if c.report_type == 'security' %}<p class="statement">{{ c.statement }}</p>{% endif %}
+{% if c.report_type == 'accessibility' %}<p class="statement">{{ c.statement }}</p>{% endif %}
+
+{% if c.report_type == 'performance' %}
+{% set r = c.run %}
+<section><h2>Summary</h2><p>{{ c.paragraph }}</p><p class="muted">Written by rules. {{ c.statement }}</p></section>
+<section><h2>Load test</h2>
+  <table><tbody>
+    <tr><th>Load test</th><td>{{ r.key }} · {{ r.status_label }}</td></tr>
+    <tr><th>Profile</th><td>{{ r.profile.key }} v{{ r.profile.version }} · {{ r.profile.name }} ({{ r.profile.type }})</td></tr>
+    <tr><th>What was sent</th><td>{{ r.summary }}</td></tr>
+    <tr><th>Approval</th><td>{{ c.approval_line }}</td></tr>
+    <tr><th>Engine</th><td>{{ (r.engine or {}).get('name') or 'Built-in load generator' }} {{ (r.engine or {}).get('version') or '' }}</td></tr>
+    <tr><th>Load came from</th><td>{{ (r.result or {}).get('generator_location') or 'The platform host' }}</td></tr>
+    {% if r.limits %}<tr><th>Limits (this test · organisation · server)</th><td>
+      {{ r.limits.test.vus }} · {{ r.limits.organisation.vus }} · {{ r.limits.server.vus }} virtual users;
+      {{ r.limits.test.rps }} · {{ r.limits.organisation.rps }} · {{ r.limits.server.rps }} requests a second;
+      {{ r.limits.test.duration_s }} · {{ r.limits.organisation.duration_s }} · {{ r.limits.server.duration_s }} seconds</td></tr>{% endif %}
+    <tr><th>Started · finished</th><td>{{ (r.started_at or '')[:16].replace('T', ' ') }} · {{ (r.finished_at or '')[:16].replace('T', ' ') }} UTC</td></tr>
+    <tr><th>Requests</th><td>{{ ((r.result or {}).get('overall') or {}).get('count', 0) }}</td></tr>
+    {% if r.aborted_reason %}<tr><th>Stopped automatically</th><td>{{ r.aborted_reason }}</td></tr>{% endif %}
+    {% if r.stopped_by %}<tr><th>Stopped by</th><td>{{ r.stopped_by.full_name }}</td></tr>{% endif %}
+    {% if r.error %}<tr><th>Didn't complete</th><td>{{ r.error }}</td></tr>{% endif %}
+  </tbody></table>
+</section>
+<section><h2>Thresholds</h2>
+  <table><thead><tr><th>Page / scope</th><th>Measure</th><th>Threshold</th><th>Source</th><th>Measured</th><th>Result</th></tr></thead><tbody>
+  {% for t in c.thresholds %}<tr><td>{{ t.text.scope }}</td><td>{{ t.text.measure }}</td><td>{{ t.text.limit }}</td><td>{{ t.text.source }}</td><td>{{ t.text.measured }}</td><td>{{ t.text.result }}</td></tr>
+  {% else %}<tr><td colspan="6">No thresholds.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<section><h2>Per page</h2>
+  <table><thead><tr><th>Page</th><th>Requests</th><th>Req/s</th><th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>Slowest</th><th>Errors</th><th>Status codes</th></tr></thead><tbody>
+  {% for x in (r.result or {}).get('targets') or [] %}{% set l = x.latency_ms or {} %}
+  <tr><td>{{ x.path }}</td><td>{{ x.count }}</td><td>{{ x.rps }}</td><td>{{ l.p50 }}</td><td>{{ l.p90 }}</td><td>{{ l.p95 }}</td><td>{{ l.p99 }}</td><td>{{ l.max }}</td><td>{{ x.error_rate }}</td>
+    <td>{% for k, v in (x.status_codes or {}).items() %}{{ k }}: {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+  {% else %}<tr><td colspan="10">No requests were measured.</td></tr>{% endfor %}
+  </tbody></table>
+  <p class="muted">Times are in milliseconds; errors are the share of failed requests.</p>
+</section>
+<section><h2>Over time</h2>
+  {% for ch in c.charts %}
+  <figure>
+    <h3>{{ ch.title }}</h3>
+    {% if ch.points %}
+    <svg role="img" aria-label="{{ ch.title }} over time; the table below has the same numbers" width="560" height="160" viewBox="0 0 560 160">
+      <line x1="36" y1="140" x2="552" y2="140" stroke="#98A2B3"/><line x1="36" y1="12" x2="36" y2="140" stroke="#98A2B3"/>
+      <text x="2" y="18" font-size="9" fill="#535D70">{{ ch.max_text }}</text><text x="2" y="140" font-size="9" fill="#535D70">0</text>
+      {% if ch.threshold_y %}<line x1="36" y1="{{ ch.threshold_y }}" x2="552" y2="{{ ch.threshold_y }}" stroke="#B42318" stroke-dasharray="6 4"/>
+      <text x="470" y="{{ ch.threshold_y }}" dy="-3" font-size="9" fill="#B42318">Threshold {{ ch.threshold_text }}</text>{% endif %}
+      <polyline fill="none" stroke="#1F3A68" stroke-width="2" points="{{ ch.points }}"/>
+    </svg>
+    <table><thead><tr><th>Second</th><th>{{ ch.title }}</th></tr></thead><tbody>
+    {% for row in ch.rows %}<tr><td>{{ row.t }}</td><td>{{ row.value }}</td></tr>{% endfor %}
+    </tbody></table>
+    {% else %}<p>No measurements.</p>{% endif %}
+  </figure>
+  {% endfor %}
+  <p class="muted">The time-series CSV has one row per second.</p>
+</section>
+<section><h2>Defects raised</h2><ul>{% for d in r.defects or [] %}<li>{{ d.key }} {{ d.summary }} · {{ d.status }}</li>{% else %}<li>None</li>{% endfor %}</ul></section>
+<section><h2>Limitations</h2><ul>{% for x in c.limitations %}<li>{{ x }}</li>{% endfor %}</ul></section>
+
+{% elif c.report_type == 'accessibility' %}
+{% set sc = c.scan %}
+<section><h2>Summary</h2><p>{{ c.summary }}</p><p class="muted">Written by rules.</p></section>
+<section><h2>Scope</h2>
+  <p>{{ sc.pages }} pages · {{ sc.viewports|join(', ') }} · keyboard pass {{ 'on' if sc.keyboard else 'off' }} · pages behind sign-in {{ 'included' if sc.signed_in else 'not included' }} · axe-core {{ sc.tool_versions.get('axe', '') }} · {{ sc.status_label }}</p>
+  {% if c.not_checked %}<h3>Not checked (not counted as clean)</h3><ul>{% for n in c.not_checked %}<li>{{ n.url }}: {{ n.reason }}</li>{% endfor %}</ul>{% endif %}
+</section>
+<section><h2>By severity and WCAG criterion</h2>
+  <table><thead><tr><th>Severity</th><th>Rules failed</th></tr></thead><tbody>
+  {% for k in ['critical', 'serious', 'moderate', 'minor'] %}<tr><td>{{ k|capitalize }}</td><td>{{ c.by_severity.get(k, 0) }}</td></tr>{% endfor %}
+  </tbody></table>
+  <table><thead><tr><th>WCAG criterion</th><th>Rules failed</th></tr></thead><tbody>
+  {% for k, v in c.by_wcag.items() %}<tr><td>{{ k }}</td><td>{{ v }}</td></tr>{% else %}<tr><td colspan="2">None</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<section><h2>Findings by rule</h2>
+  {% for g in c.rules %}
+  <h3>{{ g.title }} ({{ g.rule_id }}) · {{ g.severity|capitalize }}{% if g.wcag %} · WCAG {{ g.wcag|join(', ') }}{% endif %}</h3>
+  <table><thead><tr><th>Finding</th><th>Page</th><th>Elements</th><th>Status</th><th>Linked to</th><th>Defect</th></tr></thead><tbody>
+  {% for f in g.findings %}<tr><td>{{ f.key }}</td><td>{{ f.path }}{% if f.viewport %} · {{ f.viewport }}{% endif %}</td>
+    <td>{% for n in f.nodes %}<code>{{ n.target }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+    <td>{{ f.status.replace('_', ' ')|capitalize }}{% if f.status_reason %}: {{ f.status_reason }}{% if f.status_by %} ({{ f.status_by.full_name }}){% endif %}{% endif %}{% if f.seen_before %} · seen before ({{ f.seen_before }}){% endif %}</td>
+    <td>{{ (f.mapped.requirements + f.mapped.test_cases)|join(', ') or '—' }}</td><td>{{ (f.defect or {}).get('key', '') }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% else %}<p>No rule failed on the pages checked.</p>{% endfor %}
+  {% if c.needs_review %}<h3>Needs review (never counted as problems)</h3><ul>{% for f in c.needs_review %}<li>{{ f.key }} {{ f.title }} on {{ f.path }}</li>{% endfor %}</ul>{% endif %}
+</section>
+<section><h2>Keyboard checks (heuristic)</h2>
+  <p class="muted">Pressed only Tab and Shift+Tab. Heuristic: a person should confirm these. They never create defect drafts automatically.</p>
+  <table><thead><tr><th>Page</th><th>Links and controls</th><th>Trap</th><th>Focus not visible</th><th>Not reachable</th></tr></thead><tbody>
+  {% for k in c.keyboard %}<tr><td>{{ k.path or k.url }}</td><td>{{ k.focusable }}</td><td>{{ 'Yes' if k.trap else 'No' }}</td><td>{{ k.not_visible or 0 }}</td><td>{{ k.not_reachable or 0 }}</td></tr>
+  {% else %}<tr><td colspan="5">The keyboard pass was off.</td></tr>{% endfor %}
+  </tbody></table>
+  {% for f in c.keyboard_findings %}<p>{{ f.key }} {{ f.title }} on {{ f.path }} · {{ f.status.replace('_', ' ') }}</p>{% endfor %}
+</section>
+
+{% else %}
+{% set sc = c.scan %}
+<section><h2>Summary</h2><p>{{ c.summary }}</p><p class="muted">Written by rules. {{ sc.status_label }}.</p>
+  {% if c.not_checked %}<h3>Not checked</h3><ul>{% for n in c.not_checked %}<li>{{ n.url }}: {{ n.reason }}</li>{% endfor %}</ul>{% endif %}
+</section>
+<section><h2>Every rule</h2>
+  <table><thead><tr><th>Rule</th><th>Result</th><th>Severity</th><th>Pages</th><th>Reason or observed</th><th>Reference</th></tr></thead><tbody>
+  {% for r in c.rules %}<tr><td>{{ r.title }}</td><td>{{ {'failed': 'Failed', 'passed': 'Passed', 'not_applicable': 'Not applicable', 'not_checked': 'Not checked'}.get(r.result, r.result) }}</td>
+    <td>{{ r.severity|capitalize if r.result == 'failed' else '' }}</td><td>{{ r.page_count or '' }}</td><td>{{ r.reason or '' }}{% if r.observed %}<br><code>{{ r.observed }}</code>{% endif %}</td>
+    <td>{% if r.reference %}{{ r.reference.name }}{% endif %}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<section><h2>Findings</h2>
+  {% for f in c.findings %}
+  <h3>{{ f.key }} · {{ f.title }} · {{ f.severity|capitalize }}</h3>
+  <p class="muted">{{ f.path }} · {{ f.status.replace('_', ' ')|capitalize }}{% if f.status_reason %}: {{ f.status_reason }}{% endif %}{% if f.defect %} · {{ f.defect.key }}{% endif %}</p>
+  {% if f.details.observed %}<p><strong>Observed</strong> <code>{{ f.details.observed }}</code></p>{% endif %}
+  {% if f.details.why %}<p><strong>Why it matters</strong> {{ f.details.why }}</p>{% endif %}
+  {% if f.details.fix %}<p><strong>How to fix</strong> {{ f.details.fix }}</p>{% endif %}
+  {% if f.rule_id.startswith('cookie') %}<p class="muted">Cookie values are never stored.</p>{% endif %}
+  {% else %}<p>No passive check failed.</p>{% endfor %}
+</section>
+{% endif %}
+</body>
+</html>

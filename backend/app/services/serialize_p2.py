@@ -93,6 +93,13 @@ def path(project_id: uuid.UUID, kind: str, key: str) -> str:
         "automation_script": f"{base}/automation?view=scripts&file={key}",
         "execution_result": f"{base}/execution/{key.rsplit('-', 1)[0]}/results/{key}",
         "execution_run": f"{base}/execution/{key}",
+        # Phase 5 (P5-07): checks, findings, load profiles and load tests; pages open in discovery.
+        "page": f"{base}/discovery?view=pages",
+        "quality_scan": f"{base}/non-functional/checks/{key}",
+        "quality_finding": f"{base}/non-functional/checks/{key.rsplit('-', 1)[0]}?finding={key}",
+        "performance_profile": f"{base}/non-functional/profiles/{key}",
+        "performance_run": f"{base}/non-functional/load-tests/{key}",
+        "threshold_result": f"{base}/non-functional/load-tests/{key.split('·')[0].strip()}",
     }.get(kind, base)
 
 

@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { automationBadge } from "@/lib/automation";
+import type { NonFunctionalCounts } from "@/lib/nonfunctional";
 
 export type ProjectSection = {
   slug: string;
@@ -71,11 +72,11 @@ export const PROJECT_SECTIONS: ProjectSection[] = [
     description: "Approved tests will run here, with screenshots, traces and results as evidence.",
   },
   {
-    slug: "performance",
-    label: "Performance",
+    slug: "non-functional",
+    label: "Non-functional",
     icon: Gauge,
     phase: 5,
-    description: "Load, stress, spike and endurance tests with k6, run only within limits you approve.",
+    description: "Speed under load, accessibility and basic security.",
   },
   {
     slug: "defects",
@@ -114,7 +115,7 @@ export function comingLabel(phase: number | null): string {
 }
 
 /** The phase the product has reached: sections up to it are real screens (design P2 §3.2). */
-export const CURRENT_PHASE = 4;
+export const CURRENT_PHASE = 5;
 
 export function isBuilt(s: ProjectSection): boolean {
   return s.built === true || (s.phase !== null && s.phase <= CURRENT_PHASE);
@@ -135,6 +136,7 @@ export function sectionBadge(
   pendingProposals = 0,
   openQuestions = 0,
   execution?: ExecutionCounts,
+  nonFunctional?: NonFunctionalCounts,
 ): SectionBadge | null {
   const by = (k: string) => stages?.find((s) => s.key === k);
   const gateWaiting = (k: string) => {
@@ -164,6 +166,14 @@ export function sectionBadge(
   if (slug === "defects" && execution && execution.drafts > 0) {
     const n = execution.drafts;
     return { text: `${n} to review`, srText: `${n} draft${n === 1 ? "" : "s"} waiting for review` };
+  }
+  if (slug === "non-functional" && nonFunctional) {
+    // Design P5 §4.2, first match wins.
+    const n = nonFunctional.waiting;
+    if (n > 0 && nonFunctional.canApprove) return { text: "Approve", srText: `${n} load test${n === 1 ? "" : "s"} waiting for your approval` };
+    if (n > 0) return { text: "Waiting", srText: "a load test is waiting for approval" };
+    if (nonFunctional.running) return { text: "Running", srText: "a check is in progress" };
+    if (nonFunctional.stale) return { text: "Out of date", srText: "checks are out of date" };
   }
   if (slug === "traceability" && (by("traceability")?.status === "stale" || by("test_design")?.status === "stale")) return { text: "Out of date", srText: "out of date" };
   if (slug === "assistant" && pendingProposals > 0)

@@ -48,6 +48,18 @@ export function coverageTiles(c: Coverage, href: (q: Record<string, string>) => 
       href: casesHref({ no_req: "1" }),
     },
     ...executionTiles(c.execution, href),
+    ...nfTiles(c.non_functional, href),
+  ];
+}
+
+/** Phase 5 tiles (design P5 §12.1): the counts are the lengths of the three non-functional gap lists. */
+export function nfTiles(n: Coverage["non_functional"] | undefined, href: (q: Record<string, string>) => string): Tile[] {
+  if (!n) return [];
+  const at = (id: string) => href({ view: "coverage" }) + `#${id}`;
+  return [
+    { id: "nf_open", label: "Open accessibility findings", value: String(n.requirements_with_open_accessibility_findings), hint: "requirements with open findings", warn: n.requirements_with_open_accessibility_findings > 0, href: at("gap-nf-open") },
+    { id: "nf_pages", label: "Pages not checked for accessibility", value: String(n.pages_not_checked_for_accessibility), hint: "pages no finished check covered", href: at("gap-nf-pages") },
+    { id: "nf_without", label: "Non-functional requirements without evidence", value: String(n.non_functional_requirements_without_evidence), hint: "no check, run or finding yet", href: at("gap-nf-without") },
   ];
 }
 
@@ -125,7 +137,28 @@ export const GAP_EMPTY: Record<string, string> = {
   flaky: "None. No test passed only on retry.",
   outdated: "None. Every script matches its test case.",
   regression: "None. Every defect's test case is in the Regression suite.",
+  nf_open: "None. No requirement has an open accessibility finding.",
+  nf_pages: "None. Every page was checked for accessibility.",
+  nf_without: "None. Every non-functional requirement has a check, run or finding.",
 };
+
+/** Non-functional matrix cells as text (design P5 §12.1); null means the type was never checked. */
+export function a11yCellText(c: { open: number; by_severity: Partial<Record<string, number>> } | null | undefined): string {
+  if (!c) return "Not checked";
+  if (!c.open) return "✓ None open";
+  const crit = c.by_severity.critical ?? 0;
+  return `${c.open} open${crit ? ` (${crit} critical)` : ""}`;
+}
+
+export function secCellText(c: { open: number } | null | undefined): string {
+  if (!c) return "Not checked";
+  return c.open ? `Open: ${c.open}` : "✓ None open";
+}
+
+export function perfCellText(c: { last_run: string; thresholds_failed: number } | null | undefined): string {
+  if (!c) return "Not checked";
+  return c.thresholds_failed ? `✗ Missed in ${c.last_run}` : "✓ Met";
+}
 
 export function gapCounts(g: Gaps) {
   const ev = g.requirements_without_execution_evidence;
@@ -140,6 +173,9 @@ export function gapCounts(g: Gaps) {
     risks: g.untested_high_risk?.open?.length ?? 0,
     acs: g.acceptance_criteria_without_test_cases?.length ?? 0,
     features: g.features_without_requirements?.length ?? 0,
+    nf_open: g.requirements_with_open_accessibility_findings?.length ?? 0,
+    nf_pages: g.pages_not_checked_for_accessibility?.length ?? 0,
+    nf_without: g.non_functional_requirements_without_evidence?.length ?? 0,
   };
 }
 
@@ -187,6 +223,12 @@ const LEVEL: Record<string, { one: string; many: string }> = {
   automation_script: { one: "Script", many: "Scripts" },
   execution_result: { one: "Result", many: "Results" },
   defect: { one: "Defect", many: "Defects" },
+  page: { one: "Page", many: "Pages" },
+  quality_scan: { one: "Check", many: "Checks" },
+  quality_finding: { one: "Finding", many: "Findings" },
+  performance_profile: { one: "Load test profile", many: "Load test profiles" },
+  performance_run: { one: "Load test", many: "Load tests" },
+  threshold_result: { one: "Threshold result", many: "Threshold results" },
 };
 
 export function levelName(type: string, n = 1): string {
@@ -205,6 +247,10 @@ export function typeOfKey(key: string): string | null {
   if (/^RISK-/.test(key)) return "risk";
   if (/^DEF-/.test(key)) return "defect";
   if (/^RUN-\d+-\d+$/.test(key)) return "execution_result";
+  if (/^(A11Y|SEC)-\d+-\d+$/.test(key)) return "quality_finding";
+  if (/^(A11Y|SEC)-\d+$/.test(key)) return "quality_scan";
+  if (/^PERF-\d+$/.test(key)) return "performance_run";
+  if (/^PRF-\d+$/.test(key)) return "performance_profile";
   return null;
 }
 
@@ -228,17 +274,40 @@ export function keyHref(projectId: string, key: string, reqOfAc?: string | null)
       return `${base}/defects/${key}`;
     case "execution_result":
       return `${base}/execution/${key.replace(/-\d+$/, "")}/results/${key}`;
+    case "quality_scan":
+      return `${base}/non-functional/checks/${key}`;
+    case "quality_finding":
+      return `${base}/non-functional/checks/${key.replace(/-\d+$/, "")}?finding=${key}`;
+    case "performance_run":
+      return `${base}/non-functional/load-tests/${key}`;
+    case "performance_profile":
+      return `${base}/non-functional/profiles/${key}`;
     default:
       return `${base}/traceability/${key}`;
   }
 }
 
-export const CHAIN_KEY = /^(REQ|AC|TCOND|TC|RISK|DEF)-\d+$/;
+export const CHAIN_KEY = /^(?:(REQ|AC|TCOND|TC|RISK|DEF|PERF|PRF)-\d+|(A11Y|SEC)-\d+(?:-\d+)?)$/;
 
 export type ChainLevel = { type: string; items: ArtefactRef[]; root?: boolean };
 
 /** Top-down order of the chain levels (§14.4). Risks and features are listed beside the chain. */
-const RANK: Record<string, number> = { requirement: 0, acceptance_criterion: 1, test_condition: 2, test_case: 3, automation_script: 4, execution_result: 5, defect: 6 };
+const RANK: Record<string, number> = {
+  requirement: 0,
+  acceptance_criterion: 1,
+  // Phase 5 (P5-07): Requirement → Page → Check → Finding → Defect; Requirement → Profile → Load test → Threshold result → Defect.
+  page: 1,
+  performance_profile: 1,
+  test_condition: 2,
+  quality_scan: 2,
+  performance_run: 2,
+  test_case: 3,
+  quality_finding: 3,
+  threshold_result: 3,
+  automation_script: 4,
+  execution_result: 5,
+  defect: 6,
+};
 
 /** Splits a chain into the nested levels (requirement → AC → condition → case) and the side list (risks, features). */
 export function chainLevels(c: Chain): { chain: ChainLevel[]; side: ChainLevel[] } {

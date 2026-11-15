@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.readiness.rules import Facts, evaluate, stamp
+from app.agents.readiness.rules import Facts, evaluate, nf_rule_for, stamp
 from app.db.models import (
     AcceptanceCriterion,
     ProjectSecret,
@@ -89,7 +89,61 @@ async def load_facts(s: AsyncSession, project_id: uuid.UUID) -> Facts:
         ).scalars()
     ]
     await _phase3_facts(s, project_id, reqs, acs, facts)
+    await _nf_facts(s, project_id, facts)
     return facts
+
+
+async def _nf_facts(s: AsyncSession, project_id: uuid.UUID, facts: Facts) -> None:
+    """Latest accessibility and security checks and the latest judged load test (P5-07)."""
+    from app.db.models import Approval, User
+    from app.services import nf_evidence as nfe
+
+    st = await nfe.load(s, project_id)
+    names = {
+        u.id: (u.full_name or "someone")
+        for u in (
+            await s.execute(select(User).where(User.id.in_([f.status_by for f in st.a11y + st.sec if f.status_by])))
+        ).scalars()
+    }
+    for kind, scan, rows in (("accessibility", st.a11y_scan, st.a11y), ("security", st.sec_scan, st.sec)):
+        if scan is None:
+            facts.nf[kind] = None
+            continue
+        counted = [f for f in rows if nfe.counted(f)]
+        facts.nf[kind] = {
+            "scan_key": scan.key,
+            "open": [(f.key, f.severity.value) for f in counted if f.status.value == "open"],
+            "accepted": [
+                (f.key, names.get(f.status_by, "someone") if f.status_by else "someone", f.status_reason or "")
+                for f in counted
+                if f.status.value == "accepted_risk"
+            ],
+        }
+    if st.run is None:
+        facts.nf["performance"] = None
+        return
+    apr = (
+        await s.execute(select(Approval).where(Approval.performance_run_id == st.run.id).limit(1))
+    ).scalar_one_or_none()
+    missed = []
+    for t in st.missed():
+        where = t.get("path") or "All requests"
+        if t.get("metric") == "error_rate":
+            missed.append(
+                f"{where} errors {float(t.get('measured') or 0) * 100:.1f} % (threshold {float(t['value']) * 100:g} %)"
+            )
+        else:
+            from app.domain.performance.profile import ms_text
+
+            missed.append(
+                f"{where} {t.get('metric')} {ms_text(t.get('measured'))} (threshold {ms_text(t.get('value'))})"
+            )
+    facts.nf["performance"] = {
+        "run_key": st.run.key,
+        "approved_at": apr.decided_at.strftime("%-d %b") if apr is not None and apr.decided_at else None,
+        "missed": missed,
+        "thresholds": len(st.run.threshold_results or []),
+    }
 
 
 async def _phase3_facts(
@@ -150,4 +204,9 @@ async def _phase3_facts(
 
 
 def evaluate_row(row: ReadinessCriterion, facts: Facts, *, requirement_id: str | None = None) -> dict[str, Any] | None:
-    return stamp(evaluate(row.check_rule_id, facts, requirement_id=requirement_id), row.key)
+    # P5-07: a DoD item about accessibility, security or performance is evaluated from the latest checks even
+    # without a coded rule (a person wrote it, or a template mentions it).
+    rule = row.check_rule_id
+    if rule is None:
+        rule = nf_rule_for(row.kind, row.text)
+    return stamp(evaluate(rule, facts, requirement_id=requirement_id), row.key)

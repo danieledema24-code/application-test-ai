@@ -18,8 +18,9 @@ from app.domain.stages import (
 )
 
 
-def test_fifteen_stages_phase_four_available() -> None:
-    assert len(STAGES) == 15
+def test_seventeen_stages_phase_five_available() -> None:
+    # P5-00 adds the optional accessibility and security branches; release readiness (Phase 6) is the only one left.
+    assert len(STAGES) == 17
     available = [s.key for s in STAGES if s.available]
     assert available == [
         StageKey.intake,
@@ -35,6 +36,9 @@ def test_fifteen_stages_phase_four_available() -> None:
         StageKey.execution,
         StageKey.failure_analysis,
         StageKey.defects_summary,
+        StageKey.performance,
+        StageKey.accessibility,
+        StageKey.security_assessment,
     ]
 
 

@@ -24,7 +24,7 @@ from app.domain.enums import (
     StageStatus,
     UrlRole,
 )
-from app.domain.stages import DEFAULT_APPROVAL_POLICY
+from app.domain.stages import DEFAULT_APPROVAL_POLICY, STAGES
 from app.orchestrator.orchestrator import Orchestrator
 from app.schemas import api
 from app.security.ssrf import UrlRejected, normalise_url
@@ -332,6 +332,43 @@ async def apply_g6_hybrid_default(ctx: AppContext) -> int:
     idempotent like `require_g5_signoff`.
     """
     return await _switch_stored_default(ctx, "G6", "required", "recommended")
+
+
+async def ensure_stage_rows(ctx: AppContext) -> int:
+    """Startup data step (P5-00): projects created before a stage key existed get its workflow row (`not_started`).
+
+    Phase 5 adds `accessibility` and `security_assessment`. Done here rather than in migration 0017 so that a Phase 4
+    process still running on the migrated database never reads a stage key it doesn't know. Runs across
+    organisations (system task, tenant filter bypassed) and only adds missing rows, so a second start adds none.
+    """
+    from app.db.tenant import BYPASS
+
+    n = 0
+    async with ctx.session_factory() as s:
+        projects = (await s.execute(select(Project.id, Project.organisation_id).execution_options(**BYPASS))).all()
+        have: dict[uuid.UUID, set[str]] = {}
+        for pid, key in (
+            await s.execute(select(WorkflowStage.project_id, WorkflowStage.stage_key).execution_options(**BYPASS))
+        ).all():
+            have.setdefault(pid, set()).add(str(key))
+        for pid, org_id in projects:
+            for d in STAGES:
+                if d.key.value in have.get(pid, set()):
+                    continue
+                s.add(
+                    WorkflowStage(
+                        organisation_id=org_id,
+                        project_id=pid,
+                        stage_key=d.key,
+                        gate_key=d.gate,
+                        gate_status=GateStatus.none,
+                        status=StageStatus.not_started,
+                    )
+                )
+                n += 1
+        if n:
+            await s.commit()
+    return n
 
 
 async def _switch_stored_default(ctx: AppContext, gate: str, old: str, new: str) -> int:

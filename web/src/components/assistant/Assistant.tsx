@@ -51,6 +51,13 @@ export const TASKS: TaskDef[] = [
   { id: "explain_failed", label: "Explain a failed test", hint: "Cause, signals, expected vs actual, defect", intent: "explain_failed_test", group: "no_ai" },
   { id: "analyse_defect", label: "Analyse a defect", hint: "Fields, occurrences, links and what's needed to verify it", intent: "analyse_defect", group: "no_ai" },
   { id: "rerun", label: "Re-run failed tests", hint: "Creates a run request; Gate 7 still decides", intent: "propose_rerun", group: "no_ai" },
+  { id: "nf_perf", label: "Is the site fast enough?", hint: "The latest load test against its thresholds", intent: "performance_summary", group: "no_ai" },
+  { id: "nf_a11y", label: "Can everyone use the site?", hint: "Open accessibility findings from the latest check", intent: "accessibility_summary", group: "no_ai" },
+  { id: "nf_sec", label: "Is the site missing basic protections?", hint: "The latest passive security check", intent: "security_summary", group: "no_ai" },
+  { id: "nf_explain", label: "Explain a finding", hint: "An accessibility or security finding", intent: "explain_finding", group: "no_ai" },
+  { id: "nf_check_a11y", label: "Check accessibility", hint: "Starts a check; no approval needed", intent: "propose_scan", group: "no_ai" },
+  { id: "nf_check_sec", label: "Run a security check", hint: "Passive only; starts a check", intent: "propose_scan", group: "no_ai" },
+  { id: "nf_load", label: "Plan a load test", hint: "Creates a request; someone who can approve still approves it", intent: "propose_performance_run", group: "no_ai" },
   { id: "explain_case", label: "Explain a test case", hint: "Why it exists, its technique, values and links", intent: "explain_test_case", group: "no_ai" },
   { id: "neg_cases", label: "Generate more negative test cases", intent: "propose_negative_cases", group: "no_ai" },
   { id: "regression", label: "Generate regression scenarios", hint: "Suggests changes to the Regression suite", intent: "propose_regression_suite", group: "no_ai" },
@@ -67,7 +74,8 @@ export const TASKS: TaskDef[] = [
 ];
 
 export const LATER_TASKS_FALLBACK: { label: string; available_from_phase: number; needs: string }[] = [
-  { label: "Performance, accessibility and security checks", available_from_phase: 5, needs: "Phase 5" },
+  { label: "Release readiness and Test Completion Report", available_from_phase: 6, needs: "Phase 6" },
+  { label: "What changed since the last scan", available_from_phase: 6, needs: "Phase 6" },
 ];
 
 type TaskData = {
@@ -94,6 +102,7 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
   const ctxDefect = data.context?.type === "defect" ? data.context.key : "";
   const [failedKey, setFailedKey] = useState(ctxFailed);
   const [defectKey, setDefectKey] = useState(ctxDefect);
+  const [findingKey, setFindingKey] = useState(data.context?.type === "quality_finding" ? data.context.key : "");
   const [caseKey, setCaseKey] = useState(ctxCase);
   const [caseKeys, setCaseKeys] = useState<string[]>(ctxCase ? [ctxCase] : []);
   const [target, setTarget] = useState(ctxReq ? `req:${ctxReq}` : "");
@@ -179,6 +188,25 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
       );
     case "rerun":
       return runBtn("Propose a run request", () => run("propose_rerun", { only_failed: true }, "Re-run the failed tests"));
+    case "nf_perf":
+      return runBtn("Check now", () => run("performance_summary", {}, "Is the site fast enough?"));
+    case "nf_a11y":
+      return runBtn("Check now", () => run("accessibility_summary", {}, "Can everyone use the site?"));
+    case "nf_sec":
+      return runBtn("Check now", () => run("security_summary", {}, "Is the site missing basic protections?"));
+    case "nf_explain":
+      return (
+        <div className="space-y-2">
+          <TextField id={`task-${task.id}-first`} label="Finding" hint="For example A11Y-0001-01 or SEC-0001-02" value={findingKey} onChange={(e) => setFindingKey(e.target.value.toUpperCase())} />
+          {runBtn("Explain", () => run("explain_finding", { key: findingKey.trim() }, `Explain ${findingKey.trim()}`), !/^(A11Y|SEC)-\d{2,}-\d{2,}$/.test(findingKey.trim()))}
+        </div>
+      );
+    case "nf_check_a11y":
+      return runBtn("Propose a check", () => run("propose_scan", { kind: "accessibility" }, "Check accessibility"));
+    case "nf_check_sec":
+      return runBtn("Propose a check", () => run("propose_scan", { kind: "security" }, "Run a security check"));
+    case "nf_load":
+      return runBtn("Propose a load test", () => run("propose_performance_run", {}, "Plan a load test"));
     case "explain_case":
       return (
         <div className="space-y-2">

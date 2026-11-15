@@ -24,6 +24,8 @@ const KIND_LABEL: Record<Proposal["kind"], string> = {
   update_test_case: "Update test cases",
   set_suite: "Regression suite",
   request_run: "Request a test run",
+  start_check: "Start a check",
+  request_load_test: "Create load test request",
 };
 
 const STATUS_LABEL: Record<Proposal["status"], string> = {
@@ -218,6 +220,12 @@ function Item({
             <p className="text-small text-fg">
               Test cases: {((p.payload as { case_keys?: string[] }).case_keys ?? []).join(", ")}. Chromium · Desktop. Accepting creates a run request; it
               starts only after someone who can approve gates authorises it (Gate 7).
+            </p>
+          ) : p.kind === "start_check" ? (
+            <p className="text-small text-fg">Accepting starts the check now. Checks need no approval.</p>
+          ) : p.kind === "request_load_test" ? (
+            <p className="text-small text-fg">
+              Creates a load test request. Someone who can approve must still type the host and approve it; the assistant can&apos;t approve load tests or start load.
             </p>
           ) : isAcList(p.preview) ? (
             <ul className="space-y-1 text-small text-fg">

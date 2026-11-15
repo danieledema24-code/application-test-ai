@@ -32,6 +32,7 @@ from app.db.models import (
 )
 from app.domain.automation import side_effects as fx
 from app.domain.enums import (
+    ApprovalKind,
     AssetKind,
     AutomationSuitability,
     Role,
@@ -696,6 +697,13 @@ async def decide_approval(
     approval_id: uuid.UUID, body: DecisionInput, ctx: Ctx, s: ScopedSession, p: CurrentPrincipal
 ) -> dict[str, Any]:
     a: Approval = await c.load(s, Approval, approval_id, "Approval")
+    if a.kind == ApprovalKind.load_test:
+        # P5-01b (decision D18): a load test's approval; the response is the load test.
+        from app.api.routers.nonfunctional import decide_load_test
+
+        _require_approver(p, "Approving load tests needs approval permission")
+        return await decide_load_test(ctx, s, p, a, decision=body.decision, comment=body.comment,
+                                      confirm_text=body.confirm_text)  # fmt: skip
     _require_approver(p, "Deciding approvals needs gate-approval permission")
     try:
         await apr.decide(s, a, decision=body.decision, comment=body.comment, confirm_text=body.confirm_text,

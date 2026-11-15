@@ -12,6 +12,7 @@ import { LoadingBlock } from "@/components/ui";
 import { Topbar } from "./Topbar";
 import type { RunList } from "@/lib/execution";
 import type { DefectList } from "@/lib/defects";
+import { nfCounts, type Overview } from "@/lib/nonfunctional";
 import { takeRouteFocusClaim } from "@/lib/focusReturn";
 
 const NAV = [
@@ -99,6 +100,10 @@ function ProjectNav({ id, section, onNavigate }: { id: string; section: string; 
   const { data: runs } = useApi<RunList>(scripted ? `/projects/${id}/execution-runs` : null, { limit: 20 }, { shouldRetryOnError: false, refreshInterval: 15000 });
   const { data: defects } = useApi<DefectList>(scripted ? `/projects/${id}/defects` : null, { status: "draft", limit: 1 }, { shouldRetryOnError: false, refreshInterval: 15000 });
   const execution = runs || defects ? { runsWaiting: runs?.waiting.length ?? 0, running: !!runs?.running, drafts: defects?.counts.draft ?? 0 } : undefined;
+  // Non-functional badge (design P5 §4.2): only once the optional checks are reachable (G2), so earlier projects make no call.
+  const g2 = workflow?.stages.find((x) => x.key === "accessibility")?.available && !!workflow?.stages.find((x) => x.key === "discovery")?.current_version;
+  const { data: nfOverview } = useApi<Overview>(g2 ? `/projects/${id}/non-functional` : null, undefined, { shouldRetryOnError: false, refreshInterval: 15000 });
+  const nonFunctional = nfCounts(nfOverview);
   return (
     <div className="mt-6">
       <p className="px-3 text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted">Project</p>
@@ -115,7 +120,7 @@ function ProjectNav({ id, section, onNavigate }: { id: string; section: string; 
             const active = section === s.slug;
             const Icon = s.icon;
             const built = isBuilt(s);
-            const badge = built ? sectionBadge(s.slug, workflow?.stages, pending, caseStats?.open_questions ?? 0, execution) : null;
+            const badge = built ? sectionBadge(s.slug, workflow?.stages, pending, caseStats?.open_questions ?? 0, execution, nonFunctional) : null;
             return (
               <li key={s.slug || "overview"}>
                 <Link

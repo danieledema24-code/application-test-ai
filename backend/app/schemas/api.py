@@ -26,6 +26,8 @@ StageKeyT = Literal[
     "defects_summary",
     "release_readiness",
     "performance",
+    "accessibility",
+    "security_assessment",
 ]
 StageStatusT = Literal[
     "not_started",
@@ -87,6 +89,9 @@ class EvidenceLink(BaseModel):
     viewport: str | None = None
     source_url: str | None = None
     page_id: uuid.UUID | None = None
+    # P5-05c: set when retention removed the file ("Removed by the retention policy on 14 Dec 2026."); the content
+    # URL then answers 410 with the same text.
+    removed: str | None = None
 
 
 class EvidenceDetail(EvidenceLink):
@@ -122,6 +127,18 @@ class AutomationHealth(BaseModel):
     browsers: list[str] = Field(default_factory=list)
 
 
+class ToolsHealth(BaseModel):
+    """P5-00: versions of the non-functional testing tools, or null when not available on this server.
+
+    `loadgen` is the automation/ toolkit's load generator (P5-01a), `axe` the pinned axe-core (P5-02); `k6` and
+    `docker` are only detected (decision D17: k6 is offered as a downloadable script, not run)."""
+
+    loadgen: str | None = None
+    axe: str | None = None
+    k6: str | None = None
+    docker: str | None = None
+
+
 class Health(BaseModel):
     status: Literal["ok", "degraded"]
     db: bool
@@ -134,6 +151,9 @@ class Health(BaseModel):
     # http://localhost:4100 can be analysed. LAN/link-local addresses stay blocked either way.
     allow_private_targets: bool = False
     automation: AutomationHealth = Field(default_factory=AutomationHealth)
+    tools: ToolsHealth = Field(default_factory=ToolsHealth)
+    # Design P5 open question 5: the browser egress proxy (P5-05a). "off" until it exists; never secrets.
+    egress_proxy: Literal["on", "off"] = "off"
 
 
 # ---------------------------------------------------------------- auth
@@ -310,6 +330,8 @@ class ProjectSummary(BaseModel):
     requirements: dict[str, int] | None = None
     # Phase 4: the latest finished test run ({key, status, tests, totals, finished_at}); null before any run.
     last_run: dict[str, Any] | None = None
+    # Phase 5 (P5-05c): when a permanent deletion is scheduled (owner, archived projects only); null otherwise.
+    purge_scheduled_at: datetime | None = None
 
 
 class ProjectUrlOut(BaseModel):
@@ -738,22 +760,25 @@ class KnowledgeItemOut(BaseModel):
 
 class ReportCreate(Req):
     report_type: Literal[
-        "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect"
-    ]
+        "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect",
+        "performance", "accessibility", "security",
+    ]  # fmt: skip
     scan_id: uuid.UUID | None = None
     stage_run_version: int | None = None
     # P4-11: the run a Test Execution Report covers; omitted = "latest result per test case".
+    # P5-04a: also the load test (PERF-…) or check (A11Y-…, SEC-…) of a non-functional report; omitted = the latest.
     run_key: str | None = Field(default=None, max_length=40)
 
     @classmethod
     def allowed_types(cls) -> set[str]:
         return {
-            "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect"
+            "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect",
+            "performance", "accessibility", "security",
         }  # fmt: skip
 
 
 class ReportFile(BaseModel):
-    format: Literal["pdf", "html", "json", "csv"]
+    format: Literal["pdf", "html", "json", "csv", "csv_timeseries", "xlsx", "docx"]
     size: int
     sha256: str
     filename: str

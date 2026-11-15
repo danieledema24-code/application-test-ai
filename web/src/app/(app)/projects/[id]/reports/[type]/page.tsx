@@ -7,12 +7,13 @@ import { api, ApiError, downloadFile } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { ReportDetail, ReportSummary } from "@/lib/contract";
 import { fmtDateTime } from "@/lib/format";
-import { HYPOTHESIS_BAND, approvedBand, defectDraftBand, downloadFailedText, downloadFormats, draftBand, isPhase3Report, isPhase4Report, phase2ReportFileName, preparingText, reportBySlug, type DownloadFormat } from "@/lib/reports";
+import { HYPOTHESIS_BAND, approvedBand, defectDraftBand, downloadFailedText, downloadFormats, draftBand, isPhase3Report, isPhase4Report, isPhase5Report, phase2ReportFileName, preparingText, reportBySlug, type DownloadFormat } from "@/lib/reports";
 import { hostOf } from "@/lib/url";
 import { Button, Callout, EmptyState, ErrorState, LinkButton, LoadingBlock, SelectField, StatusPill, useToast } from "@/components/ui";
 import { Phase2ReportBody } from "@/components/report/Phase2Report";
 import { Phase3ReportBody } from "@/components/report/Phase3Report";
 import { Phase4ReportBody } from "@/components/report/Phase4Report";
+import { Phase5ReportBody } from "@/components/report/Phase5Report";
 import { useAuth } from "@/lib/auth";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { gateApproved, requirementsStages } from "@/components/requirements/hooks";
@@ -60,7 +61,7 @@ function Report() {
       toast("Report downloaded.");
     } catch (err) {
       setAnnounce("");
-      toast(err instanceof ApiError && err.status === 409 ? "The report is still being prepared. Try again in a moment." : downloadFailedText(format), "error");
+      toast(err instanceof ApiError && err.status === 409 ? "The report is still being prepared. Try again in a moment." : err instanceof ApiError && err.status === 410 ? err.message : downloadFailedText(format), "error");
     } finally {
       setDownloading(null);
     }
@@ -93,7 +94,9 @@ function Report() {
           onChange={(e) => router.replace(`/projects/${p.id}/reports/${def.slug}?version=${e.target.value}`)}
           options={list.map((r) => ({
             value: String(r.version),
-            label: isPhase4Report(def.type)
+            label: isPhase5Report(def.type)
+              ? `Version ${r.version} · ${r.run_key ?? "latest"} · ${fmtDateTime(r.created_at)}`
+              : isPhase4Report(def.type)
               ? `Version ${r.version} · ${r.run_key ?? (def.type === "execution" ? "latest per test case" : "defects")} · ${fmtDateTime(r.created_at)}`
               : `Version ${r.version} · ${fmtDateTime(r.created_at)} · ${r.approval?.status === "approved" ? "Approved" : "Draft"}`,
           }))}
@@ -110,7 +113,9 @@ function Report() {
         ? "The Test Strategy report is available once the strategy is written."
         : def.type === "requirements_spec" && !stages.req?.current_version
           ? "The Requirements Specification is available once requirements are generated."
-          : isPhase4Report(def.type) && !p.workflow?.stages.find((x) => x.key === "execution")?.current_version && !list.length
+          : isPhase5Report(def.type) && !list.length
+            ? `Not available yet · ${def.unavailable}`
+            : isPhase4Report(def.type) && !p.workflow?.stages.find((x) => x.key === "execution")?.current_version && !list.length
             ? "Not available yet · Needs a test run"
             : isPhase3Report(def.type) && !stages.design?.current_version
             ? def.type === "rtm"
@@ -149,7 +154,9 @@ function Report() {
         </span>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="flex flex-wrap items-center gap-2 text-body text-fg">
-            {isPhase4Report(def.type) ? (
+            {isPhase5Report(def.type) ? (
+              <span className="text-small text-fg">{chosen.run_key ? `From ${chosen.run_key}` : "Latest"}</span>
+            ) : isPhase4Report(def.type) ? (
               def.type === "defect" && defectDraftBand(Number((detail.data.content as { drafts?: number }).drafts ?? 0)) ? (
                 <span className="rounded-md bg-warning-bg px-2 py-0.5 text-small font-semibold text-warning-fg ring-1 ring-inset ring-warning-line">{defectDraftBand(Number((detail.data.content as { drafts?: number }).drafts ?? 0))}</span>
               ) : (
@@ -176,12 +183,22 @@ function Report() {
                 {downloading === "csv" ? "Preparing CSV…" : "Download CSV"}
               </Button>
             )}
+            {downloadFormats(def.type).includes("csv_timeseries") && (
+              <Button variant="secondary" onClick={() => void download("csv_timeseries")} loading={downloading === "csv_timeseries"}>
+                {downloading === "csv_timeseries" ? "Preparing CSV…" : "Download CSV: time series"}
+              </Button>
+            )}
+            {downloadFormats(def.type).includes("xlsx") && (
+              <Button variant="secondary" onClick={() => void download("xlsx")} loading={downloading === "xlsx"}>
+                {downloading === "xlsx" ? "Preparing XLSX…" : "Download XLSX"}
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => window.print()} icon={<Printer className="h-4 w-4" aria-hidden />}>
               Print
             </Button>
           </div>
         </div>
-        {chosen.is_latest_source === false && !isPhase4Report(def.type) && (
+        {chosen.is_latest_source === false && !isPhase4Report(def.type) && !isPhase5Report(def.type) && (
           <Callout
             tone="info"
             actions={
@@ -197,7 +214,9 @@ function Report() {
               : `This report reflects ${def.source} version ${chosen.stage_run_version ?? chosen.version}. The current version has changed since.`}
           </Callout>
         )}
-        {isPhase4Report(def.type) ? (
+        {isPhase5Report(def.type) ? (
+          <Phase5ReportBody type={def.type} content={detail.data.content} projectId={p.id} />
+        ) : isPhase4Report(def.type) ? (
           <Phase4ReportBody type={def.type} content={detail.data.content} projectId={p.id} />
         ) : phase3 ? (
           <Phase3ReportBody type={def.type as "test_case_spec" | "rtm"} report={chosen} content={detail.data.content} projectId={p.id} />

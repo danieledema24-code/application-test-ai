@@ -42,7 +42,8 @@ from app.services import serialize_p2 as out
 from app.services.counters import next_key
 
 KEY_RE = re.compile(
-    r"\b(?:(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT|TCOND|TC|TD|DEF|APR)-\d{2,6}|RUN-\d{2,6}(?:-\d{2,4})?)\b"
+    r"\b(?:(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT|TCOND|TC|TD|DEF|APR|PERF|PRF)-\d{2,6}"
+    r"|(?:RUN|A11Y|SEC)-\d{2,6}(?:-\d{2,4})?)\b"
 )
 AI_OFF_NOTICE = "Free-form answers need AI, which isn't configured. Built-in questions still work."
 DEFAULT_AI_TURNS_PER_DAY = 200
@@ -102,6 +103,25 @@ INTENTS: dict[str, IntentSpec] = {
             "Re-run tests",
             "Re-run the failed tests",
             {"type": "object", "properties": {"only_failed": {"type": "boolean"}, "case_keys": {"type": "array"}}},
+            creates_proposal=True,
+        ),
+        IntentSpec("performance_summary", "Is the site fast enough?", "Is the site fast enough?", _schema()),
+        IntentSpec("accessibility_summary", "Can everyone use the site?", "Can everyone use the site?", _schema()),
+        IntentSpec(
+            "security_summary",
+            "Is the site missing basic protections?",
+            "Is the site missing basic protections?",
+            _schema(),
+        ),
+        IntentSpec("explain_finding", "Explain a finding", "Explain A11Y-0001-01", _schema(key="string")),
+        IntentSpec(
+            "propose_scan", "Check accessibility", "Check accessibility", _schema(kind="string"), creates_proposal=True
+        ),
+        IntentSpec(
+            "propose_performance_run",
+            "Plan a load test",
+            "Plan a load test",
+            _schema(profile="string"),
             creates_proposal=True,
         ),
         IntentSpec(
@@ -215,7 +235,8 @@ INTENTS: dict[str, IntentSpec] = {
 }
 
 LATER_PHASE = [
-    {"label": "Performance, accessibility and security checks", "available_from_phase": 5, "needs": "Phase 5"},
+    {"label": "Release readiness and Test Completion Report", "available_from_phase": 6, "needs": "Phase 6"},
+    {"label": "What changed since the last scan", "available_from_phase": 6, "needs": "Phase 6"},
 ]
 
 
@@ -417,6 +438,10 @@ async def resolve_keys(s: AsyncSession, project_id: uuid.UUID, keys: set[str]) -
         from app.services import assistant_p4
 
         found.update(await assistant_p4.resolve(s, project_id, keys))
+    if {"A11Y", "SEC", "PERF", "PRF"} & set(by_prefix):
+        from app.services import assistant_p5
+
+        found.update(await assistant_p5.resolve(s, project_id, keys))
     return found
 
 
@@ -434,6 +459,17 @@ async def citation_guard(s: AsyncSession, project_id: uuid.UUID, ans: Answer) ->
         ans.notice("unresolved_citation", f"Removed {len(bad)} reference(s) that don't exist in this project.")
     keep = {m.group(0) for m in KEY_RE.finditer(ans.content)}
     ans.citations = [c for c in ans.citations if c["key"] in keep]
+
+
+def security_tail(ans: Answer, question: str) -> None:
+    """D19: every answer to a security question (built-in or AI) ends with the fixed security statement."""
+    from app.security.passive_rules import STATEMENT
+
+    routed = route(question) if question else None
+    about_security = ans.intent == "security_summary" or (routed is not None and routed[0] == "security_summary")
+    about_security |= ans.intent == "explain_finding" and "SEC-" in ans.content
+    if about_security and not ans.content.rstrip().endswith(STATEMENT):
+        ans.content = f"{ans.content.rstrip()}\n{STATEMENT}"
 
 
 # ---------------------------------------------------------------- deterministic intents
@@ -912,6 +948,18 @@ def _register_p3() -> None:
             "propose_rerun": p4.propose_rerun,
         }
     )
+    from app.services import assistant_p5 as p5
+
+    HANDLERS.update(
+        {
+            "performance_summary": p5.performance_summary,
+            "accessibility_summary": p5.accessibility_summary,
+            "security_summary": p5.security_summary,
+            "explain_finding": p5.explain_finding,
+            "propose_scan": p5.propose_scan,
+            "propose_performance_run": p5.propose_performance_run,
+        }
+    )
 
 
 _register_p3()
@@ -930,6 +978,9 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
     feat = re.search(r"\bFEAT-\d{2,6}\b", text, re.IGNORECASE)
     run_key = re.search(r"\bRUN-\d{2,6}-\d{2,4}\b", text, re.IGNORECASE)
     def_key = re.search(r"\bDEF-\d{2,6}\b", text, re.IGNORECASE)
+    nf = _route_nf(text, t)
+    if nf is not None:
+        return nf
     if re.search(r"\bre-?run\b|\brun (?:the )?(?:failed|failing) tests?\b", t):
         keys = [m.upper() for m in re.findall(r"\bTC-\d{2,6}\b", text, re.IGNORECASE)]
         return "propose_rerun", ({"case_keys": keys} if keys else {"only_failed": True})
@@ -993,6 +1044,33 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
         return "workflow_status", {}
     if "help" in t or "what can you" in t:
         return "help", {}
+    return None
+
+
+def _route_nf(text: str, t: str) -> tuple[str, dict[str, Any]] | None:
+    """Non-functional questions (P5-07): finding keys, load tests, accessibility and security."""
+    finding = re.search(r"\b(?:A11Y|SEC)-\d{2,6}-\d{2,4}\b", text, re.IGNORECASE)
+    if finding:
+        return "explain_finding", {"key": finding.group(0).upper()}
+    prf = re.search(r"\bPRF-\d{2,6}\b", text, re.IGNORECASE)
+    if re.search(r"\b(plan|run|start|request)\b.*\bload test\b", t) or prf:
+        return "propose_performance_run", {"profile": prf.group(0).upper()} if prf else {}
+    if re.search(r"\b(check|scan|run)\b.*\b(accessibility|a11y)\b", t) and not re.search(r"\?\s*$", t):
+        return "propose_scan", {"kind": "accessibility"}
+    if re.search(r"\b(run|start)\b.*\bsecurity (check|scan)\b", t):
+        return "propose_scan", {"kind": "security"}
+    if re.search(r"\bPERF-\d{2,6}\b", text, re.IGNORECASE) or re.search(
+        r"\bfast enough\b|\bperformance\b|\bload test|\bslow\b|\bresponse time", t
+    ):
+        return "performance_summary", {}
+    if re.search(r"\bA11Y-\d{2,6}\b", text, re.IGNORECASE) or re.search(
+        r"\baccessib|\bwcag\b|can everyone use|screen reader", t
+    ):
+        return "accessibility_summary", {}
+    if re.search(r"\bSEC-\d{2,6}\b", text, re.IGNORECASE) or re.search(
+        r"\bsecur|\bprotections?\b|\bheaders?\b|\bhttps\b|\bcookies?\b", t
+    ):
+        return "security_summary", {}
     return None
 
 

@@ -24,6 +24,8 @@ export function attentionRows(o: {
   scripts?: { aiReview: number; invalid: number; outdated: number } | null;
   viewer?: boolean;
   now?: number;
+  /** Phase 5 (design P5 §4.5): non-functional rows (lib/nonfunctional `nfAttentionRows`), placed after the run rows. */
+  nonFunctional?: { text: string; action: string; href: string | null }[];
 }): { text: string; action: string; href: string | null }[] {
   const rows: { text: string; action: string; href: string | null }[] = [];
   const base = `/projects/${o.projectId}`;
@@ -73,6 +75,7 @@ export function attentionRows(o: {
       href: `${base}/defects?view=review`,
     });
   }
+  rows.push(...(o.nonFunctional ?? []));
   const cant = (o.scripts?.invalid ?? 0) + (o.scripts?.outdated ?? 0);
   if (cant)
     rows.push({

@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.enums import GateKey, GatePolicy, RunStatus, StageKey, StageStatus
+from app.domain.enums import (
+    GateKey,
+    GatePolicy,
+    PerfRunStatus,
+    QualityScanStatus,
+    RunStatus,
+    StageKey,
+    StageStatus,
+)
 
-CURRENT_PHASE = 4
+CURRENT_PHASE = 5
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,8 @@ STAGES: tuple[StageDef, ...] = (
         "reporting",
     ),
     StageDef(StageKey.performance, "Performance testing", 5, None, (StageKey.test_strategy,), "performance"),
+    StageDef(StageKey.accessibility, "Accessibility testing", 5, None, (StageKey.discovery,), "accessibility"),
+    StageDef(StageKey.security_assessment, "Passive security assessment", 5, None, (StageKey.discovery,), "security"),
 )
 STAGE_BY_KEY: dict[StageKey, StageDef] = {s.key: s for s in STAGES}
 STAGE_ORDER: dict[StageKey, int] = {s.key: i for i, s in enumerate(STAGES)}
@@ -129,6 +139,43 @@ SUBJECT_GATES: dict[GateKey, str] = {
 RUN_DRIVEN_STAGES: dict[StageKey, str] = {
     StageKey.execution: "Start a test run from Test Execution",
     StageKey.failure_analysis: "Failure analysis runs automatically after a test run with failures",
+    # P5-00: load needs a `load_test` approval per run (decision D18), so it never starts as a stage task.
+    StageKey.performance: "Start a performance run from Performance",
+    # P5-02/P5-03: each check is a quality scan started from Non-functional (POST /accessibility-scans,
+    # POST /security-assessments) that mirrors this stage, like execution runs.
+    StageKey.accessibility: "Start an accessibility check from Non-functional",
+    StageKey.security_assessment: "Start a security check from Non-functional",
+}
+# P5-00: optional branches. advance() never queues them; a person starts them from their workspace or the
+# assistant, and each scan or run is its own stage run. Accessibility and security start from their own endpoints
+# once discovery is gate-satisfied (G2); performance once G4 is approved.
+OPTIONAL_STAGES = frozenset({StageKey.accessibility, StageKey.security_assessment, StageKey.performance})
+# P5-00: the message when an optional stage's discovery input is not ready (409 gate_blocked).
+OPTIONAL_STAGE_BLOCK = "Discovery completeness (G2) must be satisfied first"
+# P5-00: why a check is out of date after its upstream was re-run.
+RERUN_STALE_REASONS: dict[StageKey, str] = {
+    StageKey.accessibility: "Pages changed after this check",
+    StageKey.security_assessment: "Pages changed after this check",
+}
+# P5-00: the `accessibility` and `security_assessment` stages mirror their latest quality scan (P5-02, P5-03), and
+# `performance` mirrors its latest started run (P5-01b). Runs waiting for (or refused) a `load_test` approval
+# don't move the stage, like execution runs waiting for G7.
+QUALITY_SCAN_STAGE_STATUS: dict[QualityScanStatus, StageStatus] = {
+    QualityScanStatus.queued: StageStatus.queued,
+    QualityScanStatus.running: StageStatus.running,
+    QualityScanStatus.completed: StageStatus.completed,
+    QualityScanStatus.partial: StageStatus.completed,  # pages not checked are listed; the scan itself finished
+    QualityScanStatus.failed: StageStatus.failed,
+    QualityScanStatus.cancelled: StageStatus.cancelled,
+}
+PERF_RUN_STAGE_STATUS: dict[PerfRunStatus, StageStatus] = {
+    PerfRunStatus.queued: StageStatus.queued,
+    PerfRunStatus.running: StageStatus.running,
+    PerfRunStatus.passed: StageStatus.completed,
+    PerfRunStatus.failed: StageStatus.completed,  # missed thresholds are results, not a stage failure
+    PerfRunStatus.aborted: StageStatus.completed,  # the kill switch stopped it; the reason is on the run
+    PerfRunStatus.stopped: StageStatus.cancelled,
+    PerfRunStatus.error: StageStatus.failed,
 }
 # Stages queued again automatically when their upstream produces a new version ("auto_rerun").
 AUTO_RERUN_STAGES = frozenset({StageKey.discovery_report})

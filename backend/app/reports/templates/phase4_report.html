@@ -61,10 +61,16 @@
 <section><h2>Limitations</h2><ul>{% for x in c.limitations %}<li>{{ x }}</li>{% endfor %}</ul></section>
 <section><h2>Defects from this report</h2><ul>{% for d in c.defects %}<li>{{ d.key }} {{ d.summary }} · {{ d.status }} · {{ d.severity }}{% if d.raised_here is defined and not d.raised_here %} · seen again{% endif %}</li>{% else %}<li>None</li>{% endfor %}</ul></section>
 {% else %}
+<section><h2>Counts</h2>
+  {% if c.approval and c.approval.decided_by %}<p>Gate 8: decided by {{ c.approval.decided_by.full_name }}, {{ (c.approval.decided_at or '')[:16].replace('T', ' ') }} UTC (latest decision).</p>{% endif %}
+  {% if c.by_source %}<table><thead><tr><th>Source</th><th>Defects</th></tr></thead><tbody>
+  {% for k, v in c.by_source.items() %}<tr><td>{{ {'functional': 'Functional', 'accessibility': 'Accessibility', 'security': 'Security', 'performance': 'Performance', 'api': 'API'}.get(k, k) }}</td><td>{{ v }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
 <section><h2>Defects</h2>
   {% for d in c.defects %}
   <h3>{{ d.key }} {{ d.summary }}</h3>
-  <p class="muted">{{ d.status }} · severity {{ d.severity }} · priority {{ d.priority }} · test cases {{ d.cases|join(', ') or 'none' }} · {{ d.reproducibility }}</p>
+  <p class="muted">{{ d.status }} · severity {{ d.severity }} · priority {{ d.priority }}{% if d.source %} · {{ d.source }}{% endif %} · test cases {{ d.cases|join(', ') or 'none' }} · {{ d.reproducibility }}{% if d.decided_by %} · decided by {{ d.decided_by }}{% endif %}</p>
   {% if d.steps %}<ol>{% for st in d.steps %}<li>{{ st }}</li>{% endfor %}</ol>{% endif %}
   <p><strong>Expected:</strong> {{ d.expected }}</p><p><strong>Actual:</strong> {{ d.actual }}</p>
   {% if d.root_cause_hypothesis %}<p class="muted">Hypothesis: {{ d.root_cause_hypothesis }}</p>{% endif %}

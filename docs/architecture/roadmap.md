@@ -1776,14 +1776,496 @@ Web stories implement it, and section references ("design P4 §n") point to it.
 
 ## Phase 5: Non-functional testing and reporting
 
+**Outcome:** a project can now be tested for more than "does it work". From the pages that discovery found, the platform runs an **accessibility scan** (axe-core plus a keyboard pass) and a **passive security check** (what a normal visitor's browser receives: transport, headers, cookies, mixed content, information disclosure), and it designs and runs **performance tests** whose load is capped in code and starts only after a person approves that run's profile and target. Every finding is evidence-backed, mapped to pages, features, requirements and test cases, computed in code, and labelled honestly ("passive check, not a security audit"; "automated checks cover part of WCAG 2.2 AA"). Reports gain Performance, Accessibility and Security reports, and the tabular reports gain XLSX (DOCX per decision D21). Hardening closes the DNS-rebinding gap (egress proxy, T3), adds the audit log viewer and export, retention and project purge, and a CI pipeline with dependency audits. API testing from an OpenAPI document (deferred from Phase 4, D14) closes the phase if it fits (decision D24). Everything works with AI off (`generated_by: "rules"`).
+
+**Users:**
+1. A QA lead who needs evidence on accessibility, security hygiene and speed alongside the functional results, without buying three more tools.
+2. A developer or PM with no QA background who needs to know: is my site usable with a keyboard and a screen reader, am I missing basic protections, and does it slow down when ten people use it at once, in plain words, with what to fix first.
+
+Job: "Check my site for the problems users and attackers notice first, safely, and tell me honestly what was and wasn't checked."
+
+**Success measures (instrument in `agent_tasks`/`audit_logs`):**
+- North star: share of projects past G2 that complete at least one non-functional check (accessibility, security or performance) and review its findings within one session.
+- Inputs:
+  - % of accessibility and security scans that finish without `partial` (pages unreachable, timeouts).
+  - Performance runs requested → approved → finished without a platform error (and the share stopped by the kill switch, reported separately).
+  - Share of non-functional findings marked `false_positive` (lower is better), per rule.
+  - G8 precision for non-functional defect drafts (decision D20).
+  - Median time from a finding to "Raise defect" or "Accept risk".
+
+### Phase 5 rules every story inherits
+
+- **What may touch the target, and how.** Phase 5 adds three kinds of traffic. Each is policy-checked on the project's G1 `allowed_hosts`, with the Phase 1 SSRF and redirect rules (the Node load generator and the P5-05a egress proxy share the vector file from P4-01):
+  1. **Accessibility scans** (P5-02): the same read-only visits as discovery (navigate, DOM and ARIA queries, the axe script run inside the page), plus a **keyboard pass that presses only Tab and Shift+Tab**. Never Enter, Space, clicks, typing or form submission. The P2-01 sign-in on the saved `login_url` is allowed for signed-in pages, as in discovery.
+  2. **Passive security checks** (P5-03, decision D19): at most one browser visit per discovered page plus one plain `GET` of the `http://` form of the start URL (HTTPS redirect check) and one TLS handshake per HTTPS host. No probing of paths discovery didn't find, no payloads, no fuzzing, no brute force. Anything beyond that is a `security_test` approval and is not built this phase.
+  3. **Load** (P5-01b): only from an approved performance run (a `load_test` approval for that run, decision D18), only `GET` requests to discovered same-host URLs, never signed in, never above the approved profile, the organisation ceiling or the platform hard cap.
+- **Load is capped in code, three times.** The platform hard cap (environment setting, refused above its compiled maximum), the organisation ceiling (owner/admin setting, ≤ the hard cap) and the approved profile (≤ the ceiling) are each checked: when the profile is saved, when the run is requested, when the approval is decided, and by the load generator itself, which refuses a configuration over its own `--max-*` arguments and enforces `max_rps` with a token bucket. A kill switch stops a run automatically (error rate, latency, target unreachable) and "Stop now" ends it in ≤ 2 s. No code path can start load without a `used`-able approval.
+- **Approvals, not gates, for the new kinds of testing.** Spec §18 has no non-functional gate. Load tests use the existing `approvals` table (P4-05) with kind `load_test`: single use, 24 h expiry, typed host confirmation, decided by `can_approve`. Accessibility and passive security scans are read-only and need no approval (covered by the G1 attestation, as discovery is), per D19. G7 stays specific to functional and API execution runs.
+- **Findings are facts, interpretations are labelled.** Rule output (axe results, header values, cookie flags, measured latencies) is stored as observed evidence. Severity comes from a fixed rule table in code (axe `impact`; the security rule table; threshold pass/fail). Whether a finding matters to this product is a person's call: each finding can be marked `accepted_risk` or `false_positive` (with a reason) or raised as a defect. Nothing is auto-confirmed; defect drafts follow D20 and still need G8.
+- **Honesty statements are mandatory and fixed text** (UI, report, assistant):
+  - Security: "This is a passive check of what a normal visitor's browser receives. It is not a security audit or a penetration test, and no findings does not mean the site is secure."
+  - Accessibility: "Automated checks find only part of WCAG 2.2 AA issues. Screen reader, zoom and cognitive checks need a person."
+  - Performance: the engine and version, the generator location ("load generated from the platform host, not from your users' locations"), and any cap or kill-switch stop.
+  Absence of evidence is reported as "Not checked" with the reason, never as "0 issues".
+- **Numbers are computed in code.** Percentiles, throughput, error rates, threshold results, finding counts and compliance summaries come from stored raw data. The AI may write narrative only, with placeholders for figures (architecture §3, agent I), and its sections are labelled.
+- **Secrets.** Performance runs never sign in and never receive credentials. Accessibility and security scans that sign in use the P2-01 path: password inputs masked in screenshots, `value` attributes of password inputs removed from axe node HTML and from stored DOM excerpts, cookies of the signed-in session never stored (only names and flags). Credential absence is asserted on every new artefact (findings, axe JSON, load summaries, time series, k6 script export, reports in every format, audit export).
+- **AI on/off.** Every new agent has a full rule path: the Performance Testing Agent's profiles and thresholds, the accessibility mapper, the security rule table and the report text. With AI on, the model may rank which pages matter for load and explain thresholds and findings in plain words. It may not add targets that discovery didn't find, change numbers, raise caps, change a severity or mark anything fixed. Output passes Pydantic (`extra="forbid"`) and the domain rules, with one repair then the rule fallback. Page content, headers and error bodies are untrusted and go into prompts only inside untrusted blocks.
+- **Permissions.**
+  - `viewer`: read only (scans, findings, profiles, runs, metrics, reports).
+  - `member`: start accessibility and security scans, create and edit performance profiles, **request** performance runs, stop a run they requested, triage findings (`accepted_risk`/`false_positive` with a reason, Raise defect).
+  - `can_approve`: decide `load_test` approvals (typed host), stop any run, G8 for non-functional drafts.
+  - `owner`/`admin`: organisation load ceilings, retention settings, audit log viewer/export; `owner` only: project purge.
+  - Other organisations get 404 everywhere, including evidence, time series, exports and the audit log.
+- **Tool availability is reported, never faked.** `GET /health` adds `tools: {loadgen, axe, k6, docker}` with versions or `null`. A missing tool shows "Not available on this server" with what to install. Nothing silently falls back to a different engine.
+- **Phase 1–4 behaviour does not change.** The demo shop gets new deliberate flaws (P5-00), chosen so discovery, test design and the Phase 4 failing set stay the same: no new forms, fields, links or navigation items. All Phase 1–4 e2e journeys must still pass.
+- **Demo target chain (the phase's acceptance thread).** On the demo shop (`http://localhost:4100`), with AI off, on a project already through G4 (G5–G8 not needed for this chain):
+  1. **Accessibility** scan of every discovered page: "Desk lamp" and "Travel mug" pages report `image-alt` (critical, product image has no text alternative) and `color-contrast` (serious, stock line about 2.5:1). Every other page has no violations from these two rules. The keyboard pass reaches every link and button and reports no trap. Findings map to the product-page features and their requirements. Per D20, one grouped defect draft per rule ("Product images have no text alternative (2 pages)").
+  2. **Passive security** check: missing Content-Security-Policy, missing `X-Content-Type-Options: nosniff`, no clickjacking protection, missing Referrer-Policy, missing Permissions-Policy (info), `X-Powered-By` version disclosure, and the `recently_viewed` cookie without `SameSite` (it is not session-like, so missing `HttpOnly` is not flagged). HTTPS, HSTS and TLS are "Not applicable: the target is plain http on this computer (loopback)", not findings and not passes.
+  3. **Performance:** the agent proposes a load profile over the discovered pages with default thresholds (no requirement states a number). A member requests a run; the summary reads "Up to 10 virtual users, at most 20 requests a second, for 2 minutes 10 seconds, against localhost:4100". An approver types `localhost` and approves (`load_test`, APR-000n). The run finishes. `/products/2` fails its p95 threshold (serialised under load) and every other page passes. Per D20, a draft "Desk lamp page slows down under load (p95 <measured> with 10 users; threshold 800 ms)" with the time series as evidence.
+  4. Performance, Accessibility and Security reports download as PDF, HTML, JSON, CSV and XLSX (DOCX per D21), with the honesty statements and numbers equal to the API.
+  5. API testing (D24; dropped from the chain only if P5-06 is cut): the imported `/openapi.json` yields an API case for `GET /api/products/{id}` whose schema check fails (`price` is a string), classified `application_defect`, DEF draft, G8, the same chain as Phase 4.
+
+**Product decisions D17–D24 are resolved** (2026-11-14; table in `docs/product/backlog.md`). D17, D18, D20 and D23 are the user's choices; D19, D21, D22 and D24 were decided by the lead on the PM recommendation, as delegated by the user:
+- **D17:** built-in Node load generator in `automation/`, plus a downloadable k6 script; the platform does not run k6.
+- **D18:** a `load_test` approval for every run, by `can_approve`, with typed host; organisation ceiling 20 VUs / 20 RPS / 5 min (owner/admin can raise it); platform hard cap 50 / 50 / 10 min (env, compiled maximum 200 / 200 / 30 min).
+- **D19:** passive security checks only, no approval; no probes, payloads or `security_test` flow this phase.
+- **D20:** grouped defect drafts automatically for critical/serious accessibility rules and failed performance thresholds (not for kill-switch aborts); security findings drafted only on request.
+- **D21:** XLSX for tabular reports and DOCX for all reports through one generic HTML-subset renderer; P5-04c (DOCX) is the second story cut if the phase runs long.
+- **D22:** the Test Completion Report stays in Phase 6 with Release Readiness and G9.
+- **D23:** hardening is limited to what can be tested on this machine (egress proxy, audit viewer/export, retention/purge, CI audit); Postgres RLS, the Redis queue, S3 and the Docker sandbox move to a new "Hosted deployment" phase.
+- **D24:** API testing is in Phase 5 as the last two stories (P5-06a/b), and is the first thing cut if the phase runs long.
+
+Each story names the decision it implements.
+
+### Build order and PR split
+
+| Order | Story | Kind | Size | Depends on | Migration |
+|---|---|---|---|---|---|
+| 1 | P5-00 Phase 5 foundation and demo-shop flaws | Backend + demo shop | M | Phase 4 | `0017_nonfunctional` |
+| 2 | P5-01a Load generator in `automation/` (D17) | Node package + Python adapter | M | – (parallel with P5-00) | – |
+| 3 | P5-02 Accessibility testing (axe + keyboard) | Backend PR, then Web PR | M + M | P5-00 | (in 0017) |
+| 4 | P5-03 Passive security assessment (D19) | Backend PR, then Web PR | M + S | P5-00, P5-02 page-visit helper | (in 0017) |
+| 5 | P5-01b Performance Testing Agent, profiles, approvals and runs (D18) | Backend | L | P5-00, P5-01a | (in 0017) |
+| 6 | P5-01c Performance workspace and live run view | Web | L | P5-01b | – |
+| 7 | P5-04a Reports: Performance, Accessibility, Security | Backend + small web | M | P5-01b, P5-02, P5-03 | – |
+| 8 | P5-07 Traceability, readiness and AI QA Analyst v4 | Backend PR, then Web PR | M + S | P5-02, P5-03, P5-01b | – |
+| 9 | P5-04b XLSX for tabular reports (D21) | Backend + small web | M | P5-04a | – |
+| 10 | P5-04c DOCX for document reports (D21; cut second) | Backend + small web | M | P5-04a | – |
+| 11 | P5-05a Egress proxy (T3) | Backend + `automation/` | M | – (any time after P5-02) | – |
+| 12 | P5-05b Audit log viewer and export | Backend PR, then Web PR | M + S | – | – |
+| 13 | P5-05c Retention and project purge | Backend + web | M | – | `0018_retention` |
+| 14 | P5-05d CI pipeline and dependency audit | CI config + docs | S | – | – |
+| 15 | P5-06a API testing: OpenAPI import and API test design (D24; cut first) | Backend PR, then Web PR | L + M | P5-00 | `0019_api_testing` |
+| 16 | P5-06b API testing: scripts and execution through the P4-06 engine (D24) | Backend + small web | L | P5-06a | (in 0019) |
+| 17 | P5-08 End-to-end verification and phase close | Test + docs | M | all | – |
+
+**Why this order:**
+- Accessibility and passive security come first: they are read-only, reuse discovery's browser and policy, need no approval, and show value on the demo within two stories.
+- The load generator (P5-01a) is pure Node with no platform dependency, so it is built in parallel and proven against a local fixture server before anything can point it at a real target.
+- P5-01b is the riskiest story (load on someone's site), so it lands after the approval pattern and the generator caps are proven, and its UI is a separate PR.
+- Reports follow the data they report. P5-07 (traceability, readiness, assistant) follows all three testing types, as P4-12/P4-13 did.
+- Hardening (orders 11–14) has no product dependency and is the pool a second developer can pull from at any time. P5-05a is the most valuable of them because Phase 5 adds traffic.
+- API testing is last (D24): it is the largest new surface, it is functional rather than non-functional, and it is the first thing cut if the phase runs long.
+
+**Migrations:**
+- `0017_nonfunctional`, written by P5-00 with every column P5-01b, P5-02, P5-03 and P5-07 use created up front (the Phase 3/4 pattern). `0016_automation_execution` is the current head; the number 0017 was reserved for P4-14, which was cut and never written.
+- `0018_retention` (P5-05c) and `0019_api_testing` (P5-06a) are separate, because those stories can move or be cut. Renumber at merge if they swap; never edit a merged migration.
+- Rules as in Phase 4: `render_as_batch=True`; a working `downgrade`; CI runs `upgrade head → downgrade base → upgrade head` on a fresh SQLite DB and on a copy of a **Phase 4 database with data** (the fixture DB from the P4-15 e2e run), proving runs, results, evidence, defects, approvals and reports survive. New columns on existing tables are nullable or have server defaults.
+
+**Design dependency:** every story except P5-00, P5-01a, P5-05a and P5-05d has user-visible changes. `ux-designer` writes `docs/design/P5-qa-analyst-phase5.md` before the first web PR (P5-02 web). It covers:
+- where the three testing types live: the default is that the spec's **Performance** section becomes **Non-functional** with tabs Performance, Accessibility and Security (12 sections kept); the designer may propose otherwise
+- the accessibility scan (start, progress, findings by rule and by page, node detail with the element highlighted on a screenshot, keyboard focus order, triage)
+- the security check (findings by category with the plain-words "why it matters" and "how to fix", "Not applicable" and "Not checked" rows, the honesty statement)
+- performance: profile editor with caps shown inline ("Your organisation allows up to 20 users"), the request and approval card with typed host, the live run (users, requests/s, p95, errors, Stop now), results with per-page thresholds and charts with text alternatives
+- organisation settings: load ceilings, retention, audit log; project purge
+- the Phase 5 changes to Overview, the lifecycle rail, Traceability, Reports (new types, XLSX/DOCX), Defects (source filter) and the assistant chips
+- `sections.ts` `CURRENT_PHASE = 5`
+
+Web stories implement it, and section references ("design P5 §n") point to it.
+
+**Phase 4 carry-overs folded in:**
+- Defect Report `approval.decided_by`/`decided_at` are always `null` (`phase4_reports.py:105`): fixed in P5-04a (latest G8 decider and time; per-defect decider column; name only, no email, P3-07 rule).
+- Test race `test_cancel_a_running_run_keeps_finished_results` (`StopIteration` under load): fixed in P5-00.
+- Memory limits not enforced on macOS, and no container sandbox: unchanged this phase (D23); stated in every execution and performance report's limitations. The Docker sandbox moves to the Hosted deployment phase.
+- CI templates only YAML-checked: P5-05d runs the platform's own CI on GitHub Actions; the exported templates stay YAML-checked (running them needs a CI account and is out of scope).
+- AI-on paths untested live (no API key): unchanged. Every Phase 5 AI path is tested with `FakeLLM` (valid, invalid, malicious), as before; a live contract run stays behind `RUN_LIVE_AI=1`.
+- Backlog close-out (Phase 4 rows marked Done): done during Phase 5 planning.
+
+---
+
+### P5-00 Phase 5 foundation and demo-shop flaws (Backend + demo shop, M)
+
+**User value:** the non-functional checks have a place in the workflow, a data model and something real to find on the demo.
+
+**Scope**
+- `CURRENT_PHASE = 5` (backend `domain/stages.py`). New stage keys `accessibility` and `security_assessment` (phase 5, upstream `discovery`, no gate), plus the existing `performance` (upstream `test_strategy`). All three are **optional branches**: `advance()` never queues them; they start from their workspace or the assistant. `accessibility` and `security_assessment` are runnable through `POST /stages/{stage}/run` once discovery is gate-satisfied (G2), else 409 `gate_blocked`. `performance` is not runnable through `/stages` (422 "Start a performance run from Performance"), like `execution`. Each stage mirrors its latest scan or run (`running`, `completed`, `failed`, `cancelled`), and each scan or run is its own `stage_run` (history kept).
+- Discovery re-run marks `accessibility` and `security_assessment` `stale` ("Pages changed after this check"). G4 re-approval marks performance profiles `stale` (they keep working; the UI suggests regenerating).
+- Migration `0017_nonfunctional` (database-schema.md gets a "Non-functional testing (Phase 5)" section):
+  - `quality_scans`: `key` (A11Y-0001 / SEC-0001), `kind` (accessibility/security), `stage_run_id`, `config JSON` (pages, viewports, keyboard pass on/off, signed-in pages), `status` (queued/running/completed/partial/failed/cancelled), `summary JSON` (computed counts), `not_checked JSON` ([{item, reason}]), `tool_versions JSON`, `requested_by`, `started_at`, `finished_at`, `error?`.
+  - `quality_findings`: `key` (A11Y-0001-01…), `scan_id`, `kind`, `rule_id`, `severity` (critical/serious/moderate/minor for accessibility; high/medium/low/info for security), `title`, `page_id?`, `url`, `viewport?`, `nodes JSON` (≤ 20 per rule per page: target selector, redacted HTML ≤ 500 chars, failure summary), `references JSON` (WCAG success criteria, OWASP references), `fingerprint` (rule + normalised URL path + target; for dedupe across scans), `status` (open/accepted_risk/false_positive/fixed), `status_reason?`, `status_by?`, `defect_id?`, `evidence_refs JSON`, `mapped JSON` (feature, requirement and test case lineages). Unique `(scan_id, key)`; index `(project_id, kind, status)`, `(project_id, fingerprint)`.
+  - `performance_profiles`: `key` (PRF-01), `name`, `type` (load/stress/spike/soak), `stages JSON` ([{duration_s, target_vus}]), `max_rps`, `think_time_ms JSON` (min/max), `targets JSON` ([{path, weight, page_id?}]), `thresholds JSON` ([{metric p95|p99|error_rate, scope all|path, op, value, source requirement_lineage_id|default}]), `status` (draft/ready/stale/retired), `generated_by`, `version`.
+  - `performance_runs` (planned in database-schema.md, refined): `key` (PERF-0001), `profile_id`, `profile_snapshot JSON`, `profile_hash`, `approval_id?`, `engine JSON` ({name, version}), `status` (awaiting_approval/rejected/expired/queued/running/passed/failed/stopped/aborted/error), `metrics JSON` (overall and per target: count, rps, error_rate, p50/p90/p95/p99/max, status codes), `threshold_results JSON`, `aborted_reason?`, `stopped_by?`, `requested_by`, `started_at?`, `finished_at?`.
+  - Existing tables: `approvals.performance_run_id` (nullable FK); `evidence.performance_run_id` (planned) and `evidence.quality_scan_id` (nullable FKs, indexed); `defects.source` gains `accessibility`, `security`, `performance`; new evidence kinds `perf_summary`, `perf_timeseries`, `security_headers` (`axe_result` and `k6_summary` already exist); `organisations.settings` gains `load_ceiling {vus, rps, duration_s}` (server default from D18). Counter kinds `A11Y`, `SEC`, `PRF`, `PERF`.
+- Stage-handler registry stubs ("not available") and the cross-tenant 404 suite parametrised with the new stages and endpoints.
+- `GET /health` adds `tools: {loadgen, axe, k6, docker}` (`null` until each story fills it; `k6` and `docker` are detected with `shutil.which` and `--version`, read only).
+- **Demo-shop flaws** (`demo-shop/server.mjs` and README "Deliberate bugs" list; no dependencies):
+  1. Accessibility: each product detail page shows a product image (inline SVG data URI, no extra route) **without `alt`**, and its "N in stock" line is `#9ca3af` on white (about 2.5:1).
+  2. Security: every response carries `X-Powered-By: DemoShop/0.9 (Node 22)`; product detail pages set `recently_viewed=<id>; Path=/` without `HttpOnly` or `SameSite`. (The shop already sends no CSP, `nosniff`, frame or referrer headers; that stays as it is.) `POST /login` still sets no session cookie (Phase 4 relies on it).
+  3. Performance: `GET /products/2` (Desk lamp) is serialised behind one in-process lock held for `DEMO_SLOW_MS` (default tuned in this story, about 150 ms), so it answers in under 250 ms alone but its p95 rises well above 800 ms under the default demo load profile, while other pages stay under 100 ms p95.
+- Fix the Phase 4 test race (`test_p4_execution.py:484`: wait for a finished row before cancelling).
+
+**Out of scope:** the agents, the generator, UI.
+
+**Acceptance criteria**
+- **Given** a project past G2, **when** `advance` runs, **then** no `accessibility`, `security_assessment` or `performance` task is created. **Given** a project before G2, **when** I `POST /stages/accessibility/run`, **then** 409 `gate_blocked` "Discovery completeness (G2) must be satisfied first".
+- **Given** any project, **when** I `POST /stages/performance/run`, **then** 422 "Start a performance run from Performance".
+- **Given** a completed accessibility scan, **when** discovery is re-run, **then** `accessibility` is `stale` with the reason and the scan stays readable.
+- **Given** a Phase 4 database with data, **when** `alembic upgrade head` runs and the app starts, **then** runs, results, evidence, defects, approvals and reports are unchanged, `downgrade base` and `upgrade head` again succeed, and every organisation has the default load ceiling.
+- **Given** the demo shop, **when** a product detail page is fetched, **then** the image has no `alt`, the stock line has the low-contrast colour, the cookie lacks `HttpOnly`/`SameSite`, and `X-Powered-By` is present; **when** 10 concurrent `GET /products/2` are sent, **then** the slowest takes at least 5× the single-request time; and a single request takes < 250 ms.
+- **Given** the demo-shop changes, **when** the Phase 1–4 e2e journeys run, **then** they pass with the same discovered pages, features and forms, the same test cases and the same computed failing set as before (per-page element counts such as images may change and are not asserted).
+- **Given** this machine (no k6, no Docker), **then** `/health.tools.k6` and `/health.tools.docker` are `null`, and **given** another organisation, **then** 404 on every new stage endpoint.
+
+---
+
+### P5-01a Load generator in `automation/` (Node package + Python adapter, M; decision D17)
+
+**User value:** the platform can generate load that is accurate, capped and stoppable, with no new install on this machine.
+
+**Scope**
+- `qa perf` CLI in `automation/` (Node 22 `node:http`/`node:https` with a keep-alive agent; no new runtime dependency). Input: a JSON config file (targets with weights, stages, think time, `max_rps`, thresholds, kill-switch settings, allowed hosts, allow-private flag, duration cap) plus hard-limit flags `--max-vus`, `--max-rps`, `--max-duration` passed by the backend from the platform cap. A config above any hard limit is refused before the first request (exit code 2, JSON error).
+- Closed model: virtual users loop over weighted targets with think time; ramp by stages; a token bucket enforces `max_rps` across all users.
+- **Network policy parity:** the target host is resolved once per run and every address checked with the shared vector rules (metadata always blocked; private and reserved blocked unless allow-private for loopback only); connections go to the validated IP (Host header and SNI kept), so DNS rebinding can't redirect load. Redirects are never followed (3xx counted as `redirect`, not an error). Only `GET`, only paths on the approved origin.
+- Metrics: per request latency into a fixed log-linear histogram (≤ 1 % relative error), per target and overall: count, rps, p50/p90/p95/p99/max, error rate (network errors, timeouts at 10 s, HTTP 5xx; 4xx counted separately), status-code counts. A one-second time series (active users, rps, p95, errors). Progress as JSON lines on stdout every second; final summary JSON file.
+- **Kill switch** (defaults from D18, all in the config): after a 10 s warm-up, stop when the rolling 10 s error rate > 20 %, or rolling p95 > 10 s, or no successful response for 5 s; reason recorded. SIGTERM or a control file stops within 2 s with a partial summary flushed. Wall clock = profile duration + 30 s, then SIGKILL by the adapter.
+- `qa perf --export-k6`: writes an equivalent k6 script (stages, thresholds, weighted `http.get`, `sleep`) for the user to run themselves. It is checked with acorn (syntax) only, and labelled "Not run by the platform".
+- Python adapter `app/automation/loadgen.py` (spawn with scrubbed env, rlimits, process group, parse JSON lines). `/health.tools.loadgen` = toolkit version.
+
+**Out of scope:** running k6, distributed load, non-GET methods, signed-in load, browser-level (page render) timings.
+
+**Acceptance criteria**
+- **Given** a local fixture server with a fixed 50 ms delay, **when** a 10-user, 20 s run executes, **then** reported p50 is within 50–65 ms, the request count equals the server's access-log count, and the summary's per-target counts add up to the total.
+- **Given** `max_rps: 20` and users able to send more, **then** no one-second window exceeds 21 requests, and the total is within 5 % of 20 × the steady-state seconds.
+- **Given** a config with 51 users and `--max-vus 50`, **then** exit code 2 "Profile exceeds the platform limit: 51 users (limit 50)" and the fixture server received no request.
+- **Given** a fixture that returns 500 for every request, **then** the run stops between 10 and 15 s with reason "Stopped automatically: 100 % errors over 10 s".
+- **Given** SIGTERM mid-run, **then** the process exits within 2 s and a partial summary marked `stopped` exists.
+- **Given** the shared network-policy vectors (incl. a hostname resolving to `169.254.169.254`, a private address without allow-private, and a 302 to another host), **then** each is refused or not followed exactly as the Python policy decides.
+- **Given** `--export-k6`, **then** the script parses, contains the same stages, thresholds and targets, and has no host other than the approved origin.
+
+---
+
+### P5-02 Accessibility testing: axe and keyboard pass (Backend PR, then Web PR; M + M)
+
+**User value:** see which pages have barriers for people using screen readers, keyboards or low vision, with the exact element, the WCAG reference and how to fix it.
+
+**Scope (backend)**
+- `axe-core` pinned in `automation/package.json` (same major/minor as `web/`, 4.14.x). The Python browser worker reads `axe.min.js` from `automation/node_modules` (sha256 checked against `package-lock.json` at startup; `/health.tools.axe` = version) and runs it with `page.evaluate` (not a script tag, so the target's CSP doesn't block it and `bypass_csp` stays off).
+- Shared `browser/page_visit.py` helper (reused by P5-03): visits a list of discovered pages with the discovery policy, politeness delay, per-page 20 s timeout, P2-01 sign-in for signed-in pages, masked screenshots, network log; returns the page, main response and console.
+- Accessibility agent (rule path only; there is nothing for a model to compute): for each visited `discovered_pages` row (default all, cap = discovery cap), desktop 1440×900 by default and mobile 390×844 opt-in (as D7):
+  - axe with tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`; `best-practice` results are stored as `minor` and labelled "Best practice (not a WCAG failure)". Violations become findings; `incomplete` items become "Needs review" findings with severity `minor` and status `open`.
+  - **Keyboard pass** (Tab and Shift+Tab only, up to 60 presses): focus order list; findings "Keyboard trap" (focus does not move for 3 presses or cycles within fewer elements than the page has focusable controls), "Focus not visible" (no outline, border or box-shadow change between focused and unfocused computed styles), "Not reachable by keyboard" (an interactive element discovery recorded that is never focused). Labelled "Keyboard checks (heuristic)".
+  - Node HTML redacted: `value` attributes of password inputs removed, secrets `redact`-filtered, ≤ 500 chars. A masked screenshot per page with violating elements outlined (evidence).
+- **Mapping:** page → discovery features on that page → their requirements (lineages) and the Phase 3 accessibility test cases linked to them. Findings without a mapped requirement are listed as "No requirement covers this page".
+- **Dedupe:** the same `fingerprint` in a later scan keeps the earlier triage status (`accepted_risk`/`false_positive` stay; `fixed` reopens to `open` if it reappears) and is shown as "Seen before (A11Y-0001-03)".
+- **Defect drafts (D20):** for each axe rule with `critical` or `serious` impact, one grouped draft per scan ("Product images have no text alternative (2 pages)") with `source=accessibility`, every page and node as steps/evidence, severity `major` for critical and `minor` for serious (overridable), linked requirements. A later scan adds an occurrence to the open draft or defect instead of a new one. Keyboard heuristics never auto-draft.
+- Backend fixture site (`backend/tests/fixtures/site`) gains an accessibility page set: a clean page, an input without a label, a button with no name, a keyboard-trap widget and a link with `outline: none`.
+- Endpoints: `POST /projects/{id}/accessibility-scans {pages?: [page_id], viewports?, keyboard?: true}` (member), `GET /projects/{id}/accessibility-scans`, `GET /quality-scans/{id}`, `GET /quality-scans/{id}/findings?severity=&page=&rule=&status=`, `GET /quality-findings/{id}`, `POST /quality-findings/{id}/triage {status: accepted_risk|false_positive|open, reason}` (member; reason required), `POST /quality-findings/{id}/raise-defect` (member). `POST /quality-scans/{id}/cancel`. Events `quality.scan_status`, `quality.page_done` (no page text in event data). Audit `quality_scan.started|finished`, `quality_finding.triaged`.
+
+**Scope (web, design P5):** `CURRENT_PHASE = 5`; the Accessibility tab: start dialog, live progress per page, findings grouped by rule (impact, count of pages and elements, WCAG criteria, "How to fix" from axe's help text and help URL), page view with the outlined screenshot, keyboard focus order, triage dialog, Raise defect, "Seen before" badge, the honesty statement.
+
+**Out of scope:** Lighthouse (deferred), screen-reader automation, zoom/reflow checks beyond what axe reports, colour-blindness simulation, AI explanations (P5-07 assistant covers plain-words explanations).
+
+**Acceptance criteria**
+- **Given** the demo shop with AI off, **when** a desktop scan runs, **then** both product detail pages have an `image-alt` finding (critical) and a `color-contrast` finding (serious) with the element's selector and WCAG 1.1.1 / 1.4.3, and no other page has those rules.
+- **Given** the backend fixture site with a known set of violations (missing label on an input, a button with no name, a keyboard trap widget, an `outline: none` link), **then** each is reported with the right rule and severity, and the fixture's "clean" page reports no violations.
+- **Given** the scan, **then** the keyboard pass recorded only Tab/Shift+Tab (fixture server access log shows no POST and the page's input values are unchanged).
+- **Given** a scan of a signed-in page with saved credentials, **when** I search the findings, axe JSON, screenshots' metadata, events and logs for the username and password, **then** neither appears.
+- **Given** D20, **then** the demo scan creates exactly 2 grouped drafts (`image-alt`, `color-contrast`), and a second scan creates none but adds occurrences.
+- **Given** a finding marked `false_positive` with a reason, **when** a later scan finds the same fingerprint, **then** it is still `false_positive` and marked "Seen before"; **given** no reason, **then** 422.
+- **Given** a page that times out, **then** the scan is `partial`, the page is listed under "Not checked" with the reason, and the summary does not count it as clean.
+- **Given** a viewer, **when** they start a scan or triage, **then** 403. **Given** another organisation, **then** 404 on scans, findings and evidence.
+- **Web:** **given** the Accessibility tab, **then** axe is clean on it, it works with the keyboard alone, it has no sideways scroll at 375 px, and the honesty statement is visible on the results.
+
+---
+
+### P5-03 Passive security assessment (Backend PR, then Web PR; M + S; decision D19)
+
+**User value:** know which basic protections the site is missing, why each matters and how to add it, without anyone attacking the site.
+
+**Scope (backend)**
+- Security agent (rule path; AI only rewrites the plain-words "why it matters" text in P5-07). Inputs: discovered pages (cap as discovery), via `page_visit.py` (P5-02): the main document response headers (`all_headers()`), cookies set (name and flags only, values never stored), the network log (mixed content, third-party scripts), the page's forms and password inputs from discovery. Plus one `GET` of the `http://` start URL (redirect to HTTPS?) and one TLS handshake per HTTPS host (protocol version, certificate expiry and hostname match) through the SSRF-checked client.
+- **Rule table** in code (`security/passive_rules.py`), each rule with id, severity, OWASP reference (Secure Headers Project / WSTG / ASVS, reviewed by QA), "why it matters", "how to fix" and an applicability test:
+  - Transport: page served over HTTP (high, unless loopback → "Not applicable"); no HTTP→HTTPS redirect (medium); HSTS missing or `max-age` < 180 days on HTTPS (medium); TLS below 1.2 (high); certificate expires within 30 days (medium) or invalid (high).
+  - Headers: CSP missing (medium) or with `unsafe-inline`/`*` in `script-src` (low); `X-Content-Type-Options: nosniff` missing (low); no `X-Frame-Options` and no `frame-ancestors` (medium); `Referrer-Policy` missing (low); `Permissions-Policy` missing (info); `Access-Control-Allow-Origin: *` together with `Allow-Credentials: true` (high); `Server`/`X-Powered-By` with a version (low).
+  - Cookies: session-like cookie (name matches `sess|sid|auth|token`, word-boundary, unit-tested) without `HttpOnly` (medium); any cookie without `Secure` on HTTPS (medium); without `SameSite` (low).
+  - Content: mixed content (medium); password field on an HTTP page (high, loopback → "Not applicable"); form posting to HTTP or to another host (medium); third-party scripts without `integrity` (info, listed); stack traces or framework error signatures in a visited page's body (medium, pattern list unit-tested).
+- Results per rule: `failed` (finding), `passed`, `not_applicable` (with reason) or `not_checked` (with reason). The summary counts each; the report shows all four, so the reader sees what was checked.
+- Backend fixture site gains a hardened page (every header, secure cookies), a mixed-content page, a form posting to another host and a page with a stack trace.
+- Findings reuse `quality_findings` (kind `security`), triage and dedupe as P5-02. **Defects (D20):** none automatically; "Raise defect" creates a draft with `source=security`.
+- Endpoints: `POST /projects/{id}/security-assessments {pages?}` (member; no approval under D19), `GET /projects/{id}/security-assessments`, plus the shared `quality-scans`/`quality-findings` endpoints.
+
+**Scope (web, design P5):** the Security tab: checks grouped by category with passed/failed/not applicable/not checked, finding detail (header as observed, why it matters, how to fix, OWASP link), triage and Raise defect, the honesty statement at the top of results.
+
+**Out of scope:** probing paths discovery didn't find, payload or input testing, port scanning, brute force, dependency/CVE fingerprinting, the `security_test` approval flow (not built, D19).
+
+**Acceptance criteria**
+- **Given** the demo shop with AI off, **then** the findings are exactly: CSP missing, `nosniff` missing, no clickjacking protection, Referrer-Policy missing, Permissions-Policy missing (info), `X-Powered-By` version disclosure, and `recently_viewed` without `SameSite`; `recently_viewed` is not flagged for `HttpOnly` (not session-like); HTTPS, HSTS, TLS and password-over-HTTP are `not_applicable` "The target is plain http on this computer (loopback)".
+- **Given** the fixture site's "hardened" page (all headers, secure cookies), **then** no header or cookie finding is raised for it (false-positive check).
+- **Given** the fixture's mixed-content page, form posting to another host and stack-trace page, **then** each produces its finding with the observed evidence.
+- **Given** a scan, **then** the fixture access log shows only `GET`s of discovered pages (one per page per viewport) and of the `http://` start URL, and no other path.
+- **Given** a signed-in scan, **then** no cookie value, username or password appears in findings, evidence, events, logs or reports.
+- **Given** any result screen, report or assistant answer about security, **then** the fixed "not a security audit" statement is present.
+- **Given** a viewer starting a scan, **then** 403; **given** another organisation, **then** 404.
+
+---
+
+### P5-01b Performance Testing Agent, profiles, approvals and runs (Backend, L; decisions D17, D18, D20)
+
+**User value:** a ready-made, sensible load test of the important pages, which runs only within limits a person approved, and a clear answer: which pages got slow, how slow, and when.
+
+**Scope**
+- **Performance Testing Agent** (agent G), rule path:
+  - Targets: discovered pages that were `visited` with HTTP 200, same host, not behind sign-in, not in the `SKIP_LINK` vocabulary (logout, delete, unsubscribe, download), plus JSON `GET` endpoints seen in discovery network logs where recorded. At most 10. Weights: start page 3, listing/search-like pages 2, others 1.
+  - Profiles: one `load` profile (draft) by default: stages ramp 30 s to 10 users, hold 90 s, ramp down 10 s; think time 0.5–1.5 s; `max_rps` 20, all within the organisation ceiling. Templates for `stress` (step up to the ceiling), `spike` (sudden jump to the ceiling for 30 s) and `soak` (the ceiling's duration at half the users; labelled "short soak", since the hard cap is 10 min) are offered, not created.
+  - Thresholds: from approved requirements that state a number ("within 2 seconds", "under 500 ms"; parser unit-tested), `source` = that requirement; otherwise defaults p95 < 800 ms per target and error rate < 1 % overall, `source=default`, shown as "Default threshold (no requirement states one)".
+  - AI path (FakeLLM-tested): may reorder target weights and write the rationale. It can't add targets, change numbers above the ceiling, or remove thresholds that come from requirements.
+- Profile CRUD: `GET/POST /projects/{id}/performance-profiles`, `PATCH /performance-profiles/{id}` (member; validated against the ceiling; 422 naming the exceeded limit), `POST …/ready`, `POST …/retire`. Editing creates a new version.
+- **Run request** `POST /projects/{id}/performance-runs {profile_id}` (member): snapshots the profile, computes the summary ("Up to 10 virtual users, at most 20 requests a second, for 2 minutes 10 seconds, against localhost:4100; GET only; not signed in") and the expected request count, creates `PERF-0001` `awaiting_approval` and a `load_test` approval (APR) with that scope. An approver requesting may approve in the same request with `approve: true, confirm_text`.
+- **Approval (D18):** `POST /approvals/{id}/decision` (`can_approve`) requires `confirm_text` equal to the target host. Approval re-checks the profile against the current ceiling and hard cap. Single use, 24 h expiry; a changed profile or ceiling invalidates the pending request. Rejection makes the run `rejected`.
+- **Worker** (`performance` concurrency group: 1 per organisation, and never in parallel with an execution run on the same project): runs P5-01a with the snapshot, hard limits and the approved origin; streams progress to events (`performance.progress {t, users, rps, p95_ms, errors}`, numbers only) and `performance_runs.metrics.live`; stores `perf_summary` and `perf_timeseries` evidence; computes threshold results in code; status `passed` (all thresholds met), `failed` (any threshold missed), `aborted` (kill switch, with reason), `stopped` (person), `error`.
+- **Stop:** `POST /performance-runs/{id}/stop` (requester or `can_approve`), effective ≤ 2 s. Restart safety: a `running` run with an expired heartbeat becomes `error` "The worker stopped; the run did not complete", partial metrics kept.
+- **Defect drafts (D20):** a `failed` run creates one draft per failed threshold ("Desk lamp page slows down under load (p95 1.2 s with 10 users; threshold 800 ms)"), `source=performance`, with the profile, time series and threshold source. An `aborted` run creates none (the cause may be the environment); it shows "Raise defect" instead.
+- Organisation ceiling: `PATCH /organisations/{id}/settings {load_ceiling}` (owner/admin), ≤ the platform hard cap (`LOAD_HARD_CAP_VUS/RPS/DURATION_S` env, refused above the compiled maximum of 200 / 200 / 30 min even if set; default 50 / 50 / 10 min per D18). Audit `load_ceiling.changed`, `performance_run.requested|approved|started|stopped|aborted|finished`.
+- `GET /performance-runs/{id}/k6-script` (member): the P5-01a export, labelled "Not run by the platform".
+
+**Out of scope:** UI (P5-01c), POST/PUT load, signed-in load, browser timings (Core Web Vitals), scheduled runs, comparisons between runs beyond "previous run" deltas.
+
+**Acceptance criteria**
+- **Given** the demo shop past G4 with AI off, **when** the agent runs, **then** one `load` profile is drafted with the discovered public pages (no `/login` POST, no API endpoints needing a token), default thresholds labelled as defaults, and values within the default ceiling.
+- **Given** a requirement "Product pages load within 2 seconds", **then** the product-page targets get p95 < 2000 ms with that requirement as the source.
+- **Given** a profile asking for 30 users with a ceiling of 20, **then** 422 "Your organisation allows up to 20 virtual users"; **given** an owner raising the ceiling to 500 with a hard cap of 50, **then** 422.
+- **Given** a run request, **then** nothing has contacted the target (fixture access log empty), the run is `awaiting_approval`, and a pending `load_test` approval shows the summary.
+- **Given** a member deciding the approval, **then** 403; **given** an approver with the wrong `confirm_text`, **then** 422; **given** the right one, **then** the run is queued and the approval `used` when it starts.
+- **Given** the demo run, **then** `/products/2` misses its p95 threshold, every other target meets its thresholds, the run is `failed`, and one draft names the page, the measured p95 and the threshold.
+- **Given** the fixture returns 500s, **then** the run is `aborted` with the reason and no draft is created.
+- **Given** "Stop now", **then** the run is `stopped` within 2 s with partial metrics; **given** the worker is killed mid-run and restarted, **then** the run is `error` and no load continues (fixture access log stops).
+- **Given** a run, **then** no credentials are in its env, config, evidence or events, and **given** another organisation, **then** 404 on profiles, runs, evidence and the k6 export.
+
+---
+
+### P5-01c Performance workspace and live run view (Web, L)
+
+**User value:** set up, request, approve, watch and read a load test without knowing what a percentile is.
+
+**Scope (design P5):** the Performance tab: profiles list and editor (targets with weights, stages as a small chart and a table, think time, max requests per second, thresholds with their source), limits shown inline from the ceiling; the request dialog with the plain summary; the approval card (typed host, the profile, the ceiling, who asked) for approvers and the waiting state for members; the live run (active users, requests per second, p95, errors, elapsed vs planned, Stop now, kill-switch banner); results (threshold table pass/fail per target, latency percentiles, throughput and error charts **each with a data table alternative**, status codes, comparison with the previous run, defects raised, engine and limitations, "Download k6 script"); organisation settings › Load limits (owner/admin).
+
+**Acceptance criteria**
+- **Given** a member, **then** they can edit a profile and request a run but see no Approve control; **given** an approver, **then** the approval card asks for the host and Approve stays disabled until it matches.
+- **Given** a profile over the ceiling, **then** the field shows the limit inline and Save is refused with the server's message.
+- **Given** a running run, **then** the numbers update at least every 2 s, Stop now works from the keyboard and asks for confirmation, and after the run ends no live indicator remains.
+- **Given** the results, **then** every chart has an equivalent table, the failed threshold is identified by text (not colour only), and the honesty and engine notes are shown.
+- **Given** a viewer, **then** no request, approve or stop controls. axe clean, keyboard only, no sideways scroll at 375 px.
+
+---
+
+### P5-04a Reports: Performance, Accessibility, Security (Backend + small web; M)
+
+**User value:** shareable non-functional evidence for people who never log in.
+
+**Scope**
+- New `report_type`s: `performance` (exists in the enum), `accessibility`, `security`, on the existing pipeline (structured content → Jinja2 HTML, autoescaped, strict CSP → PDF → JSON, plus CSV).
+- **Performance Report** (per run, spec §9/§17): profile and approval (who requested, who approved, when, typed host recorded), engine and generator location, ceiling and caps, thresholds with sources and results, percentiles p50/p90/p95/p99, throughput, error rates, status codes, per-target tables, time-series charts rendered server-side as SVG with data tables, kill-switch or stop reasons, defects raised, limitations. CSV: one row per target; time series as a second CSV.
+- **Accessibility Report** (per scan): scope (pages, viewports, signed-in pages), summary by severity and WCAG criterion, findings by rule then page with elements, triage statuses and reasons, mapping to requirements and test cases, not-checked pages, keyboard results labelled heuristic, the honesty statement.
+- **Security Report** (per scan): the fixed statement first, every rule with passed/failed/not applicable/not checked, findings with observed values, why it matters and how to fix, references, triage.
+- Reports freeze when their run or scan finishes. Numbers equal the API. AI sections (when on) labelled.
+- Carry-over: the Defect Report's `approval.decided_by`/`decided_at` show the latest G8 decision (name only), and the defect table gains "Decided by"; the defect report's counts gain the `source` split (functional, accessibility, security, performance, API).
+- Web: Reports list adds the three types; run and scan pages link their report.
+
+**Acceptance criteria**
+- **Given** the demo performance run, **then** the report's p95 for `/products/2`, the threshold results and the request count equal `GET /performance-runs/{id}`, and the approver's name and typed host are shown.
+- **Given** the demo scans, **then** the accessibility report lists `image-alt` and `color-contrast` on the two product pages, and the security report starts with the fixed statement and lists HTTPS as "Not applicable" with the reason.
+- **Given** a finding title `=HYPERLINK("http://x")` from a fixture page, **then** the CSV cell is prefixed with `'` and HTML/PDF escape it.
+- **Given** a decided G8 defect, **then** the Defect Report's `decided_by` is the decider's name and no email appears in any format.
+- **Given** no run or scan, **then** 409 "Not available yet: run a performance test first" (or scan). **Given** another organisation, **then** 404 on report ids and 403 on signed links. No credentials in any file.
+
+---
+
+### P5-07 Traceability, readiness and AI QA Analyst v4 (Backend PR, then Web PR; M + S)
+
+**User value:** non-functional results count toward coverage and Definition of Done, and the assistant can explain them in plain words.
+
+**Scope**
+- Traceability: forward rows add `accessibility {open, by_severity}`, `security {open}`, `performance {last_run, thresholds_failed}` for requirements mapped through pages/features or threshold sources. New gap lists: `requirements_with_open_accessibility_findings`, `pages_not_checked_for_accessibility`, `non_functional_requirements_without_evidence` (requirements classified performance, accessibility or security with no scan, run or finding). Chains accept `A11Y-…`, `SEC-…` and `PERF-…` keys. Coverage numbers equal the gap lists.
+- Readiness: DoD items that mention accessibility, security or performance become evaluable ("no open critical or serious accessibility findings", "performance thresholds met in the latest approved run"); otherwise "Not evaluable: no check has run".
+- Assistant v4 intents (AI off, grounded, cited): `performance_summary` ("Is the site fast enough?", from the latest finished run only), `accessibility_summary`, `security_summary` (always with the fixed statement), `explain_finding{key}` (rule text, observed value, how to fix), `propose_scan{kind}` (proposal; accepting starts an accessibility or security scan), `propose_performance_run{profile}` (accepting creates a run `awaiting_approval`; the `load_test` approval is still needed). The citation guard resolves the new keys. `later_phase_tasks` lists Phase 6 only.
+- Web: traceability columns and gap lists, chain levels, Overview cards (latest scan and run status), assistant chips.
+
+**Acceptance criteria**
+- **Given** the demo after the chain, **then** the product-page requirements show open accessibility findings, the gap list names them, and the coverage counts equal the lists.
+- **Given** a DoD item "No critical accessibility issues", **then** it is `not_met` naming A11Y-000n-0x while a critical finding is open, and `met` after it is fixed or accepted with a reason.
+- **Given** "Is the site fast enough?" with AI off, **then** the answer quotes the measured p95 and threshold for each failed target with PERF-0001 cited, and **given** no finished run, **then** it says no performance test has run and offers to propose one.
+- **Given** an accepted `propose_performance_run`, **then** a run is `awaiting_approval` and no load has started.
+- **Given** a security question, **then** the answer includes the fixed statement. **Given** another organisation's key in a question, **then** it is not resolved.
+
+---
+
+### P5-04b XLSX for tabular reports (Backend + small web; M; decision D21)
+
+**User value:** open RTMs, test cases, results and findings in Excel with filters, instead of a CSV that loses structure.
+
+**Scope:** `openpyxl` (pinned) renderer that turns each report's existing CSV row definitions into sheets: a "Summary" sheet (title, project, version, date, DRAFT band text, honesty statements), one sheet per table, header row frozen, autofilter, column widths, dates as dates, numbers as numbers, the formula-injection guard (cells starting `= + - @` stored as text with the `'` rule), no macros, no external links. Formats: RTM, Test Case Specification, Execution, Defect, Performance, Accessibility, Security. `GET /reports/{id}/download?format=xlsx`; Reports list offers XLSX where available.
+
+**Acceptance criteria**
+- **Given** each tabular report, **then** the XLSX row counts equal the CSV row counts and the summary sheet's totals equal the API.
+- **Given** a cell value `=cmd|' /C calc'!A0`, **then** it is stored as a string (cell `data_type` `s`), and the workbook contains no formulas at all (scan of every cell).
+- **Given** a report with a DRAFT band, **then** the Summary sheet's first line says so.
+- **Given** credentials saved, **then** no XLSX contains them (unzipped XML search). **Given** a document report (Strategy), **then** `format=xlsx` is 422 "XLSX is available for table reports".
+
+---
+
+### P5-04c DOCX for document reports (Backend + small web; M; decision D21)
+
+**User value:** edit the Requirements Specification, Test Strategy, Test Plan and the non-functional reports in Word, to fit a company template.
+
+**Scope:** `python-docx` (pinned) and one **generic HTML-subset renderer**: the report's existing HTML (autoescaped) is walked into DOCX headings, paragraphs, lists, tables (header row repeated), bold/italic, and images for embedded SVG/PNG charts (SVG rasterised by the existing Chromium PDF path). Unknown elements degrade to text. Applies to every report type (document reports first in the Reports list; table reports also get DOCX for reading). The DRAFT band becomes a first-page banner paragraph; AI sections keep their label.
+
+**Acceptance criteria**
+- **Given** each report type, **then** the DOCX opens (`python-docx` round-trip and LibreOffice-free XML schema check), has every H1/H2 of the HTML in order, and tables with the same row counts.
+- **Given** a field containing `<script>` or a `w:` XML fragment, **then** it appears as literal text and the document XML stays valid.
+- **Given** credentials saved, **then** no DOCX contains them. **Given** an AI section, **then** its label is present.
+
+---
+
+### P5-05a Egress proxy (Backend + `automation/`, M; threat T3)
+
+**User value (operator):** a page or a test can't use DNS tricks to make the platform's browsers reach internal services.
+
+**Scope:** an in-worker asyncio forward proxy (`browser/egress_proxy.py`, loopback-only listener, per-task ephemeral port) that resolves each host once, applies `security/ssrf.py` to every address, connects to the validated IP (CONNECT for HTTPS, plain forwarding for HTTP, WebSocket upgrade allowed only to validated hosts) and logs blocks to the task's network evidence. All platform browsers use it: discovery, locator verification, heal checks, accessibility and security scans (Python Playwright `proxy`), and execution runs (Node fixtures read `ATA_PROXY`). Chromium is launched with `--proxy-bypass-list=<-loopback>` so loopback also goes through the proxy. The load generator already connects by validated IP (P5-01a). Setting `EGRESS_PROXY=on` (default on; `off` only when `ENV != production`, logged as a warning).
+
+**Acceptance criteria**
+- **Given** a test resolver that returns a public address first and `127.0.0.2` (not the approved loopback origin) second for the same host, **when** a page loads that host twice, **then** the second connection is refused by the proxy and logged, and the page's request fails.
+- **Given** the demo and fixture journeys (Phase 1–4 and Phase 5 e2e), **then** they pass with the proxy on, and discovery wall time grows by less than 15 %.
+- **Given** a request to `169.254.169.254` via any path (subresource, fetch, WebSocket, navigation), **then** it is blocked by the proxy even if the route policy were bypassed (test with the route policy disabled in a unit fixture).
+- **Given** `ENV=production` and `EGRESS_PROXY=off`, **then** startup is refused.
+
+---
+
+### P5-05b Audit log viewer and export (Backend PR, then Web PR; M + S; threat T9)
+
+**User value:** owners can prove who approved what and when, and hand that to an auditor.
+
+**Scope:** `GET /audit-logs?actor=&action=&project_id=&from=&to=&cursor=` (owner/admin, own organisation only), `GET /audit-logs/export?format=csv|json&…` (streamed, ≤ 100 000 rows, CSV formula guard), actor shown by name and email to owners/admins only. Metadata passes the redaction filter again on read. Settings › Audit log screen: filters, paging, export. Audit `audit_log.exported` (the export is itself audited). The old `api/` audit route is already deleted (P4-15).
+
+**Acceptance criteria**
+- **Given** the Phase 4 and Phase 5 journeys' organisation, **then** the log lists G1–G8 decisions, `load_test` approvals with the typed-host flag (not the text), ceiling changes and report downloads, newest first, and the export's row count equals the filtered total.
+- **Given** a member or viewer, **then** 403; **given** another organisation's admin, **then** they see only their own rows (cross-tenant test over every filter).
+- **Given** any row, **then** no secret value, password or token appears (credential-absence scan over the export).
+- **Given** an export, **then** an `audit_log.exported` row with the filter exists. The web screen is axe clean, keyboard usable, 375 px.
+
+---
+
+### P5-05c Retention and project purge (Backend + web; M; migration `0018_retention`; threat T15)
+
+**User value:** owners control how long heavy or sensitive evidence is kept, and can remove a finished project completely.
+
+**Scope:** organisation settings `retention {videos_traces_days: 30, screenshots_days: 90, perf_timeseries_days: 90}` (owner/admin; 0 = keep forever; reports and audit logs are never purged by retention). A daily `retention` job deletes expired files from storage and marks their `evidence` rows `purged_at` (metadata and sha256 kept, content endpoint returns 410 "Removed by the retention policy on <date>"). **Project purge** (owner only, archived projects only): typed project name, a 24 h scheduled job deletes every tenant row and stored file of the project except `audit_logs`; the project then 404s; cancellable until it runs. Migration `0018_retention`: `evidence.purged_at`, `projects.purge_scheduled_at`, `purge_requested_by`.
+
+**Acceptance criteria**
+- **Given** a video older than the setting, **when** the job runs, **then** its file is gone, its row has `purged_at`, the result page shows the 410 text, and newer evidence is untouched.
+- **Given** an active (not archived) project, **then** purge is 409 "Archive the project first"; **given** the wrong typed name, **then** 422; **given** an admin, **then** 403.
+- **Given** a purge has run, **then** no row with that `project_id` remains in any tenant table, no file remains under its storage prefix, audit rows remain, and the project id gives 404.
+- **Given** a scheduled purge cancelled within 24 h, **then** nothing is deleted. Settings screens are axe clean, keyboard usable, 375 px.
+
+---
+
+### P5-05d CI pipeline and dependency audit (CI config + docs, S; threat T19)
+
+**User value (team):** every push runs the same checks the developers run, and known-vulnerable dependencies are caught.
+
+**Scope:** `.github/workflows/ci.yml` (this repo has none): backend `ruff`, `mypy --strict`, `pytest` (unit + integration, Chromium installed with the pinned Playwright), the migration round-trip; `automation/` typecheck, lint, tests; web lint, `tsc`, unit and mocked UI tests; `pip-audit` (via `uvx`, no project dependency) and `npm audit --audit-level=high` for `automation/`, `web/`, `demo-shop/`. No secrets needed; AI off. A local `scripts/check.sh` runs the same steps. E2E journeys stay local (they need the full stack).
+
+**Acceptance criteria**
+- **Given** the workflow file, **then** it parses, and `scripts/check.sh` passes on this machine with the same steps.
+- **Given** a known-vulnerable pinned package in a throwaway branch, **then** the audit step fails (verified once by the developer, result recorded in the PR).
+- **Given** the workflow, **then** it never references Postgres or Redis services or ports 5432/6379.
+
+---
+
+### P5-06a API testing: OpenAPI import and API test design (Backend PR, then Web PR; L + M; decision D24; migration `0019_api_testing`)
+
+**User value:** turn an API's OpenAPI document into reviewed API test cases, the same way pages become UI test cases.
+
+**Scope**
+- Import: `POST /projects/{id}/api-specs {url | file}` (member). A URL must be on the G1 hosts (SSRF-checked fetch, ≤ 2 MB); a file upload goes through P2-08's document checks. OpenAPI 3.0/3.1, JSON or YAML (`pyyaml` already present or pinned), `$ref` resolved locally only (no remote refs). Stored as `api_specs` (version, sha256, title, servers on approved hosts only) and `api_operations` (method, path, parameters, request schema, responses, security). Untrusted: descriptions only in untrusted blocks.
+- API token: a project secret of kind `api_token` (P2-01 storage, write-only) used as `Authorization: Bearer` at run time only.
+- **Rule-based API test design** (Phase 3 engine reused): per operation: a happy path from `example`s (or values computed from the schema, synthetic, D3 rules), response status and **schema conformance**; "no token → 401/403" when security is declared; negative inputs from constraints (missing required field, wrong type, BVA on `minimum/maximum/maxLength` through the Phase 3 BVA engine); path parameter not found → 404. Cases are `test_cases` with `kind=api` (new column, default `ui`), linked to requirements derived from operations (Requirements Engineering rule path gains "API operation" requirements, provenance `observed` from the document) and go through G5 like any case.
+- Side effects (P4-05 vocabulary): `POST` ⇒ `creates_data`; `PUT/PATCH` ⇒ `modifies_data` (listed in G7, D12 unchanged); `DELETE` ⇒ `destructive` (separate approval).
+- Web: Test Cases gains an API filter and an "Import OpenAPI" entry; operation list with the cases designed per operation.
+
+**Acceptance criteria**
+- **Given** the demo's `/openapi.json`, **then** 3 operations are imported and, with AI off, cases are designed for: list products (200, schema), get product (200, schema; 404 unknown id), create product (201; missing `name` → 400; `price` −1 and 10001 → 400; 0 and 10000 → 201), and "no token → 401" for each.
+- **Given** a spec whose `servers` or URL points off the G1 hosts or to a private address, **then** 422 naming the host; **given** a remote `$ref`, **then** it is not fetched and the operation is flagged.
+- **Given** the token saved, **then** it appears in no case, step, test data item, report or event.
+- **Given** a DELETE operation (fixture spec), **then** its cases carry `destructive`. API cases need G5 like UI cases.
+
+---
+
+### P5-06b API testing: scripts and execution through the P4-06 engine (Backend + small web; L; decision D24)
+
+**User value:** approved API cases run with the same authorisation, evidence, classification and defect flow as UI tests.
+
+**Scope:** the rule emitter writes Playwright `request`-fixture specs (`tests/api/TC-00nn.spec.ts`) with new trusted helpers in `qa.ts`: `qa.expectStatus`, `qa.expectSchema` (a small JSON Schema subset validator shipped in the platform files: type, required, properties, items, enum, min/max, minLength/maxLength, `$ref` to components; no new runtime dependency) and `qa.expectHeader`. Spec-guard allows the `request` fixture; the network policy fixture applies to API requests (origin = approved host). `TEST_API_TOKEN` env only for cases that need it, redacted everywhere. Runs use P4-06 unchanged: G7 per run, approvals, retries (D9), results only from the JSON reporter; evidence for API tests is the request/response exchange (method, URL, status, headers with `authorization` masked, body ≤ 64 KB redacted) instead of screenshots. The Defect Analysis Agent gains API signals (schema mismatch after a 2xx ⇒ `application_defect`; 401 with a token present ⇒ `test_data_issue`; connection refused ⇒ `environment_failure`). Export (P4-10) includes API specs.
+
+**Acceptance criteria**
+- **Given** the approved demo API cases, **when** an authorised run executes, **then** "get product returns a Product" fails on both attempts with `QA_ASSERTION: price: expected number, got string`, is classified `application_defect` (medium or higher), and a DEF draft "GET /api/products/{id} returns price as a string" is created; the other API cases pass.
+- **Given** the run, **then** the token appears in no result, evidence file, reporter JSON, log, event, export zip or report.
+- **Given** an API spec that targets another host (injected through the test-only path), **then** the request is blocked by the policy and logged.
+- **Given** a destructive API case, **then** the run needs its separate approval, as in P4-05.
+
+---
+
+### P5-08 End-to-end verification and phase close (Test + docs; M)
+
+**Scope**
+- Extend `web/e2e` with a real-stack Phase 5 journey, AI off, on the demo shop (and the fixture site for false-positive, keyboard-trap, mixed-content, 500s/kill-switch and rebinding cases):
+  1. project to G4 (reusing the Phase 2 journey helpers)
+  2. accessibility scan; `image-alt` and `color-contrast` on both product pages; triage one finding as `accepted_risk` with a reason; 2 grouped drafts (D20)
+  3. security check; the exact demo finding set and "Not applicable" rows; the fixed statement visible
+  4. performance: agent profile → member request → the UI refuses the member's approval → approver types the host and approves → live view → `/products/2` fails its threshold → draft; Stop now on a second run
+  5. reports downloaded: Performance, Accessibility, Security (PDF, CSV, XLSX; DOCX per D21)
+  6. traceability gap lists and the assistant's "Is the site fast enough?"
+  7. audit log shows the approvals and is exported
+  8. (D24) API import → G5 → authorised run → price-as-string defect → G8
+- Cross-tenant 404 suite over every Phase 5 endpoint; signed URLs across organisations. Credential-absence scan over every new artefact type and format. Phase 1–4 journeys re-run with the proxy on and the demo flaws in place.
+- Update `docs/architecture/*` (as-built notes, security-risks T3/T5/T6/T9/T15/T19 rows), the demo-shop README, and write `docs/qa/phase5-verification.md` with limitations and the Phase 6 (and Hosted deployment, D23) hand-off.
+
+**Acceptance criteria**
+- **Given** a clean environment with AI off, **when** the Phase 5 e2e suite runs, **then** the full journey passes and each demo flaw is found by its testing type end to end.
+- **Given** the closing checks, **when** `scripts/check.sh` and the e2e suites run, **then** all pass, and every acceptance criterion above maps to at least one test (traceability table in the verification doc).
+- **Given** the load generator, **then** no Phase 5 test ever sent load to a host other than `localhost`/`127.0.0.1` fixtures (asserted by the harness), and no test uses ports 5432 or 6379.
+
+### Phase 5 non-goals (deliberate)
+
+- **Lighthouse** (performance scores, SEO, PWA): deferred; axe covers spec §10's accessibility list, and Lighthouse adds a large dependency tree and a second Chrome setup. Revisit with browser timing (Core Web Vitals) in a later phase.
+- **Active security testing** (payloads, fuzzing, path probing, authentication attacks) and the `security_test` approval flow: not built (D19). A public-site scan is never a security audit.
+- **Running k6** (D17): the platform exports k6 scripts but does not run them; adding a k6 engine is a later story once k6 is installed and tested.
+- **Distributed or geographic load**, load above the hard cap, non-GET or signed-in load, scheduled performance runs.
+- **Hosted-deployment infrastructure (D23):** Postgres RLS and the Postgres migration run, the Celery/arq + Redis queue backend, the S3 storage backend, the Docker sandbox for the runner and browsers, and the container egress firewall. They need Docker (not installed) and must never use the local Postgres/Redis on 5432/6379. They move to a new "Hosted deployment" phase that starts once Docker is available; until then the platform is a trusted, single-organisation deployment, as stated since Phase 4.
+- **Test Completion and Release Readiness reports** (D22): Phase 6 with G9.
+- Screen-reader automation, manual accessibility audits, VPAT/ACR documents.
+- Editing generated API scripts in the app (D13 applies to API scripts too); GraphQL, gRPC, SOAP; contract testing against consumers.
+- External issue trackers, notifications and webhooks (still not in the spec).
+
+### Hosted deployment (new phase, decision D23; outline only)
+
+Starts when Docker (or Colima) is installed. Uses its own Postgres and Redis containers on 5433/6380 (architecture §9), never the instances on 5432/6379.
+
 | ID | Story | Key acceptance criteria |
 |---|---|---|
-| P5-01 | k6 integration + Performance Testing Agent | Profiles with VUs, ramp, duration, thresholds, target, max RPS; org ceilings; approval required; kill switch; percentile/throughput/error/threshold report. |
-| P5-02 | Accessibility testing (axe-core, Lighthouse) | Per-page violations mapped to requirements/test cases; missing labels, keyboard, contrast, semantics. |
-| P5-03 | Passive security assessment | OWASP-aligned passive checks; explicit "not a security audit" statement; active checks only with approval. |
-| P5-04 | Reporting suite | All §17 reports; PDF/DOCX/XLSX/CSV where appropriate; numbers computed in code; AI narrative labelled. |
-| P5-05 | Hardening | Egress proxy (T3), audit log viewer/export, PG RLS, retention + admin purge, CI with `pip-audit`/`npm audit`, Docker sandbox for runner/browser when Docker exists, Celery/arq + Redis queue backend, S3 storage backend. |
-| P5-06 | API testing (deferred from Phase 4, decision D14) | OpenAPI import, API test cases designed from the spec (status, schema, auth, negative inputs), run through the P4-06 engine with the same G7 and approvals; replaces the old `api/` API runner. |
+| H-01 | Postgres backend and RLS | Migrations pass on Postgres; RLS policies per tenant table; app role without UPDATE/DELETE on `audit_logs`; cross-tenant suite passes on Postgres with RLS as the second line. |
+| H-02 | Redis-backed queue (`ArqJobQueue`) | Same `JobQueue` contract tests as `SqlJobQueue`; restart safety; SSE wake-ups via pub/sub. |
+| H-03 | S3 storage backend | `ObjectStorage` contract tests on MinIO; signed URLs unchanged; retention and purge work. |
+| H-04 | Docker sandbox for runner, browsers and load generator | Non-root, read-only FS, seccomp, memory limits enforced, egress firewall denying private ranges; Phase 4/5 e2e pass inside it. |
+| H-05 | docker-compose and deployment docs | One-command stack on 5433/6380/9010; production settings refuse dev flags. |
 
 ## Phase 6: Change intelligence and release readiness
 

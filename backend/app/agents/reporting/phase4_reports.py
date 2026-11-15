@@ -43,6 +43,9 @@ from app.domain.enums import (
 from app.services import serialize_p2 as out
 
 PHASE4 = frozenset({ReportType.execution, ReportType.defect})
+# P5-04a: the Defect Report's counts split by source (functional covers drafts from analysis and raised by people).
+SOURCE_GROUP = {"analysis": "functional", "user": "functional", "accessibility": "accessibility",
+                "security": "security", "performance": "performance", "api": "api"}  # fmt: skip
 HYPOTHESIS_NOTE = "Causes are hypotheses unless a person confirmed them."
 NO_RUN = "Needs a test run"
 FINISHED = (RunStatus.passed, RunStatus.failed, RunStatus.error, RunStatus.cancelled)
@@ -102,7 +105,14 @@ async def approval(s: AsyncSession, report: QaReport) -> dict[str, Any]:
                     ).scalars()
                 )
             )
-        return {"gate": "G8", "status": "draft" if drafts else "approved", "decided_by": None, "decided_at": None}
+        # P5-04a: the latest Gate 8 decision of the project's defects (name only, P3-07 rule).
+        last = (report.content or {}).get("last_g8") or await _last_g8(s, report.project_id)
+        return {
+            "gate": "G8",
+            "status": "draft" if drafts else "approved",
+            "decided_by": last.get("decided_by") if last else None,
+            "decided_at": last.get("decided_at") if last else None,
+        }
     return await _g7_approval(s, report)
 
 
@@ -129,6 +139,28 @@ async def _g7_approval(s: AsyncSession, report: QaReport) -> dict[str, Any]:
         "decided_by": out.person(us.get(gd.decided_by), see_email=False) if gd.decided_by else None,
         "decided_at": gd.created_at.isoformat(),
     }
+
+
+async def _last_g8(s: AsyncSession, project_id: Any) -> dict[str, Any] | None:
+    from app.db.models import GateDecision
+    from app.domain.enums import GateKey
+
+    gd = (
+        (
+            await s.execute(
+                select(GateDecision)
+                .where(GateDecision.project_id == project_id, GateDecision.gate_key == GateKey.G8)
+                .order_by(GateDecision.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if gd is None:
+        return None
+    u = await s.get(User, gd.decided_by) if gd.decided_by else None
+    return {"decided_by": {"full_name": _name(u)} if u else None, "decided_at": gd.created_at.isoformat()}
 
 
 def _name(u: User | None) -> str | None:
@@ -457,10 +489,32 @@ async def _defects(s: AsyncSession, project: Project) -> dict[str, Any]:
             (await s.execute(select(TestCase).where(TestCase.lineage_id.in_(case_ids)))).scalars() if case_ids else []
         )
     }
+    from app.db.models import GateDecision
+    from app.domain.enums import GateSubjectType
+
+    decisions: dict[Any, GateDecision] = {}
+    if rows:
+        for gd in (
+            await s.execute(
+                select(GateDecision)
+                .where(
+                    GateDecision.subject_type == GateSubjectType.defect,
+                    GateDecision.subject_id.in_([d.id for d in rows]),
+                )
+                .order_by(GateDecision.created_at)
+            )
+        ).scalars():
+            decisions[gd.subject_id] = gd  # the latest wins
+    ids = [g.decided_by for g in decisions.values() if g.decided_by]
+    deciders = {u.id: u for u in (await s.execute(select(User).where(User.id.in_(ids)))).scalars()} if ids else {}
     by_status: dict[str, int] = {}
+    by_source: dict[str, int] = {}
     items = []
     for d in rows:
         by_status[d.status.value] = by_status.get(d.status.value, 0) + 1
+        src = SOURCE_GROUP.get(d.source.value, "functional")
+        by_source[src] = by_source.get(src, 0) + 1
+        last = decisions.get(d.id)
         mine = [
             case_keys.get(lk.test_case_lineage_id)
             for lk in links
@@ -482,6 +536,9 @@ async def _defects(s: AsyncSession, project: Project) -> dict[str, Any]:
                 "reproducibility": repro,
                 "root_cause_hypothesis": d.root_cause_hypothesis,
                 "status_reason": d.status_reason,
+                "source": src,
+                "decided_by": _name(deciders.get(last.decided_by)) if last and last.decided_by else None,
+                "decided_at": last.created_at.isoformat() if last else None,
             }
         )
     drafts = by_status.get("draft", 0)
@@ -491,6 +548,10 @@ async def _defects(s: AsyncSession, project: Project) -> dict[str, Any]:
         if drafts
         else None,
         "by_status": by_status,
+        "by_source": {
+            k: by_source.get(k, 0) for k in ("functional", "accessibility", "security", "performance", "api")
+        },
+        "last_g8": await _last_g8(s, project.id),
         "defects": items,
         "hypothesis_note": HYPOTHESIS_NOTE,
         "summary": f"{len(items)} defect(s): "
@@ -534,15 +595,16 @@ def to_csv(content: dict[str, Any]) -> bytes:
                 ]
             )  # fmt: skip
     else:
-        w.writerow(["Defect", "Summary", "Status", "Severity", "Priority", "Test cases", "Expected", "Actual",
-                    "Reproducibility"])  # fmt: skip
+        w.writerow(["Defect", "Summary", "Status", "Severity", "Priority", "Source", "Test cases", "Expected", "Actual",
+                    "Reproducibility", "Decided by"])  # fmt: skip
         for d in content["defects"]:
             w.writerow(
                 [
                     safe_cell(v)
                     for v in (
-                        d["key"], d["summary"], d["status"], d["severity"], d["priority"], ", ".join(d["cases"]),
-                        d["expected"], d["actual"], d.get("reproducibility") or "",
+                        d["key"], d["summary"], d["status"], d["severity"], d["priority"], d.get("source") or "",
+                        ", ".join(d["cases"]), d["expected"], d["actual"], d.get("reproducibility") or "",
+                        d.get("decided_by") or "",
                     )
                 ]
             )  # fmt: skip

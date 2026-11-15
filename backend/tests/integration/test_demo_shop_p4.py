@@ -12,6 +12,7 @@ Start the shop first: `cd demo-shop && npm start`. Skipped when it is not runnin
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,9 @@ from app.domain.enums import Role
 from tests.conftest import client_for, register, worker_for
 from tests.integration.test_p4_automation import _user
 
-DEMO = "http://localhost:4100"
+# DEMO_SHOP_URL runs the same checks against another copy of the shop (P5-00 used it to prove the flaws change
+# nothing for Phases 1–4 before the shared :4100 instance was restarted).
+DEMO = os.environ.get("DEMO_SHOP_URL", "http://localhost:4100")
 API = "/api/v1"
 EXPECTED = "Submission is blocked and Message is identified as required"
 pytestmark = pytest.mark.demo_shop
@@ -40,7 +43,7 @@ def _toolkit() -> bool:
     return (Path(__file__).resolve().parents[3] / "automation" / "node_modules" / "@playwright" / "test").is_dir()
 
 
-@pytest.mark.skipif(not _demo_running(), reason="demo shop is not running on http://localhost:4100")
+@pytest.mark.skipif(not _demo_running(), reason=f"demo shop is not running on {DEMO}")
 @pytest.mark.skipif(not _toolkit(), reason="the automation toolkit's dependencies are not installed")
 async def test_demo_shop_empty_message_case_is_automated(make_ctx, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     ctx: AppContext = await make_ctx(allow_private_targets=True)

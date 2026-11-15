@@ -358,8 +358,8 @@ function TestCases() {
       <div className="space-y-4">
         {params.get("edit") === "1" && !canEdit && <Callout tone="neutral">You have view-only access. Ask an owner or admin for member access to edit test cases.</Callout>}
         {notDesigned.length > 0 && (
-          <Callout tone="info">
-            Not designed in Phase 3: {notDesigned.map((n) => caseTypeText(n.test_type)).join(", ")}. They need separate approval and are designed in Phase 5.
+          <Callout tone="info" actions={<LinkButton href={`/projects/${p.id}/non-functional`} size="sm">Open Non-functional</LinkButton>}>
+            Not designed as test cases: {notDesigned.map((n) => caseTypeText(n.test_type)).join(", ")}. They&apos;re checked in Non-functional.
           </Callout>
         )}
         <TestCasesTable

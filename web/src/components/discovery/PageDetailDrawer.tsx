@@ -1,5 +1,6 @@
 "use client";
 
+import { RemovedEvidence, removedText } from "@/components/domain/RemovedEvidence";
 import type { PageDetail } from "@/lib/contract";
 import { componentColumn, COMPONENT_TYPES } from "@/lib/discovery";
 import { pathOf } from "@/lib/url";
@@ -15,7 +16,9 @@ function Shots({ page }: { page: PageDetail }) {
     <div className="grid gap-3 sm:grid-cols-2">
       {shots.map((s) => (
         <figure key={s.key} className="overflow-hidden rounded-md border border-line bg-elevated">
-          {s.shot ? (
+          {removedText(s.shot) ? (
+            <RemovedEvidence text={removedText(s.shot)!} className="aspect-[4/3] rounded-none" />
+          ) : s.shot ? (
             // eslint-disable-next-line @next/next/no-img-element -- signed, short-lived evidence URL
             <img src={s.shot.content_url} alt={`Screenshot of ${page.title || pathOf(page.url)} (${pathOf(page.url)}), ${s.label}`} className="aspect-[4/3] w-full bg-white object-cover object-top" />
           ) : (

@@ -24,6 +24,7 @@ from app.db.models.discovery import (
     feature_pages,
 )
 from app.db.models.identity import AuditLog, Invitation, Membership, Organisation, PasswordResetToken, User, UserSession
+from app.db.models.nonfunctional import PerformanceProfile, PerformanceRun, QualityFinding, QualityScan
 from app.db.models.projects import (
     GateDecision,
     Project,
@@ -80,11 +81,15 @@ __all__ = [
     "Membership",
     "Organisation",
     "PasswordResetToken",
+    "PerformanceProfile",
+    "PerformanceRun",
     "Project",
     "ProjectCounter",
     "ProjectSecret",
     "ProjectUrl",
     "QaReport",
+    "QualityFinding",
+    "QualityScan",
     "ReadinessCriterion",
     "Requirement",
     "Risk",

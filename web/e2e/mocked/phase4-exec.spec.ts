@@ -43,13 +43,13 @@ async function setup(page: Page, over: Partial<ExecState> = {}, extra?: (q: Exec
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 
 test.describe("Phase 4 · execution and Gate 7", () => {
-  test("sidebar: sections built with Authorise and drafts badges; Performance still Phase 5 (checks 1, 4)", async ({ page }) => {
+  test("sidebar: sections built with Authorise and drafts badges; Non-functional built in Phase 5 (checks 1, 4)", async ({ page }) => {
     await setup(page, {}, (q) => q.runs.unshift(waitingRun(q)));
     await page.goto("/projects/p1/execution");
     const nav = page.getByRole("navigation", { name: "Project sections" });
     await expect(nav.getByRole("link", { name: "Test Execution, 1 run waiting for authorisation" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Defects, 2 drafts waiting for review" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Performance, coming in Phase 5" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Non-functional", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: /coming in Phase 4/ })).toHaveCount(0);
     await expect(page.getByText("RUN-0004 is waiting for your authorisation")).toBeVisible();
   });
@@ -497,7 +497,7 @@ test.describe("Phase 4 · reports (P4-11)", () => {
     await expect(table.getByText("Version 1 · RUN-0003")).toBeVisible();
     await expect(table.getByText("Draft · Gate 8 waiting")).toBeVisible();
     await expect(table.getByRole("button", { name: /Generate \(latest result per test case\)/ })).toBeVisible();
-    await expect(page.getByText("More reports arrive with Phase 5: performance, completion and release readiness.")).toBeVisible();
+    await expect(page.getByText("Test Completion and Release Readiness reports arrive in Phase 6.")).toBeVisible();
     expect(await axe(page)).toEqual([]);
   });
 
@@ -512,6 +512,7 @@ test.describe("Phase 4 · reports (P4-11)", () => {
     await expect(page.getByText("Flaky (set by a person)")).toBeVisible();
     await expect(page.getByRole("link", { name: "RUN-0003-01" })).toHaveAttribute("href", "/projects/p1/execution/RUN-0003/results/RUN-0003-01");
     await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Download XLSX" })).toBeVisible(); // P5-04b, check 29
     // QA P4-BUG-03: the approved cases left to a person, with reasons, and the limitations.
     await expect(page.getByRole("heading", { name: "Not automated" })).toBeVisible();
     await expect(page.getByText("Step 5's expected result 'sent to the company' needs human judgement")).toBeVisible();

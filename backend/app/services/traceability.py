@@ -4,6 +4,8 @@ Links resolve by lineage, so regeneration never breaks them. `basis="current"` r
 `basis="approved"` reads the test cases frozen in the last G5 approval (content as approved, from their revisions).
 P4-12: scripts, results and defects come from the current automation bundle, the latest run that ran each case and
 the defect links. Flaky results are counted separately (never as passed) and listed in their own sub-list.
+P5-07: non-functional cells per requirement (open accessibility and security findings of the latest checks, threshold
+results of the latest judged load test), three non-functional gap lists and chains for A11Y-, SEC- and PERF- keys.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from app.api.errors import NotFound
 from app.db.models import EntityRevision, Risk, TestCase
 from app.domain.enums import CaseStatus, ItemStatus, RequirementStatus, RiskStatus
 from app.services import gates
+from app.services import nf_evidence as nfe
 from app.services import serialize_p3 as p3
 from app.services import testdesign as tds
 from app.services.serialize_p2 import TECHNIQUE_SHORT, artefact_ref
@@ -62,6 +65,10 @@ class Trace:
     defects: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     all_defects: list[dict[str, Any]] = field(default_factory=list)
     executed: bool = False  # any run finished in this project
+    # P5-07: the latest non-functional evidence, its per-requirement cells and the pages no check covered.
+    nf: nfe.NfState = field(default_factory=nfe.NfState)
+    nf_cells: dict[str, dict[str, Any]] = field(default_factory=dict)
+    pages_not_checked: list[dict[str, Any]] = field(default_factory=list)
 
     def result(self, c: CaseView) -> dict[str, Any] | None:
         return self.lk.results.get(str(c.row.lineage_id))
@@ -131,7 +138,33 @@ async def load(s: AsyncSession, project_id: uuid.UUID, basis: Basis = "current")
         version = run.version if run else None
     t = Trace(basis, lk, views, version, snapshot_hash, list(lk.risks.values()), approved_at)
     await _load_execution(s, project_id, t)
+    await _load_nonfunctional(s, project_id, t)
     return t
+
+
+async def _load_nonfunctional(s: AsyncSession, project_id: uuid.UUID, t: Trace) -> None:
+    from app.services import quality as qsvc
+
+    t.nf = await nfe.load(s, project_id)
+    t.nf_cells = nfe.per_requirement(t.nf)
+    _scan, pages = await qsvc.discovered_pages(s, project_id)
+    t.pages_not_checked = [
+        artefact_ref(project_id, "page", p.id, qsvc._path(p.url), p.title or qsvc._path(p.url))
+        for p in sorted(pages, key=lambda x: x.url)
+        if p.url not in t.nf.checked_urls
+    ]
+
+
+def nf_row(t: Trace, req_key: str) -> dict[str, Any]:
+    """The Non-functional column group of one requirement: a cell per checked type, None when never checked."""
+    cells = t.nf_cells.get(req_key, {})
+    a11y = cells.get("accessibility")
+    if a11y is None and t.nf.a11y_scan is not None:
+        a11y = {"open": 0, "by_severity": {}, "findings": [], "scan_key": t.nf.a11y_scan.key}
+    sec = cells.get("security")
+    if sec is None and t.nf.sec_scan is not None:
+        sec = {"open": 0, "findings": [], "scan_key": t.nf.sec_scan.key}
+    return {"accessibility": a11y, "security": sec, "performance": cells.get("performance")}
 
 
 # Open defects are the ones a person confirmed at Gate 8 and that aren't verified yet. An undecided draft is a
@@ -275,6 +308,7 @@ def forward_rows(t: Trace) -> list[dict[str, Any]]:
                     }.values(),
                     key=lambda x: str(x["key"]),
                 ),
+                **nf_row(t, r.key),
                 "_risk_level": risks[0].level.value if risks else None,
                 "_feature_ids": [str(f) for f in r.feature_ids or []],
                 "_approved_case": any(c.status == "approved" for c in cases),
@@ -370,6 +404,7 @@ def coverage(t: Trace) -> dict[str, Any]:
             "orphans": len(_orphans(t)),
         },
         "execution": _execution_coverage(t, reqs),
+        "non_functional": {k: len(v) for k, v in _nf_gaps(t, reqs).items()},
     }
 
 
@@ -454,6 +489,36 @@ async def gaps(s: AsyncSession, t: Trace) -> dict[str, Any]:
         "untested_high_risk": {"open": open_, "accepted": accepted},
         "features_without_requirements": [artefact_ref(t.lk.project_id, "feature", f.id, f.key, f.name) for f in feats],
         **_execution_gaps(t, reqs),
+        **_nf_gaps(t, reqs),
+    }
+
+
+def _nf_gaps(t: Trace, reqs: list[Any]) -> dict[str, list[dict[str, Any]]]:
+    """The three non-functional gap lists (design P5 §12.1); coverage counts are their lengths."""
+    with_open = []
+    for r in reqs:
+        cell = t.nf_cells.get(r.key, {}).get("accessibility")
+        if cell and cell["open"]:
+            with_open.append({"requirement": t.lk.req_ref(r.lineage_id), **cell})
+    evidence = {
+        "accessibility": t.nf.a11y_scan is not None,
+        "security": t.nf.sec_scan is not None,
+    }
+    without = []
+    for r in reqs:
+        if r.category not in nfe.NF_CATEGORIES:
+            continue
+        has = (
+            "performance" in t.nf_cells.get(r.key, {})
+            if r.category == "performance"
+            else evidence[r.category] or bool(t.nf_cells.get(r.key, {}).get(r.category))
+        )
+        if not has:
+            without.append({"requirement": t.lk.req_ref(r.lineage_id), "category": r.category})
+    return {
+        "requirements_with_open_accessibility_findings": with_open,
+        "pages_not_checked_for_accessibility": t.pages_not_checked,
+        "non_functional_requirements_without_evidence": without,
     }
 
 
@@ -617,6 +682,149 @@ def chain(t: Trace, key: str) -> dict[str, Any]:
             "later_phase": later,
         }
     raise NotFound(f"Nothing called {key} in this project")
+
+
+NF_PREFIXES = ("A11Y-", "SEC-", "PERF-", "PRF-")
+
+
+def is_nf_key(key: str) -> bool:
+    return key.strip().upper().startswith(NF_PREFIXES)
+
+
+async def nf_chain(s: AsyncSession, t: Trace, key: str) -> dict[str, Any]:
+    """Chains of non-functional keys (design P5 §12.1): Requirement → Page → Finding → Defect, or Requirement
+    (threshold source) → Profile → Load test → Threshold result → Defect. Scoped by the session's tenant and the
+    project, so another organisation's key is never resolved."""
+    from app.db.models import Defect, PerformanceProfile, PerformanceRun, QualityScan
+
+    key = key.strip().upper()
+    pid, lk = t.lk.project_id, t.lk
+    reqs_by_key = {r.key: r for r in lk.requirements.values()}
+
+    def req_refs(keys: list[str]) -> list[dict[str, Any]]:
+        return [lk.req_ref(reqs_by_key[k].lineage_id) for k in sorted(set(keys)) if k in reqs_by_key]  # type: ignore[misc]
+
+    async def defect_refs(ids: list[Any]) -> list[dict[str, Any]]:
+        ids = [i for i in ids if i]
+        if not ids:
+            return []
+        rows = (await s.execute(select(Defect).where(Defect.id.in_(ids)))).scalars()
+        return sorted((_strip(_defect_ref(t, d)) for d in rows), key=lambda x: str(x["key"]))
+
+    if key.startswith(("A11Y-", "SEC-")):
+        parts = key.split("-")
+        scan_key = "-".join(parts[:2])
+        scan = (
+            await s.execute(select(QualityScan).where(QualityScan.project_id == pid, QualityScan.key == scan_key))
+        ).scalar_one_or_none()
+        if scan is None:
+            raise NotFound(f"Nothing called {key} in this project")
+        findings = await nfe.findings_of(s, scan)
+        if len(parts) > 2:
+            findings = [f for f in findings if f.key == key]
+            if not findings:
+                raise NotFound(f"Nothing called {key} in this project")
+        pages = sorted({f.url for f in findings})
+        froot = (
+            artefact_ref(
+                pid, "quality_finding", findings[0].id, findings[0].key, f"{findings[0].key} · {findings[0].title}"
+            )
+            if len(parts) > 2
+            else artefact_ref(pid, "quality_scan", scan.id, scan.key, f"{scan.key} · {scan.status.value.capitalize()}")
+        )
+        return {
+            "root": froot,
+            "upstream": [
+                {"type": "requirement", "items": req_refs([k for f in findings for k in nfe.req_keys(f)])},
+                {"type": "page", "items": [artefact_ref(pid, "page", None, p, p) for p in pages]},
+            ],
+            "downstream": [
+                *(
+                    [
+                        {
+                            "type": "quality_finding",
+                            "items": [
+                                artefact_ref(
+                                    pid, "quality_finding", f.id, f.key, f"{f.key} · {f.title} · {f.status.value}"
+                                )
+                                for f in findings
+                            ],
+                        }
+                    ]
+                    if len(parts) == 2
+                    else []
+                ),
+                {"type": "defect", "items": await defect_refs(list({f.defect_id for f in findings}))},
+            ],
+            "later_phase": [],
+        }
+    if key.startswith("PRF-"):
+        prof = (
+            await s.execute(
+                select(PerformanceProfile).where(PerformanceProfile.project_id == pid, PerformanceProfile.key == key)
+            )
+        ).scalar_one_or_none()
+        if prof is None:
+            raise NotFound(f"Nothing called {key} in this project")
+        runs = list(
+            (
+                await s.execute(
+                    select(PerformanceRun).where(PerformanceRun.profile_id == prof.id).order_by(PerformanceRun.key)
+                )
+            ).scalars()
+        )
+        src = [str((x.get("source") or {}).get("key")) for x in prof.thresholds or []]
+        return {
+            "root": artefact_ref(pid, "performance_profile", prof.id, prof.key, f"{prof.key} · {prof.name}"),
+            "upstream": [{"type": "requirement", "items": req_refs(src)}],
+            "downstream": [
+                {
+                    "type": "performance_run",
+                    "items": [
+                        artefact_ref(pid, "performance_run", r.id, r.key, f"{r.key} · {r.status.value}") for r in runs
+                    ],
+                },
+            ],
+            "later_phase": [],
+        }
+    run = (
+        await s.execute(select(PerformanceRun).where(PerformanceRun.project_id == pid, PerformanceRun.key == key))
+    ).scalar_one_or_none()
+    if run is None:
+        raise NotFound(f"Nothing called {key} in this project")
+    snap = run.profile_snapshot or {}
+    results = run.threshold_results or []
+    labels = []
+    for x in results:
+        where = x.get("path") or "All requests"
+        word = {"met": "✓ Met", "missed": "✗ Missed", "not_measured": "Not measured"}.get(str(x.get("result")), "")
+        labels.append(artefact_ref(pid, "threshold_result", None, f"{run.key} · {where} {x.get('metric')}",
+                                   f"{where} {x.get('metric')} · {word}"))  # fmt: skip
+    drafts = (await s.execute(select(Defect).where(Defect.project_id == pid))).scalars()
+    defects = sorted(
+        (_strip(_defect_ref(t, d)) for d in drafts if (d.environment or {}).get("run_key") == run.key),
+        key=lambda x: str(x["key"]),
+    )
+    return {
+        "root": artefact_ref(pid, "performance_run", run.id, run.key, f"{run.key} · {run.status.value}"),
+        "upstream": [
+            {"type": "requirement", "items": req_refs([str((x.get("source") or {}).get("key")) for x in results])},
+            {
+                "type": "performance_profile",
+                "items": [
+                    artefact_ref(
+                        pid,
+                        "performance_profile",
+                        run.profile_id,
+                        str(snap.get("profile_key")),
+                        f"{snap.get('profile_key')} v{snap.get('profile_version')}",
+                    )
+                ],
+            },
+        ],
+        "downstream": [{"type": "threshold_result", "items": labels}, {"type": "defect", "items": defects}],
+        "later_phase": [],
+    }
 
 
 def _exec_levels(t: Trace, cases: list[CaseView]) -> list[dict[str, Any]]:

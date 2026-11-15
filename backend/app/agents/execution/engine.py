@@ -158,6 +158,19 @@ class Engine:
                     )
                 )
             ).first()
+            if busy is None:
+                # P5-01b: a test run never runs beside a load test on the same project.
+                from app.db.models import PerformanceRun
+                from app.domain.enums import PerfRunStatus
+
+                busy = (
+                    await s.execute(
+                        select(PerformanceRun.id).where(
+                            PerformanceRun.project_id == run.project_id,
+                            PerformanceRun.status == PerfRunStatus.running,
+                        )
+                    )
+                ).first()
             if busy is not None:
                 await self.ctx.queue.enqueue(
                     "execution_run",

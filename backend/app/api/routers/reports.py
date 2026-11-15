@@ -8,15 +8,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.reporting import phase2_reports
+from app.agents.reporting import phase5_reports as p5
 from app.agents.reporting.discovery_report import approval_for_run, next_report_version, refresh_links
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, ScopedSession
-from app.api.errors import Conflict, GateBlocked, NotFound, ValidationFailed
+from app.api.errors import Conflict, GateBlocked, Gone, NotFound, ValidationFailed
 from app.api.routers.projects import load_project
 from app.context import AppContext
-from app.db.models import QaReport, ScanSession, WorkflowStage
+from app.db.models import Evidence, QaReport, ScanSession, WorkflowStage
 from app.domain.enums import ReportStatus, ReportType, StageKey
 from app.schemas import api
 from app.services import serialize as ser
+from app.services.hardening import removed_text
 
 router = APIRouter(tags=["reports"])
 
@@ -96,7 +98,7 @@ async def create_report(
                 {
                     "field": "report_type",
                     "message": "Use discovery, requirements_spec, test_strategy, test_plan, test_case_spec, rtm, "
-                    "execution or defect.",
+                    "execution, defect, performance, accessibility or security.",
                 }
             ],
         )
@@ -104,6 +106,11 @@ async def create_report(
     project = await load_project(s, project_id)
     if req.report_type != "discovery":
         rtype = ReportType(req.report_type)
+        if rtype in p5.PHASE5:
+            if req.run_key and await p5.source(s, project_id, rtype, req.run_key) is None:
+                raise NotFound(f"We couldn't find a finished {req.run_key} in this project")
+            if not await p5.has_source(s, project_id, rtype):
+                raise GateBlocked(p5.NOT_AVAILABLE[rtype])
         if not await phase2_reports.has_source(s, project_id, rtype):
             if rtype == ReportType.execution:
                 raise GateBlocked("Not available yet: needs a test run")
@@ -124,7 +131,7 @@ async def create_report(
                 raise NotFound(f"We couldn't find {req.run_key} in this project")
             if run.finished_at is None or run.started_at is None:
                 raise GateBlocked(f"{run.key} hasn't finished")
-        if req.stage_run_version is not None and rtype not in (ReportType.execution, ReportType.defect):
+        if req.stage_run_version is not None and rtype not in (ReportType.execution, ReportType.defect, *p5.PHASE5):
             source_key = {ReportType.requirements_spec: "requirements"}.get(
                 rtype, "test_design" if rtype in phase2_reports.PHASE3 else "test_strategy"
             )
@@ -216,17 +223,32 @@ async def download(
     ctx: Ctx,
     s: ScopedSession,
     _p: CurrentPrincipal,
-    format: str = Query("pdf", pattern="^(pdf|html|json|csv)$"),
+    format: str = Query("pdf", pattern="^(pdf|html|json|csv|csv_timeseries|xlsx)$"),
 ) -> RedirectResponse:
     r = await _load(s, report_id)
-    if format == "csv" and r.report_type not in (*phase2_reports.PHASE3, ReportType.execution, ReportType.defect):
+    tables = (*phase2_reports.PHASE3, ReportType.execution, ReportType.defect, *p5.PHASE5)
+    if format == "csv" and r.report_type not in tables:
         raise ValidationFailed(
-            "CSV is available for the Test Case Specification, RTM, Test Execution and Defect reports only",
+            "CSV is available for the Test Case Specification, RTM, Test Execution, Defect, Performance, "
+            "Accessibility and Security reports only",
             details=[{"field": "format", "message": "Use pdf, html or json for this report."}],
+        )
+    if format == "xlsx" and r.report_type not in tables:  # P5-04b: document reports have no tables
+        raise ValidationFailed(
+            "XLSX is available for table reports",
+            details=[{"field": "format", "message": "Use pdf or html for this report."}],
+        )
+    if format == "csv_timeseries" and r.report_type != ReportType.performance:
+        raise ValidationFailed(
+            "The time-series CSV is available for the Performance Report only",
+            details=[{"field": "format", "message": "Use csv for this report."}],
         )
     if r.status == ReportStatus.rendering:
         raise Conflict("The report is still being generated")
     f = next((x for x in r.files or [] if x["format"] == format), None)
     if r.status == ReportStatus.failed or f is None:
         raise NotFound("This report file is not available")
+    ev = await s.get(Evidence, uuid.UUID(f["evidence_id"]))
+    if ev is not None and ev.purged_at is not None:  # P5-05c: the time-series CSV goes with the run's series
+        raise Gone(removed_text(ev.purged_at))
     return RedirectResponse(ctx.evidence_url(uuid.UUID(f["evidence_id"]), r.organisation_id), status_code=302)

@@ -326,13 +326,19 @@ async def test_phase2_reports_frozen_and_on_demand(flow: Flow) -> None:
     assert set(by_type) == {"requirements_spec", "test_strategy", "test_plan"}
     for r in by_type.values():
         assert r["status"] == "ready" and r["frozen"] and r["formats"] == ["json", "html", "pdf"], r
-        assert r["approval"]["status"] == "approved" and r["approval"]["decided_by"]["email"] == flow.owner.email
+        assert r["approval"]["status"] == "approved" and r["approval"]["decided_by"]["full_name"] == "Ada Tester"
     assert by_type["requirements_spec"]["approval"]["gate"] == "G3" and by_type["requirements_spec"]["is_latest_source"]
     assert by_type["test_plan"]["is_latest_source"] is False  # the plan was edited after it was written
     spec = (await flow.get(f"/reports/{by_type['requirements_spec']['id']}")).json()
     stats = (await flow.get(f"/projects/{flow.pid}/requirements/stats")).json()
     assert spec["content"]["counts"]["total"] == stats["total"]  # same numbers as the API
     assert spec["content"]["disclaimer"].startswith("Provisional requirements")
+    # P5-BUG-09: the files name people, never their email.
+    for r in by_type.values():
+        got = await flow.client.get(f"{API}/reports/{r['id']}/download?format=json", headers=flow.owner.headers,
+                                    follow_redirects=True)  # fmt: skip
+        assert got.status_code == 200, got.text
+        assert flow.owner.email not in got.text and "@p2.example.com" not in got.text
     rows = [x["requirement"] for v in spec["content"]["requirements_by_category"].values() for x in v]
     assert rows and all(isinstance(r["evidence"], list) and "evidence_ids" in r and "confidence" in r for r in rows)
     with_ev = [r for r in rows if r["evidence"]]

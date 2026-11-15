@@ -55,6 +55,16 @@ REJECT_REASONS = {
     "works_as_intended": "Works as intended",
     "cannot_reproduce": "Can't reproduce",
     "test_problem": "Problem with the test",
+    "accepted_risk": "Accepted risk",  # non-functional drafts only (P5 design open question 2)
+}
+NON_FUNCTIONAL = (DefectSource.accessibility, DefectSource.security, DefectSource.performance)
+ACCEPTED_RISK_ONLY_NF = "Accepted risk is for accessibility, security and performance defects."
+# Why a draft exists (revision history); non-functional drafts follow decision D20.
+DRAFT_REASONS = {
+    DefectSource.analysis: "Drafted from the failure analysis",
+    DefectSource.accessibility: "Drafted from an accessibility check",
+    DefectSource.performance: "Drafted from a load test",
+    DefectSource.security: "Drafted from a security check",
 }
 EDITABLE = ("summary", "description", "preconditions", "steps", "expected", "actual", "severity", "priority")
 BLOCKING_KINDS = ("submission_blocked", "signed_in", "not_signed_in", "submission_accepted")
@@ -279,9 +289,11 @@ async def create_defect(
         version=1,
         snapshot=snapshot(d),
         changes={},
-        source="system" if source == DefectSource.analysis else "user",
+        source="system" if source == DefectSource.analysis or user_id is None else "user",
         changed_by=user_id,
-        change_reason="Drafted from the failure analysis" if source == DefectSource.analysis else "Raised by a person",
+        change_reason=DRAFT_REASONS.get(source, "Drafted automatically")
+        if source == DefectSource.analysis or user_id is None
+        else "Raised by a person",
     )
     audit(
         s,
@@ -421,8 +433,12 @@ async def set_status(
     reason: str | None = None,
     comment: str | None = None,
     duplicate_of: str | None = None,
+    mark_findings: bool = False,
 ) -> str:
-    """One status change. Returns the toast message. Raises 403-worthy `PermissionError`, 409 or 422."""
+    """One status change. Returns the toast message. Raises 403-worthy `PermissionError`, 409 or 422.
+
+    `mark_findings`: rejecting a non-functional draft as Accepted risk also marks its findings Accepted risk with the
+    same comment (P5 design open question 2; the checkbox is unchecked by default)."""
     why = can_do(d, action, member=member, approver=approver)
     if why == "permission":
         raise PermissionError(
@@ -452,6 +468,10 @@ async def set_status(
                     }
                 ],
             )
+        if reason == "accepted_risk" and d.source not in NON_FUNCTIONAL:
+            raise ValidationFailed(
+                ACCEPTED_RISK_ONLY_NF, details=[{"field": "reason", "message": ACCEPTED_RISK_ONLY_NF}]
+            )
         if reason == "duplicate":
             if not duplicate_of:
                 raise ValidationFailed(
@@ -470,6 +490,12 @@ async def set_status(
             d.environment = {**(d.environment or {}), "duplicate_of": duplicate_of}
         s.add(_gate_decision(project, d, user, GateDecisionKind.reject, text))
         message, audit_action = f"{d.key} rejected.", "defect.rejected"
+        if reason == "accepted_risk" and mark_findings:
+            from app.services.quality import mark_findings_for_rejected
+
+            n = await mark_findings_for_rejected(s, d, user, text)
+            if n:
+                message += f" {n} finding{'s' if n != 1 else ''} marked as accepted risk."
     elif action == "fixed":
         d.status = DefectStatus.fixed
         d.status_comment = text or None

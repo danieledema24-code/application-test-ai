@@ -1,5 +1,6 @@
 "use client";
 
+import { RemovedEvidence, removedText } from "@/components/domain/RemovedEvidence";
 import { useState } from "react";
 import type { Journey, PageSummary } from "@/lib/contract";
 import { pathOf } from "@/lib/url";
@@ -68,13 +69,15 @@ export function JourneyCard({ journey, pages }: { journey: Journey; pages: Map<s
               <p className="font-medium text-fg-strong">
                 {i + 1}. {s.action}
               </p>
-              {s.page?.screenshot ? (
+              {removedText(s.page?.screenshot) ? (
+                <RemovedEvidence text={removedText(s.page?.screenshot)!} className="mt-2 aspect-[4/3]" />
+              ) : s.page?.screenshot ? (
                 // eslint-disable-next-line @next/next/no-img-element -- signed, short-lived evidence URL
                 <img src={s.page.screenshot.content_url} alt={`Screenshot of ${s.page.title || pathOf(s.page.url)} (${pathOf(s.page.url)}), desktop`} className="mt-2 aspect-[4/3] w-full rounded-sm bg-white object-cover object-top ring-1 ring-line" />
               ) : (
                 <p className="mt-2 text-fg-muted">No screenshot for this step.</p>
               )}
-              {s.page && <EvidenceLinks items={linksToItems([s.page.screenshot])} subject={`step ${i + 1} of ${journey.name}`} className="mt-1" />}
+              {s.page && !removedText(s.page.screenshot) && <EvidenceLinks items={linksToItems([s.page.screenshot])} subject={`step ${i + 1} of ${journey.name}`} className="mt-1" />}
             </li>
           ))}
         </ol>

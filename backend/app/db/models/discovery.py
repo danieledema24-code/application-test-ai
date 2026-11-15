@@ -182,11 +182,19 @@ class Evidence(IdMixin, TenantMixin, CreatedMixin, Base):
     execution_result_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("execution_results.id", ondelete="RESTRICT"), default=None, index=True
     )
-    performance_run_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
+    # Phase 5 (P5-00, migration 0017): FK and index added; `quality_scan_id` is new.
+    performance_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("performance_runs.id", ondelete="RESTRICT"), default=None, index=True
+    )
+    quality_scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("quality_scans.id", ondelete="RESTRICT"), default=None, index=True
+    )
     # Phase 2 (P2-08). No FK: source_documents references evidence.
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(default=None)
     captured_at: Mapped[datetime]
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", default=json_default_dict)
+    # P5-05c (migration 0018): set when the retention job deleted the stored file; metadata and sha256 stay.
+    purged_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class KnowledgeItem(IdMixin, TenantMixin, TimestampMixin, Base):

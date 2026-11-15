@@ -8,6 +8,7 @@ Start the shop first: `cd demo-shop && npm start`. Skipped when it is not runnin
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
@@ -16,7 +17,9 @@ import pytest
 from app.context import AppContext
 from tests.conftest import client_for, register, worker_for
 
-DEMO = "http://localhost:4100"
+# DEMO_SHOP_URL runs the same checks against another copy of the shop (P5-00 used it to prove the flaws change
+# nothing for Phases 1–4 before the shared :4100 instance was restarted).
+DEMO = os.environ.get("DEMO_SHOP_URL", "http://localhost:4100")
 API = "/api/v1"
 pytestmark = pytest.mark.demo_shop
 
@@ -28,7 +31,7 @@ def _demo_running() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _demo_running(), reason="demo shop is not running on http://localhost:4100")
+@pytest.mark.skipif(not _demo_running(), reason=f"demo shop is not running on {DEMO}")
 async def test_demo_shop_design_has_the_empty_message_question(make_ctx) -> None:  # type: ignore[no-untyped-def]
     ctx: AppContext = await make_ctx(allow_private_targets=True)
     async with client_for(ctx) as c:

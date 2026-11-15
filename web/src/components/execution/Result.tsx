@@ -3,6 +3,7 @@
 // Result detail building blocks (design P4 §8.6–8.7): expected vs actual, steps per attempt and the evidence viewer.
 // Evidence comes from short-lived signed URLs; logs are shown as text and never run.
 
+import { RemovedEvidence, removedText } from "@/components/domain/RemovedEvidence";
 import { useEffect, useMemo, useState } from "react";
 import { CircleCheck, CircleX, ShieldX } from "lucide-react";
 import { fmtDuration } from "@/lib/format";
@@ -136,7 +137,9 @@ export function EvidenceViewer({ r }: { r: ResultDetail }) {
       <Tabs tabs={tabs} value={tab} onChange={(v) => setTab(v as Tab)} label="Evidence" idPrefix="ev" />
       <TabPanel id={tab} idPrefix="ev">
         {tab === "screenshot" &&
-          (pick.screenshot ? (
+          (removedText(pick.screenshot) ? (
+            <RemovedEvidence text={removedText(pick.screenshot)!} />
+          ) : pick.screenshot ? (
             <figure className="space-y-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={pick.screenshot.content_url} alt={`Final screen of ${subject}`} className="max-h-[32rem] w-full rounded-lg bg-white object-contain object-top ring-1 ring-line" />
@@ -151,7 +154,9 @@ export function EvidenceViewer({ r }: { r: ResultDetail }) {
             <p className="text-body text-fg-muted">No screenshot was recorded.</p>
           ))}
         {tab === "video" &&
-          (pick.video ? (
+          (removedText(pick.video) ? (
+            <RemovedEvidence text={removedText(pick.video)!} />
+          ) : pick.video ? (
             <div className="space-y-2">
               <video controls preload="metadata" src={pick.video.content_url} className="max-h-[32rem] w-full rounded-lg bg-black" aria-describedby="video-alt" />
               <p id="video-alt" className="text-small text-fg-muted">
@@ -167,6 +172,8 @@ export function EvidenceViewer({ r }: { r: ResultDetail }) {
         {tab === "trace" &&
           (r.signs_in ? (
             <p className="text-body text-fg">No trace: traces are switched off for tests that sign in, so the password is never recorded.</p>
+          ) : removedText(pick.trace) ? (
+            <RemovedEvidence text={removedText(pick.trace)!} />
           ) : pick.trace ? (
             <p className="text-body text-fg">
               <a href={pick.trace.content_url} download className="font-medium text-navy-700 underline underline-offset-2">

@@ -125,12 +125,12 @@ test.describe("Phase 4 · Gate 6 and navigation (design P4 §4.2, §6.4, §6.5)"
     expect([g.blockers.length, g.advice.length, g.passed.length]).toEqual([1, 1, 1]);
   });
 
-  test("Automation, Test Execution and Defects are built; Performance still says Phase 5", () => {
+  test("Automation, Test Execution and Defects are built (Phase 5 builds Non-functional too)", () => {
     const by = (slug: string) => PROJECT_SECTIONS.find((s) => s.slug === slug)!;
     expect(isBuilt(by("automation"))).toBe(true);
     expect(isBuilt(by("execution"))).toBe(true);
     expect(isBuilt(by("defects"))).toBe(true);
-    expect(isBuilt(by("performance"))).toBe(false);
+    expect(isBuilt(by("non-functional"))).toBe(true);
   });
 
   test("sidebar badge: Review, then Out of date, then invalid count", () => {

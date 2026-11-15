@@ -996,6 +996,8 @@ export function suiteDiff<T extends { key: string; from: readonly string[]; to: 
 
 /** Toast after applying test-design proposals: "3 test cases added as drafts. View in Test Cases." */
 export function proposalAppliedToast(kind: string | undefined, ok: number, cases = ok): string {
+  if (kind === "request_load_test") return "Load test requested. It waits for approval and starts only after someone approves it.";
+  if (kind === "start_check") return "Check started. Follow it on the Non-functional page.";
   if (kind === "request_run") return "Run request created. It starts only after someone who can approve gates authorises it (Gate 7).";
   if (kind === "add_test_cases") return `${cases} test case${cases === 1 ? "" : "s"} added as drafts. View in Test Cases.`;
   if (kind === "set_suite") return `${ok} suite change${ok === 1 ? "" : "s"} applied. View in Test Cases.`;

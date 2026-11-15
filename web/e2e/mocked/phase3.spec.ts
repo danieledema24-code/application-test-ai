@@ -395,6 +395,7 @@ test.describe("Phase 3 · reports and assistant", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Test Case Specification" })).toBeVisible();
     await expect(page.getByText("DRAFT, not approved at Gate 5")).toBeVisible();
     await expect(page.getByRole("button", { name: "Download CSV" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Download XLSX" })).toBeVisible(); // P5-04b, check 29
     await expect(page.getByText("Synthetic data only. Saved logins are named, never shown.")).toBeVisible();
     await expect(page.getByText("Execution status").first()).toBeVisible();
     // QA BUG-P3-21: cases without a requirement come in a group whose requirement is null.
