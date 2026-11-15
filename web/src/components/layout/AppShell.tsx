@@ -259,9 +259,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       return;
     }
     let tries = 0;
+    const startFocus = document.activeElement;
     const t = setInterval(() => {
       // A screen that restored focus itself (e.g. back to a list row) keeps it.
       if (takeRouteFocusClaim(window.location.pathname)) {
+        clearInterval(t);
+        return;
+      }
+      // So does one where focus moved into the page since the navigation (e.g. a quick "Show 50 more" focused the
+      // new row before the h1 rendered): taking it back would lose the user's place.
+      const active = document.activeElement;
+      const main = document.getElementById("main");
+      if (main && active instanceof HTMLElement && active !== startFocus && active !== main && main.contains(active)) {
         clearInterval(t);
         return;
       }

@@ -1,4 +1,5 @@
-# P5-05d: every push and pull request runs the same checks as `scripts/check.sh`, plus the mocked UI suite.
+# P5-05d: every push and pull request runs the same checks as `scripts/check.sh`, plus the mocked UI suite in
+# Chromium (against `next dev`) and WebKit (against a production build).
 # No secrets are needed: AI is off, the database is SQLite in a temp directory, and no external site is contacted
 # (tests use local fixture sites; the demo-shop tests skip when the shop isn't running).
 name: CI
@@ -52,9 +53,19 @@ jobs:
         run: scripts/check.sh
 
   ui-mocked:
-    name: Mocked UI suite
+    name: Mocked UI suite (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            project: ui-mocked
+            prod: "0"
+          - browser: webkit
+            project: ui-mocked-webkit
+            prod: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -66,14 +77,16 @@ jobs:
         working-directory: web
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps ${{ matrix.browser }}
       - name: Mocked UI tests
         working-directory: web
-        run: npx playwright test --project=ui-mocked --workers=2
+        env:
+          PW_WEB_PROD: ${{ matrix.prod }}
+        run: npx playwright test --project=${{ matrix.project }} --workers=2
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: ui-mocked-report
+          name: ui-mocked-report-${{ matrix.browser }}
           path: |
             web/test-results
             web/playwright-report
