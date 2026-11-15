@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { focusOrigin, tabbables, trapTab } from "@/lib/pointerFocus";
 import { Button } from "./Button";
 
 const FOCUSABLE =
@@ -33,7 +34,7 @@ export function Modal({
 
   useEffect(() => {
     if (!open) return;
-    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previouslyFocused = focusOrigin();
     const node = ref.current;
     // Focus first form field, else first focusable, else dialog itself.
     const first =
@@ -50,19 +51,7 @@ export function Modal({
         onCloseRef.current();
         return;
       }
-      if (e.key === "Tab" && node) {
-        const items = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null);
-        if (items.length === 0) return;
-        const firstEl = items[0];
-        const lastEl = items[items.length - 1];
-        if (e.shiftKey && document.activeElement === firstEl) {
-          e.preventDefault();
-          lastEl.focus();
-        } else if (!e.shiftKey && document.activeElement === lastEl) {
-          e.preventDefault();
-          firstEl.focus();
-        }
-      }
+      if (e.key === "Tab" && node) trapTab(e, tabbables(node, FOCUSABLE));
     }
     document.addEventListener("keydown", onKey);
     return () => {

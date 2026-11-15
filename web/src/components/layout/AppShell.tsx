@@ -14,6 +14,10 @@ import type { RunList } from "@/lib/execution";
 import type { DefectList } from "@/lib/defects";
 import { nfCounts, type Overview } from "@/lib/nonfunctional";
 import { takeRouteFocusClaim } from "@/lib/focusReturn";
+import { tabbables, trapTab } from "@/lib/pointerFocus";
+
+/** The root layout's title (app/layout.tsx), which Next restores on query-only navigations. */
+const DEFAULT_TITLE = "QA Analyst";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -231,6 +235,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setDrawerOpen(false);
   }, [pathname]);
 
+  // Pages set their own title once. When only the query string changes (a filter, a tab, ?thread=), Next puts the
+  // root layout's default title back, briefly with no title at all. Keep the page's title for as long as its path stays.
+  useEffect(() => {
+    let kept: { path: string; title: string } | null = null;
+    const keep = () => {
+      const title = document.title;
+      const path = window.location.pathname;
+      if (title && title !== DEFAULT_TITLE) kept = { path, title };
+      else if (kept && kept.path === path) document.title = kept.title;
+    };
+    keep();
+    const observer = new MutationObserver(keep);
+    observer.observe(document.head, { subtree: true, childList: true, characterData: true });
+    return () => observer.disconnect();
+  }, []);
+
   // On route change, move focus to the page h1 so screen-reader users hear where they are (§11).
   const firstRender = useRef(true);
   useEffect(() => {
@@ -267,19 +287,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     drawerCloseRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") closeDrawer();
-      if (e.key === "Tab" && drawerRef.current) {
-        const items = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null);
-        if (items.length === 0) return;
-        const first = items[0];
-        const last = items[items.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
+      if (e.key === "Tab" && drawerRef.current) trapTab(e, tabbables(drawerRef.current, FOCUSABLE));
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

@@ -41,6 +41,16 @@ test.describe("Phase 2 · requirements", () => {
     expect(await axe(page)).toEqual([]);
   });
 
+  test("a filter change keeps the page's own tab title (Next restores the default on query-only navigations)", async ({ page }) => {
+    await setup(page);
+    await page.goto("/projects/p1/requirements");
+    await expect(page).toHaveTitle("Requirements · acme.com · QA Analyst");
+    await page.getByLabel("Status").first().selectOption("draft");
+    await expect(page).toHaveURL(/status=draft/);
+    await page.waitForTimeout(300);
+    await expect(page).toHaveTitle("Requirements · acme.com · QA Analyst");
+  });
+
   test("Back steps through filter changes instead of leaving the page", async ({ page }) => {
     await setup(page);
     await page.goto("/projects/p1/requirements");
