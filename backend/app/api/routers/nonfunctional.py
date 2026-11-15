@@ -100,7 +100,7 @@ async def overview(project_id: uuid.UUID, ctx: Ctx, s: ScopedSession, p: Current
             gates[key] = False
     see = out.sees_email(p.membership.role)
     latest: dict[str, Any] = {}
-    for kind in QualityScanKind:
+    for kind in qsvc.NF_KINDS:
         scan = (
             await s.execute(
                 select(QualityScan)

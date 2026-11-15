@@ -169,6 +169,10 @@ async def apply(
     prev_id = st.current_stage_run_id
     if st.stage_key == StageKey.requirements:
         diff = await _apply_requirements(s, project, run, items, decisions, user_id, prev_id)
+        # P6-01: requirements regenerated after a rescan say what changed in the change set (spec §13).
+        from app.services.changes import append_requirement_changes
+
+        await append_requirement_changes(s, project, run, diff)
     elif st.stage_key == StageKey.readiness_criteria:
         res = await review.apply_rows(
             s,

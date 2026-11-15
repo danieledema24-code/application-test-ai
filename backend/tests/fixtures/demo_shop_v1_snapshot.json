@@ -1,0 +1,541 @@
+{
+ "DELETE /contact": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Not found · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Page not found</h1></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "c885086f50df096b5c4867d4af547cc8f433c21a66adf08396ba9c36ade02321",
+  "status": 404
+ },
+ "GET /": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Home · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Welcome to DemoShop</h1><p>Everyday products for your desk.</p><a href=\"/products\">Browse products</a></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "047beeb8fe6d16f36e9f31db5e30a62ddcbfbaa97ef28419aae20cd746e5ef94",
+  "status": 200
+ },
+ "GET /api/products": {
+  "body": "[{\"id\":1,\"name\":\"Travel mug\",\"price\":12.5,\"stock\":40},{\"id\":2,\"name\":\"Desk lamp\",\"price\":34,\"stock\":8}]",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "0a6b2da6a5e1474ccf75aace2e2b6bf65630f370f394665992b64bb43c5dcdc6",
+  "status": 200
+ },
+ "GET /api/products (no token)": {
+  "body": "{\"error\":\"Unauthorized\"}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "3be5b8e53fdc8b0a2996590589456db33504977f3d1ce9bb75016c8a707e1a71",
+  "status": 401
+ },
+ "GET /api/products/1": {
+  "body": "{\"id\":1,\"name\":\"Travel mug\",\"price\":\"12.5\",\"stock\":40}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "0920caca99d509c08d060ed9877b218cdd19dc982185f4fb8ea1ac5f9194cfbb",
+  "status": 200
+ },
+ "GET /api/products/1 (no token)": {
+  "body": "{\"error\":\"Unauthorized\"}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "3be5b8e53fdc8b0a2996590589456db33504977f3d1ce9bb75016c8a707e1a71",
+  "status": 401
+ },
+ "GET /api/products/9": {
+  "body": "{\"error\":\"Not found\"}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "c8d3eae160a892e32837db3dcae515e843e5383fef52b8141940c8bcf8b6d59f",
+  "status": 404
+ },
+ "GET /contact": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Contact · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Contact us</h1><form method=\"post\" action=\"/contact\">\n    <label for=\"name\">Name</label><input id=\"name\" name=\"name\" required>\n    <label for=\"email\">Email</label><input id=\"email\" name=\"email\" type=\"email\" required>\n    <label for=\"message\">Message</label><textarea id=\"message\" name=\"message\"></textarea>\n    <button type=\"submit\">Send message</button></form></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "ec7db8d9ab5deee70e93c88fd43f482432d11b414f8fe2ee9a649c243516b22f",
+  "status": 200
+ },
+ "GET /login": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Sign in · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Sign in</h1><form method=\"post\" action=\"/login\">\n    <label for=\"email\">Email</label><input id=\"email\" name=\"email\" type=\"email\" required>\n    <label for=\"password\">Password</label><input id=\"password\" name=\"password\" type=\"password\" required>\n    <button type=\"submit\">Sign in</button></form></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "987bd24da7f8c54460d37b63da113a2250f44f07d2de764f8787addcfd34eb40",
+  "status": 200
+ },
+ "GET /missing": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Not found · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Page not found</h1></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "c885086f50df096b5c4867d4af547cc8f433c21a66adf08396ba9c36ade02321",
+  "status": 404
+ },
+ "GET /offers": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Not found · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Page not found</h1></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "c885086f50df096b5c4867d4af547cc8f433c21a66adf08396ba9c36ade02321",
+  "status": 404
+ },
+ "GET /openapi.json": {
+  "body": "{\"openapi\":\"3.0.3\",\"info\":{\"title\":\"DemoShop API\",\"version\":\"1.0.0\"},\"components\":{\"securitySchemes\":{\"bearer\":{\"type\":\"http\",\"scheme\":\"bearer\"}},\"schemas\":{\"Product\":{\"type\":\"object\",\"required\":[\"id\",\"name\",\"price\"],\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"},\"price\":{\"type\":\"number\"},\"stock\":{\"type\":\"integer\"}}},\"NewProduct\":{\"type\":\"object\",\"required\":[\"name\",\"price\"],\"properties\":{\"name\":{\"type\":\"string\",\"maxLength\":80,\"example\":\"Notebook\"},\"price\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10000,\"example\":4.99}}}}},\"security\":[{\"bearer\":[]}],\"paths\":{\"/api/products\":{\"get\":{\"summary\":\"List products\",\"responses\":{\"200\":{\"description\":\"ok\",\"content\":{\"application/json\":{\"schema\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/Product\"}}}}}}},\"post\":{\"summary\":\"Create product\",\"requestBody\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/NewProduct\"}}}},\"responses\":{\"201\":{\"description\":\"created\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Product\"}}}}}}},\"/api/products/{id}\":{\"get\":{\"summary\":\"Get product\",\"parameters\":[{\"name\":\"id\",\"in\":\"path\",\"required\":true,\"schema\":{\"type\":\"integer\",\"example\":1}}],\"responses\":{\"200\":{\"description\":\"ok\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Product\"}}}}}}}}}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "7504f17a8272875cc85a06035e279e7a8694b7dc05cf8f0405f0ef27ffedc711",
+  "status": 200
+ },
+ "GET /products": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Products · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Products</h1><ul><li><a href=\"/products/1\">Travel mug</a> — £12.5</li><li><a href=\"/products/2\">Desk lamp</a> — £34</li></ul></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "d29bc4524a5572ab6fa62964421782e9ddaee6c86ee04af7b681089d78252c2f",
+  "status": 200
+ },
+ "GET /products/1": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Travel mug · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Travel mug</h1><img src=\"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22160%22%20height%3D%22120%22%3E%3Crect%20width%3D%22160%22%20height%3D%22120%22%20fill%3D%22%23e5e7eb%22%2F%3E%3Ctext%20x%3D%2280%22%20y%3D%2266%22%20font-size%3D%2214%22%20text-anchor%3D%22middle%22%20fill%3D%22%23374151%22%3ETravel%20mug%3C%2Ftext%3E%3C%2Fsvg%3E\" width=\"160\" height=\"120\"><p>Price: £12.5</p><p class=\"stock\">40 in stock</p><button>Add to basket</button></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "set-cookie",
+    "recently_viewed=1; Path=/"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "631e1122d4bc35ba099ab103ddb5199928338c1f237d647f95180505b50e698f",
+  "status": 200
+ },
+ "GET /products/2": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Desk lamp · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Desk lamp</h1><img src=\"data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22160%22%20height%3D%22120%22%3E%3Crect%20width%3D%22160%22%20height%3D%22120%22%20fill%3D%22%23e5e7eb%22%2F%3E%3Ctext%20x%3D%2280%22%20y%3D%2266%22%20font-size%3D%2214%22%20text-anchor%3D%22middle%22%20fill%3D%22%23374151%22%3EDesk%20lamp%3C%2Ftext%3E%3C%2Fsvg%3E\" width=\"160\" height=\"120\"><p>Price: £34</p><p class=\"stock\">8 in stock</p><button>Add to basket</button></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "set-cookie",
+    "recently_viewed=2; Path=/"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "e22799e794781315db4718957296565c5df9edec702fbd2f844fc500de622079",
+  "status": 200
+ },
+ "GET /products/3": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Not found · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Not found</h1></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "da9e47e58a992732ffecea3728b5e8740fdc4a40fdb90ef6925bebe3cdef7e6c",
+  "status": 404
+ },
+ "POST /api/products": {
+  "body": "{\"id\":3,\"name\":\"Notebook\",\"price\":4.99,\"stock\":0}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "e78284126ac8dc9e7e78d65bf128c01fc21f11bb4cff17d7a22bef66a37d73f5",
+  "status": 201
+ },
+ "POST /api/products (bad price)": {
+  "body": "{\"error\":\"price must be a number 0-10000\"}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "52ba0ebf3191229bf0661ea46733fedf29e7a416550cb63972949d43f37c649a",
+  "status": 400
+ },
+ "POST /api/products (malformed)": {
+  "body": "{\"error\":\"Malformed JSON\"}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "536cb1351d778bd463e743b2bd761f309ffc6ae994fad1b581c71cb7cde25392",
+  "status": 400
+ },
+ "POST /api/products (no name)": {
+  "body": "{\"error\":\"name is required\"}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "61a43c725473d62c5e1080bf6bf3b340a2a908dcb6f3ee13817ad07c7594ca1e",
+  "status": 400
+ },
+ "POST /api/products (no token)": {
+  "body": "{\"error\":\"Unauthorized\"}",
+  "headers": [
+   [
+    "content-type",
+    "application/json"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "3be5b8e53fdc8b0a2996590589456db33504977f3d1ce9bb75016c8a707e1a71",
+  "status": 401
+ },
+ "POST /basket": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Not found · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Page not found</h1></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "c885086f50df096b5c4867d4af547cc8f433c21a66adf08396ba9c36ade02321",
+  "status": 404
+ },
+ "POST /contact": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Contact · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Thank you</h1><p class=\"ok\">Message sent</p></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "9fd6d6e4e9b05567487821e7e569b7a83aa2de315b43b544905c0fa35dacdf00",
+  "status": 200
+ },
+ "POST /contact (empty message)": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Contact · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Thank you</h1><p class=\"ok\">Message sent</p></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "9fd6d6e4e9b05567487821e7e569b7a83aa2de315b43b544905c0fa35dacdf00",
+  "status": 200
+ },
+ "POST /contact (no email)": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Contact · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Contact us</h1><p class=\"error\">Name and email are required</p></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "bdd08ac82c89048717595d7c20de8c97c48d812443a3b74ac99e4f30ed57d2e8",
+  "status": 400
+ },
+ "POST /login (demo login)": {
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "c5670dbeb164a6f08fd8938e69fde00c294a65f3ac768194526f6d79da351e14",
+  "status": 200
+ },
+ "POST /login (wrong)": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Sign in · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Sign in</h1><p class=\"error\">Invalid email or password</p><a href=\"/login\">Try again</a></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "5425bec9f4623aa627becaf57cd12b6903a52d3e312b02fd964481363bd9bf63",
+  "status": 401
+ },
+ "POST /offers/apply": {
+  "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Not found · DemoShop</title>\n<style>body{font-family:system-ui;margin:0}nav{background:#0b1b3a;padding:12px 24px}nav a{color:#fff;margin-right:16px}main{padding:24px;max-width:640px}\nlabel{display:block;margin-top:12px}input,textarea{display:block;width:100%;padding:8px;margin-top:4px}.error{color:#b91c1c}.ok{color:#15803d}.stock{color:#9ca3af}button{margin-top:16px;padding:8px 16px}</style></head>\n<body><nav><a href=\"/\">Home</a><a href=\"/products\">Products</a><a href=\"/contact\">Contact</a><a href=\"/login\">Sign in</a></nav><main><h1>Page not found</h1></main></body></html>",
+  "headers": [
+   [
+    "content-type",
+    "text/html"
+   ],
+   [
+    "transfer-encoding",
+    "chunked"
+   ],
+   [
+    "x-powered-by",
+    "DemoShop/0.9 (Node 22)"
+   ]
+  ],
+  "sha256": "c885086f50df096b5c4867d4af547cc8f433c21a66adf08396ba9c36ade02321",
+  "status": 404
+ }
+}

@@ -41,7 +41,7 @@ type Setter = (f: CaseFilters, opts?: { replace?: boolean }) => void;
 /** Remembers the row a user opened so returning restores focus and scroll (P3-02 AC, design §19). */
 export function rememberRow(projectId: string, key: string) {
   try {
-    sessionStorage.setItem(`qa:tc-return:${projectId}`, JSON.stringify({ key, y: window.scrollY }));
+    sessionStorage.setItem(`qa:tc-return:${projectId}`, JSON.stringify({ key, y: window.scrollY, at: Date.now() }));
   } catch {
     /* storage unavailable */
   }
@@ -231,29 +231,55 @@ export function TestCasesTable({
     setLive(selected.size ? `${selected.size} test case${selected.size === 1 ? "" : "s"} selected` : "");
   }, [selected.size]);
 
-  // Returning from a case: focus its link and restore the scroll position. The saved row is read once; rows may
-  // render after the data loads, so it is retried until the row appears (QA check 76).
-  const returnTo = useRef<{ key: string; y: number } | null | undefined>(undefined);
-  if (returnTo.current === undefined) {
-    returnTo.current = null;
+  // Returning from a case: focus its link and restore the scroll position. Rows may render after the data loads, so
+  // this is retried until the row appears (QA check 76). The saved row stays stored until its link has kept focus for
+  // 1.5 s: the list can mount again while the route settles, and a row read and dropped by the first mount was lost,
+  // leaving the h1 focused (QA P6-01 #9). A saved row older than a minute is ignored.
+  const storageKey = `qa:tc-return:${projectId}`;
+  const readSaved = (): { key: string; y: number } | null => {
     try {
-      const raw = typeof window !== "undefined" ? sessionStorage.getItem(`qa:tc-return:${projectId}`) : null;
-      if (raw) returnTo.current = JSON.parse(raw);
-      if (raw) sessionStorage.removeItem(`qa:tc-return:${projectId}`);
+      const raw = typeof window !== "undefined" ? sessionStorage.getItem(storageKey) : null;
+      const v = raw ? (JSON.parse(raw) as { key: string; y: number; at?: number }) : null;
+      return v && (!v.at || Date.now() - v.at < 60_000) ? v : null;
     } catch {
-      /* ignore */
+      return null;
     }
-  }
+  };
+  const returnTo = useRef<{ key: string; y: number } | null | undefined>(undefined);
+  if (returnTo.current === undefined) returnTo.current = readSaved();
+  const focusGuard = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => void (focusGuard.current && clearInterval(focusGuard.current)), []);
   useEffect(() => {
     const saved = returnTo.current;
     if (!saved) return;
-    const el = Array.from(tableRef.current?.querySelectorAll<HTMLAnchorElement>("a[data-case]") ?? []).find((a) => a.dataset.case === saved.key && a.offsetParent !== null);
+    const row = () =>
+      Array.from(tableRef.current?.querySelectorAll<HTMLAnchorElement>("a[data-case]") ?? []).find((a) => a.dataset.case === saved.key && a.offsetParent !== null);
+    const el = row();
     if (!el) return;
     returnTo.current = null;
     claimRouteFocus(window.location.pathname);
     el.focus({ preventScroll: true });
     window.scrollTo(0, saved.y);
-  }, [visible]);
+    const until = Date.now() + 1500;
+    focusGuard.current = setInterval(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body || active === document.querySelector("main h1")) {
+        const again = row();
+        if (again) {
+          claimRouteFocus(window.location.pathname);
+          again.focus({ preventScroll: true });
+        }
+      }
+      if (Date.now() > until && focusGuard.current) {
+        clearInterval(focusGuard.current);
+        try {
+          sessionStorage.removeItem(storageKey);
+        } catch {
+          /* storage unavailable */
+        }
+      }
+    }, 50);
+  }, [visible, storageKey]);
 
   const chips = caseFilterChips(f);
   const selRows = all.filter((r) => selected.has(r.id));

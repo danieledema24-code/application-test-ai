@@ -115,7 +115,7 @@ export function comingLabel(phase: number | null): string {
 }
 
 /** The phase the product has reached: sections up to it are real screens (design P2 §3.2). */
-export const CURRENT_PHASE = 5;
+export const CURRENT_PHASE = 6;
 
 export function isBuilt(s: ProjectSection): boolean {
   return s.built === true || (s.phase !== null && s.phase <= CURRENT_PHASE);

@@ -29,7 +29,11 @@ def test_d18_defaults() -> None:
     assert LoadLimits(vus=20, rps=20, duration_s=300) == DEFAULT_CEILING
     assert LoadLimits(vus=50, rps=50, duration_s=600) == DEFAULT_HARD_CAP
     assert LoadLimits(vus=200, rps=200, duration_s=1800) == COMPILED_MAX
-    assert default_org_settings() == {"load_ceiling": {"vus": 20, "rps": 20, "duration_s": 300}}
+    # P6-00 adds the D30 exploration ceiling next to the load ceiling.
+    assert default_org_settings() == {
+        "load_ceiling": {"vus": 20, "rps": 20, "duration_s": 300},
+        "exploration_ceiling": {"actions": 60, "minutes": 10},
+    }
 
 
 def test_hard_cap_is_refused_above_the_compiled_maximum(tmp_path: Path) -> None:
@@ -65,7 +69,7 @@ def test_ceiling_and_profile_checks_name_the_exceeded_limit() -> None:
 
 
 def test_phase5_stage_registry() -> None:
-    assert CURRENT_PHASE == 5
+    assert CURRENT_PHASE >= 5  # Phase 6 (P6-00) keeps every Phase 5 rule below
     for key in (StageKey.accessibility, StageKey.security_assessment):
         d = STAGE_BY_KEY[key]
         assert d.phase == 5 and d.gate is None and d.upstream == (StageKey.discovery,) and d.available

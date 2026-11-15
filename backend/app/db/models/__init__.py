@@ -13,6 +13,14 @@ from app.db.models.automation import (
     ExecutionResult,
     ExecutionRun,
 )
+from app.db.models.change import (
+    ChangeItem,
+    ChangeSet,
+    ExploratoryStep,
+    HealSuggestion,
+    ImpactItem,
+    ReleaseAssessment,
+)
 from app.db.models.discovery import (
     ApplicationFeature,
     DiscoveredPage,
@@ -66,6 +74,8 @@ __all__ = [
     "AutomationAssessment",
     "AutomationAsset",
     "AutomationScript",
+    "ChangeItem",
+    "ChangeSet",
     "Defect",
     "DefectLink",
     "DefectOccurrence",
@@ -74,7 +84,10 @@ __all__ = [
     "Evidence",
     "ExecutionResult",
     "ExecutionRun",
+    "ExploratoryStep",
     "GateDecision",
+    "HealSuggestion",
+    "ImpactItem",
     "Invitation",
     "Job",
     "KnowledgeItem",
@@ -91,6 +104,7 @@ __all__ = [
     "QualityFinding",
     "QualityScan",
     "ReadinessCriterion",
+    "ReleaseAssessment",
     "Requirement",
     "Risk",
     "ScanSession",

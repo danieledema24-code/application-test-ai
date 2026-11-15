@@ -30,5 +30,34 @@ items, so Phase 1–4 discovery, test design and the Phase 4 failing set are unc
 
 `POST /login` returns the account page without a session cookie, so signed-in state does not persist.
 
+## Release 2 (Phase 6)
+
+P6-00 adds a second release of the shop for change detection, impact analysis, healing and exploratory testing. The
+release comes from `DEMO_VERSION` (default `1`). If `DEMO_VERSION_FILE` is set, that file is read on every request
+and its content (`1` or `2`) wins, so a release can be flipped without restarting; a missing or unreadable file falls
+back to `DEMO_VERSION`. The file is set by whoever starts the shop and is never served.
+
+```sh
+DEMO_VERSION=2 npm start                          # release 2
+DEMO_VERSION_FILE=/tmp/demo-version npm start     # echo 2 > /tmp/demo-version flips the next request to release 2
+```
+
+Release 1 is byte-for-byte the Phase 5 shop (checked route by route against a snapshot in
+`backend/tests/fixtures/demo_shop_v1_snapshot.json`). Release 2 changes:
+
+1. The nav gains "Offers" (`/offers`), between Products and Contact.
+2. `/offers` has the heading "Offers" and one offer, "Desk lamp bundle", with:
+   - `<button type="button">Show details</button>`: its inline handler writes "Bundle price: £NaN" and then throws a
+     `TypeError` (it reads a property of `undefined`);
+   - `<button type="button">Add to basket</button>`: its handler calls `fetch('/basket', {method: 'POST'})`;
+   - a "Promo code" form (one text field, submit "Apply code", `POST /offers/apply`, which says the code is not
+     valid).
+3. `/products/1` (Travel mug) returns 404 and is gone from `/products`. The bearer-token API is unchanged.
+4. The Contact form: the label "Message" becomes "Your message" (same `id`/`name`) and the textarea is `required`;
+   `POST /contact` rejects an empty message with 400 "Name, email and message are required"; a new optional field
+   "Order number" (`maxlength=20`); the button "Send message" becomes "Send". The confirmation ("Thank you" /
+   "Message sent") is unchanged.
+5. Everything else is as in release 1, Phase 5 flaws included.
+
 The test login and API token live in `demo-login.mjs`. Tests read them from there or from `DEMO_LOGIN_USER` /
 `DEMO_LOGIN_PASSWORD`; docs never copy them.

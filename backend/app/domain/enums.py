@@ -55,6 +55,9 @@ class StageKey(StrEnum):
     # Phase 5 (P5-00): optional branches after G2, never queued by advance().
     accessibility = "accessibility"
     security_assessment = "security_assessment"
+    # Phase 6 (P6-00): change analysis after a rescan (automatic) and exploratory sessions (run-driven, after G2).
+    change_analysis = "change_analysis"
+    exploratory = "exploratory"
 
 
 class StageStatus(StrEnum):
@@ -450,6 +453,7 @@ class GateSubjectType(StrEnum):
     execution_run = "execution_run"
     defect = "defect"
     automation_script = "automation_script"
+    release_assessment = "release_assessment"  # Phase 6 (P6-05a): G9 is decided per release assessment
 
 
 class ScriptStatus(StrEnum):
@@ -515,6 +519,7 @@ class ApprovalKind(StrEnum):
     real_user_data = "real_user_data"
     load_test = "load_test"
     security_test = "security_test"
+    exploratory_session = "exploratory_session"  # Phase 6 (P6-03a, decision D30): signed-in exploration only
 
 
 class ApprovalStatus(StrEnum):
@@ -548,6 +553,8 @@ class DefectSource(StrEnum):
     accessibility = "accessibility"
     security = "security"
     performance = "performance"
+    # Phase 6 (P6-00): drafts from exploratory findings (P6-03a).
+    exploratory = "exploratory"
 
 
 # ---------------------------------------------------------------- Phase 5: non-functional testing
@@ -556,6 +563,7 @@ class DefectSource(StrEnum):
 class QualityScanKind(StrEnum):
     accessibility = "accessibility"
     security = "security"
+    exploratory = "exploratory"  # Phase 6 (P6-00): an exploratory session (EXP-0001) is a quality scan
 
 
 class QualityScanStatus(StrEnum):
@@ -612,3 +620,121 @@ class PerfRunStatus(StrEnum):
     stopped = "stopped"
     aborted = "aborted"
     error = "error"
+
+
+# ---------------------------------------------------------------- Phase 6: change intelligence and release readiness
+
+
+class ChangeSetStatus(StrEnum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class ChangeKind(StrEnum):
+    page_added = "page_added"
+    page_removed = "page_removed"
+    page_changed = "page_changed"
+    element_added = "element_added"
+    element_removed = "element_removed"
+    element_renamed = "element_renamed"
+    element_moved = "element_moved"
+    form_added = "form_added"
+    form_removed = "form_removed"
+    form_changed = "form_changed"
+    field_added = "field_added"
+    field_removed = "field_removed"
+    field_changed = "field_changed"
+    navigation_changed = "navigation_changed"
+    journey_added = "journey_added"
+    journey_removed = "journey_removed"
+    journey_changed = "journey_changed"
+    requirement_changed = "requirement_changed"
+
+
+class ChangeSignificance(StrEnum):
+    structural = "structural"
+    behavioural = "behavioural"
+    cosmetic = "cosmetic"
+
+
+class ImpactTargetKind(StrEnum):
+    requirement = "requirement"
+    test_case = "test_case"
+    automation_script = "automation_script"
+    page_object_locator = "page_object_locator"
+    defect = "defect"
+    quality_finding = "quality_finding"
+    performance_target = "performance_target"
+    coverage_gap = "coverage_gap"
+
+
+class ImpactLevel(StrEnum):
+    direct = "direct"
+    indirect = "indirect"
+    gap = "gap"
+
+
+class ImpactAction(StrEnum):
+    rerun = "rerun"
+    review = "review"
+    heal = "heal"
+    regenerate = "regenerate"
+    write_requirement = "write_requirement"
+
+
+class ImpactStatus(StrEnum):
+    open = "open"
+    resolved = "resolved"
+    no_action = "no_action"
+
+
+class HealSource(StrEnum):
+    change = "change"
+    failure = "failure"
+
+
+class HealKind(StrEnum):
+    locator = "locator"
+    expected_result_review = "expected_result_review"
+
+
+class HealStatus(StrEnum):
+    open = "open"
+    accepted = "accepted"
+    rejected = "rejected"
+    superseded = "superseded"
+
+
+class StepOutcome(StrEnum):
+    ok = "ok"
+    no_effect = "no_effect"
+    navigated = "navigated"
+    error = "error"
+    blocked = "blocked"
+
+
+class ChosenBy(StrEnum):
+    rules = "rules"
+    ai = "ai"
+
+
+class AssessmentStatus(StrEnum):
+    awaiting_approval = "awaiting_approval"
+    final = "final"
+    rejected = "rejected"
+    superseded = "superseded"
+    stale = "stale"
+
+
+class Verdict(StrEnum):
+    go = "go"
+    conditional = "conditional"
+    no_go = "no_go"
+
+
+class AssessmentDecision(StrEnum):
+    approve = "approve"
+    reject = "reject"
+    override = "override"

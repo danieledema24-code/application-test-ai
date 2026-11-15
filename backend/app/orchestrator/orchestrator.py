@@ -6,10 +6,12 @@ validated artefacts; no LLM output can change workflow state.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import uuid
+from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -55,15 +57,20 @@ from app.domain.enums import (
 )
 from app.domain.stages import (
     ACTIVE_STATUSES,
+    CHANGE_ANALYSIS_START,
     DERIVED_STAGES,
     EXECUTION_STAGE_STATUS,
     GATE_STAGE,
     GATE_TITLES,
+    ON_REQUEST_STAGES,
     OPTIONAL_STAGE_BLOCK,
     OPTIONAL_STAGES,
     OUTPUT_STATUSES,
     REGENERABLE_STAGES,
+    RELEASE_NEEDS_RUN,
     RERUN_STALE_REASONS,
+    RESCAN_ONLY_STAGES,
+    RESCAN_STALE_STAGES,
     RUN_DRIVEN_STAGES,
     RUNNABLE_IN_PHASE,
     STAGE_BY_KEY,
@@ -77,6 +84,10 @@ from app.services.audit import audit
 from app.services.counters import next_key
 
 log = logging.getLogger(__name__)
+# One `advance()` at a time per project in this process (see `Orchestrator.advance`).
+# Rescans that never get a change set (design P6 §5).
+NOT_COMPARED_RESCANS = frozenset({"cancelled", "failed"})
+_ADVANCE_LOCKS: defaultdict[uuid.UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
 ORCH = "orchestrator"
 SCAN_GROUP = "scan"
 # Run statuses that mean "this version produced a usable output" (a regeneration of it is a candidate).
@@ -198,6 +209,11 @@ PHASE4_HANDLERS: dict[StageKey, Any] = {
     StageKey.accessibility: type("RunDriven_P5_02", (NotAvailableYet,), {"story": "P5-02", "implemented": True}),
     StageKey.security_assessment: type("RunDriven_P5_03", (NotAvailableYet,), {"story": "P5-03", "implemented": True}),
     StageKey.performance: type("RunDriven_P5_01b", (NotAvailableYet,), {"story": "P5-01b", "implemented": True}),
+    # Phase 6 (P6-00): P6-01 landed change analysis; P6-05a replaces the release readiness stub. Exploratory
+    # sessions (job `quality_scan`, P6-03a) start from Test Execution, never as a stage task (RUN_DRIVEN_STAGES).
+    StageKey.change_analysis: _LazyHandler("app.agents.change.analysis", "ChangeAnalysisAgent"),
+    StageKey.release_readiness: _stub("P6-05a"),
+    StageKey.exploratory: type("RunDriven_P6_03a", (NotAvailableYet,), {"story": "P6-03a", "implemented": True}),
 }
 
 
@@ -207,6 +223,16 @@ def handler_ready(key: StageKey) -> bool:
     return handler is None or bool(getattr(handler, "implemented", True))
 
 
+def _uuid_or_none(value: Any) -> uuid.UUID | None:
+    return uuid.UUID(str(value)) if value else None
+
+
+# What a per-subject gate is decided on (decide_gate's 422 message).
+_GATE_SUBJECTS: dict[GateKey, str] = {
+    GateKey.G7: "test run",
+    GateKey.G8: "defect",
+    GateKey.G9: "release assessment",
+}
 # Message when a stage's upstream gate blocks it, where the gate title alone would not say what to do.
 _GATE_BLOCK_NAMES: dict[GateKey, str] = {GateKey.G5: "Test design approval"}
 # Why a downstream stage is out of date after its gate input was re-approved with different content.
@@ -412,6 +438,23 @@ class Orchestrator:
     ) -> list[StageKey]:
         """Queues every stage whose upstream is gate-satisfied and that runs automatically. Idempotent.
 
+        Two callers can advance the same project at once (a gate decision in the API and the worker finishing a
+        task): both would read the same next `stage_runs.version` and the second insert would fail on the unique
+        `(workflow_stage_id, version)` (QA P6-01 #10, a 500 on the G2 decision). Calls are serialised per project in
+        this process, and a conflict with another process is retried once: the retry sees the stage already queued.
+        """
+        async with _ADVANCE_LOCKS[project_id]:
+            try:
+                return await self._advance(scope, project_id, triggered_by=triggered_by)
+            except IntegrityError:
+                log.info("advance(%s) raced another writer; retrying once", project_id)
+                return await self._advance(scope, project_id, triggered_by=triggered_by)
+
+    async def _advance(
+        self, scope: TenantScope, project_id: uuid.UUID, *, triggered_by: uuid.UUID | None = None
+    ) -> list[StageKey]:
+        """The body of `advance`.
+
         Automatic runs (architecture.md §4): discovery once the project exists; the discovery report whenever
         discovery has a new version; provisional requirements once discovery has results; Definition of Ready/Done
         whenever the requirements version changes; the test strategy once G3 is approved; test design once G4 is
@@ -432,6 +475,8 @@ class Orchestrator:
             for d in STAGES:
                 if d.key not in RUNNABLE_IN_PHASE or d.key in OPTIONAL_STAGES or not handler_ready(d.key):
                     continue  # optional branches (P5-00) start only from their workspace or the assistant
+                if d.key in ON_REQUEST_STAGES:
+                    continue  # P6-00: release readiness starts only when a person asks for an assessment
                 st = stages[d.key]
                 if st.status in ACTIVE_STATUSES or st.status == StageStatus.paused:
                     continue
@@ -455,8 +500,9 @@ class Orchestrator:
         if key == StageKey.discovery:
             return st.status == StageStatus.not_started
         upstream = [stages[u] for u in STAGE_BY_KEY[key].upstream]
-        if key in (StageKey.readiness_criteria, StageKey.discovery_report):
-            # Exempt from the upstream gate: the report documents discovery for G2 and Ready/Done is part of G3.
+        if key in (StageKey.readiness_criteria, StageKey.discovery_report, StageKey.change_analysis):
+            # Exempt from the upstream gate: the report documents discovery for G2 and Ready/Done is part of G3. The
+            # change set (P6-01) is part of what a person reviews at G2 for a rescan.
             if any(u.status not in OUTPUT_STATUSES for u in upstream):
                 return False
         elif not all([await gate_rules.gate_satisfied(s, project, u) for u in upstream]):
@@ -472,6 +518,18 @@ class Orchestrator:
             return (
                 run is None or st.status in (StageStatus.stale, StageStatus.not_started) or upstream_v != urun.version
             )
+        if key in RESCAN_ONLY_STAGES:
+            # P6-00: once per rescan (P6-01). A plain discovery re-run never queues change analysis.
+            if not (urun.parameters or {}).get("rescan"):
+                return False
+            # A cancelled or failed rescan makes no change set (design P6 §5, OQ2). The agent compares only a scan
+            # that finished or stopped early, and skips anything else.
+            scan_status = (
+                await s.execute(select(ScanSession.status).where(ScanSession.stage_run_id == urun.id))
+            ).scalar_one_or_none()
+            if scan_status is not None and scan_status.value in NOT_COMPARED_RESCANS:
+                return False
+            return run is None or (run.upstream_versions or {}).get("discovery") != urun.version
         if key == StageKey.requirements:
             # First generation automatically; after a new discovery version, a regeneration candidate for review.
             if st.status == StageStatus.not_started:
@@ -674,6 +732,9 @@ class Orchestrator:
                 status=ScanStatus.queued,
                 limits=limits,
                 stats=empty_stats(),
+                # P6-00: a rescan (P6-01) is a new scan session; earlier sessions stay as they are.
+                is_rescan=bool(params.get("rescan")),
+                baseline_scan_session_id=_uuid_or_none(params.get("baseline_scan_session_id")),
             )
             s.add(scan)
             await s.flush()
@@ -883,6 +944,11 @@ class Orchestrator:
                 f"{what} is computed automatically",
                 details=[{"field": "stage", "message": f"{what} is computed automatically"}],
             )
+        if stage_key in RESCAN_ONLY_STAGES and handler_ready(stage_key):
+            # P6-01: a change set compares two given scans; it follows a rescan or a person's comparison.
+            raise ValidationFailed(
+                CHANGE_ANALYSIS_START, details=[{"field": "stage", "message": CHANGE_ANALYSIS_START}]
+            )
         if stage_key in RUN_DRIVEN_STAGES and d.available:
             raise ValidationFailed(
                 RUN_DRIVEN_STAGES[stage_key], details=[{"field": "stage", "message": RUN_DRIVEN_STAGES[stage_key]}]
@@ -911,7 +977,10 @@ class Orchestrator:
                 raise Conflict(f"{d.title} is already {st.status.value}")
             if await self.pending_candidate(s, st) is not None:
                 raise Conflict(f"A regenerated version of {d.title} is waiting for review; apply or discard it first")
-            for u in d.upstream:
+            if stage_key == StageKey.release_readiness:
+                # P6-00: needs execution results, not the defects summary's gate (G8 is decided per defect).
+                await self.check_release_ready(s, project)
+            for u in d.upstream if stage_key not in ON_REQUEST_STAGES else ():
                 ust = await self.stage(s, project.id, u)
                 if stage_key in OPTIONAL_STAGES:
                     try:
@@ -931,11 +1000,18 @@ class Orchestrator:
             except IntegrityError as exc:
                 raise Conflict(f"{d.title} is already queued or running") from exc
             stale: list[StageKey] = []
+            # P6-00 (decision D27): a rescan keeps requirements, strategy, test design and automation at their
+            # approved versions (the change set's impact items say what is affected); only the checks go stale.
+            rescan = stage_key == StageKey.discovery and bool((parameters or {}).get("rescan"))
             if run.review_status != ReviewStatus.pending_review:
                 # A candidate changes nothing until it is applied; a direct re-run supersedes downstream outputs.
                 for dk in downstream_of(stage_key):
                     if dk in DERIVED_STAGES or (dk in RUN_DRIVEN_STAGES and dk not in RERUN_STALE_REASONS):
                         continue  # derived on read, or mirrors execution runs (never re-run as a stage)
+                    if rescan and dk not in RESCAN_STALE_STAGES:
+                        continue
+                    if dk in RESCAN_ONLY_STAGES:
+                        continue  # P6-01: a change set compares two fixed scans; a later scan never outdates it
                     dst = await self.stage(s, project.id, dk)
                     if dst.status in OUTPUT_STATUSES or dst.status in (
                         StageStatus.failed,
@@ -971,6 +1047,25 @@ class Orchestrator:
                 stage=dk,
                 data={"kind": "status", "stage_key": dk.value, "from": "completed", "to": "stale", "version": None},
             )
+
+    @staticmethod
+    async def check_release_ready(s: AsyncSession, project: Project) -> None:
+        """P6-00: a release assessment needs at least one finished execution run (409 `conflict` otherwise)."""
+        from app.db.models import ExecutionRun
+        from app.domain.enums import RunStatus
+
+        finished = (
+            await s.execute(
+                select(ExecutionRun.id)
+                .where(
+                    ExecutionRun.project_id == project.id,
+                    ExecutionRun.status.in_([RunStatus.passed, RunStatus.failed]),
+                )
+                .limit(1)
+            )
+        ).first()
+        if finished is None:
+            raise Conflict(RELEASE_NEEDS_RUN)
 
     async def _check_upstream(self, s: AsyncSession, project: Project, stage_key: StageKey, ust: WorkflowStage) -> None:
         """Raises 409 gate_blocked unless `ust` is gate-satisfied for running `stage_key`."""
@@ -1179,9 +1274,10 @@ class Orchestrator:
         if gate == GateKey.G1:
             raise Conflict("Gate 1 is recorded when the project is created")
         if gate in SUBJECT_GATES and STAGE_BY_KEY[stage_key].available:
-            # P4-00: G7 is decided per execution run, G8 per defect (decisions D8, D11).
+            # P4-00: G7 is decided per execution run, G8 per defect (decisions D8, D11); P6-00: G9 per release
+            # assessment (decision D33).
             raise ValidationFailed(
-                f"{gate.value} is decided per {'test run' if gate == GateKey.G7 else 'defect'}",
+                f"{gate.value} is decided per {_GATE_SUBJECTS[gate]}",
                 details=[{"field": "gate", "message": SUBJECT_GATES[gate]}],
             )
         if not STAGE_BY_KEY[stage_key].available:
@@ -1494,6 +1590,10 @@ class Orchestrator:
             from app.agents.nonfunctional.scan import run_scan
 
             await run_scan(self.ctx, scope, uuid.UUID(job.payload["scan_id"]), job)
+        elif job.kind == "change_compare":
+            from app.services.changes import compare_job
+
+            await compare_job(self.ctx, scope, uuid.UUID(job.payload["change_set_id"]))
         elif job.kind == "performance_run":
             from app.agents.performance.runner import run_load_test
 
@@ -1798,6 +1898,11 @@ class Orchestrator:
 
             await scan_interrupted(self.ctx, job)
             return
+        if job.kind == "change_compare":
+            from app.services.changes import compare_interrupted
+
+            await compare_interrupted(self.ctx, job)
+            return
         if job.kind == "performance_run":
             from app.agents.performance.runner import run_interrupted
 
@@ -1816,6 +1921,10 @@ class Orchestrator:
             project = (await s.execute(select(Project).where(Project.id == task.project_id))).scalar_one()
             stage_run_id = task.stage_run_id
         await self._fail(scope, project, task.id, stage_run_id, "interrupted")
+        # P6-01: a change set the interrupted `change_analysis` task was computing says it didn't complete.
+        from app.services.changes import stage_set_interrupted
+
+        await stage_set_interrupted(self.ctx, scope, stage_run_id)
 
     async def _execution_interrupted(self, job: Job) -> None:
         """P4-06 restart safety: a run whose worker stopped is `error`; stored results stay, the rest are errors."""

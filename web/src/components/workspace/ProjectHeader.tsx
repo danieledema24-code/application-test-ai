@@ -8,6 +8,7 @@ import { activeStage, gateReview, stageStatusLabel, waitingGateStage, waitingLab
 import { useAuth } from "@/lib/auth";
 import { ApiError, downloadFile } from "@/lib/api";
 import { exportFileName, exportPath } from "@/lib/automation";
+import { g2EverApproved } from "@/lib/change";
 import { hostOf } from "@/lib/url";
 import { Button, StatusPill, useToast } from "@/components/ui";
 import { useAssistantDrawer } from "@/components/assistant/AssistantDrawer";
@@ -67,6 +68,8 @@ function MoreMenu() {
   const active = activeStage(p.workflow);
   const running = !!active;
   const { role } = useAuth();
+  const g2 = g2EverApproved(p.workflow);
+  const hasBaseline = g2 === true;
   const scripted = !!p.workflow?.stages.find((x) => x.key === "automation")?.current_version;
   const nfOn = nfReachable(p.workflow) && role !== "viewer" && role !== null;
   const nfGo = (tab: string) => (setOpen(false), router.push(`/projects/${p.id}/non-functional?tab=${tab}`));
@@ -86,9 +89,13 @@ function MoreMenu() {
           <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), router.push(`/projects/${p.id}/settings`))}>
             Project settings
           </button>
-          <button role="menuitem" type="button" className={item} disabled={running} onClick={() => (setOpen(false), p.openRescan())}>
-            Re-scan site{running ? " (after the current scan)" : ""}
-          </button>
+          {/* After G2 only "Rescan and compare…" is offered, never the whole-chain re-scan (design P6 §4.4, OQ1). */}
+          {g2 !== null && (!hasBaseline || (role !== "viewer" && role !== null)) && (
+            <button role="menuitem" type="button" className={item} disabled={running} onClick={() => (setOpen(false), p.openRescan())}>
+              {hasBaseline ? "Rescan and compare…" : "Re-scan site"}
+              {running ? " (after the current scan)" : ""}
+            </button>
+          )}
           {scripted && role !== "viewer" && role !== null && (
             <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), router.push(`/projects/${p.id}/execution?new=1`))}>
               Run tests…

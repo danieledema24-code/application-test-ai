@@ -167,6 +167,13 @@ export function ProjectProvider({ id, children, onOpenRescan, onOpenCancel }: { 
         const st = statusAnnouncement(e);
         if (e.type === "stage.status_changed" || e.type === "gate.awaiting_approval" || e.type === "gate.decided" || e.type === "task.failed") scheduleRefresh();
         if (e.type === "report.ready") void globalMutate((k) => typeof k === "string" && k.includes(`/projects/${id}/reports`));
+        // P6-01: change sets appear and finish in the Changes tab; "CHG-n ready: …" is announced politely, focus stays (design P6 §6.3).
+        if (e.type === "change.status" || e.type === "change.ready" || e.type === "rescan.started")
+          void globalMutate((k) => typeof k === "string" && (k.includes(`/projects/${id}/change`) || k.startsWith("/change-sets/") || k.includes(`/projects/${id}/scans`)));
+        if (e.type === "change.ready" && e.message) {
+          announce(e.message, true);
+          return;
+        }
         if (e.type === "stage.status_changed") {
           const to = String((e.data ?? {}).to ?? "");
           if (to === "paused") setPausing(false);

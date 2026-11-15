@@ -120,7 +120,7 @@ test.describe("Phase 5 · non-functional rules", () => {
   });
 
   test("sidebar: Non-functional is built in Phase 5 with Approve / Waiting / Running / Out of date badges (§4.2)", () => {
-    expect(CURRENT_PHASE).toBe(5);
+    expect(CURRENT_PHASE).toBeGreaterThanOrEqual(5);
     const nf = PROJECT_SECTIONS.find((s) => s.slug === "non-functional")!;
     expect(nf.label).toBe("Non-functional");
     expect(isBuilt(nf)).toBe(true);

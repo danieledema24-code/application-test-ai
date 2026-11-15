@@ -57,9 +57,23 @@ from app.services.audit import audit
 from app.services.counters import next_key
 
 QUALITY_GROUP = "scan"  # checks share discovery's browser budget per organisation
-STAGE = {QualityScanKind.accessibility: StageKey.accessibility, QualityScanKind.security: StageKey.security_assessment}
-COUNTER = {QualityScanKind.accessibility: "a11y_scan", QualityScanKind.security: "security_scan"}
-WHAT = {QualityScanKind.accessibility: "An accessibility check", QualityScanKind.security: "A security check"}
+STAGE = {
+    QualityScanKind.accessibility: StageKey.accessibility,
+    QualityScanKind.security: StageKey.security_assessment,
+    QualityScanKind.exploratory: StageKey.exploratory,  # P6-00: sessions are quality scans (P6-03a)
+}
+COUNTER = {
+    QualityScanKind.accessibility: "a11y_scan",
+    QualityScanKind.security: "security_scan",
+    QualityScanKind.exploratory: "exploratory_session",
+}
+WHAT = {
+    QualityScanKind.accessibility: "An accessibility check",
+    QualityScanKind.security: "A security check",
+    QualityScanKind.exploratory: "An exploratory session",
+}
+# The two Phase 5 non-functional check kinds (the Non-functional workspace); exploration lives in Test Execution.
+NF_KINDS = (QualityScanKind.accessibility, QualityScanKind.security)
 ACTIVE = (QualityScanStatus.queued, QualityScanStatus.running)
 SECONDS_PER_PAGE = 10
 ROOT_CAUSE = "Not analysed. Automated checks measure what happens, not why."

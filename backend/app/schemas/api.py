@@ -28,6 +28,8 @@ StageKeyT = Literal[
     "performance",
     "accessibility",
     "security_assessment",
+    "change_analysis",
+    "exploratory",
 ]
 StageStatusT = Literal[
     "not_started",
@@ -379,6 +381,8 @@ class GateState(BaseModel):
     preconditions: list[dict[str, Any]] = []
     # G3/G4: items added, changed or removed since the last approval (0 when never approved).
     changes_since_approval: int = 0
+    # P6-01 (G2 only): any scan of the project was approved at G2, so a rescan is compared with it.
+    ever_approved: bool = False
 
 
 class StageProgress(BaseModel):
@@ -550,6 +554,10 @@ class ScanSummary(BaseModel):
     stage_run_version: int | None = None
     created_at: datetime | None = None
     is_latest: bool = False
+    # P6-01: a rescan, the scan it is compared with (D25), and whether this scan was approved at G2.
+    is_rescan: bool = False
+    baseline_number: int | None = None
+    g2_approved: bool = False
 
 
 class InjectionFlag(BaseModel):

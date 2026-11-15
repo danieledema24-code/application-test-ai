@@ -22,8 +22,9 @@ import { FeatureList, FunctionalityMatrix } from "@/components/discovery/Functio
 import { JourneyCard } from "@/components/discovery/JourneyCard";
 import { ResponsiveCompare } from "@/components/discovery/ResponsiveCompare";
 import { AccessGaps } from "@/components/discovery/AccessGaps";
+import { ChangesTab } from "@/components/changes/Changes";
 
-const VIEWS = ["live", "summary", "sitemap", "functionality", "journeys", "responsive", "gaps"] as const;
+const VIEWS = ["live", "summary", "sitemap", "functionality", "journeys", "responsive", "gaps", "changes"] as const;
 type View = (typeof VIEWS)[number];
 
 /** Banner for a finished scan that is partial, failed or empty (design spec §8.5). */
@@ -185,12 +186,14 @@ function Discovery() {
     { id: "journeys", label: "User journeys" },
     { id: "responsive", label: "Responsive" },
     { id: "gaps", label: "Access gaps", count: gapCount },
+    // Project-wide: ignores `?scan=` (design P6 §6.1).
+    { id: "changes", label: "Changes" },
   ];
 
   return (
     <div className="space-y-6">
       {header}
-      {isOlder && (
+      {isOlder && view !== "changes" && (
         <Callout
           tone="info"
           actions={
@@ -202,8 +205,8 @@ function Discovery() {
           You’re viewing Scan {thisN} from {fmtDate(scan.started_at)}. The latest is Scan {latestN}. Older scans are read-only.
         </Callout>
       )}
-      {!isOlder && gateStage && view !== "summary" && <GateBanner stage={gateStage} reviewHref={reviewHref} />}
-      {!active && <ScanStateBanner scan={scan} onRescan={p.openRescan} />}
+      {!isOlder && gateStage && view !== "summary" && view !== "changes" && <GateBanner stage={gateStage} reviewHref={reviewHref} />}
+      {!active && view !== "changes" && <ScanStateBanner scan={scan} onRescan={p.openRescan} />}
       {signIn?.state === "failed" && (
         <Callout
           tone="warning"
@@ -307,6 +310,7 @@ function Discovery() {
               ))}
             {view === "responsive" && <ResponsiveCompare pages={pageList} includeMobile={scan.limits?.include_mobile ?? true} onRescan={p.openRescan} />}
             {view === "gaps" && <AccessGaps scan={scan} projectId={p.id} onRescan={p.openRescan} />}
+            {view === "changes" && <ChangesTab />}
           </TabPanel>
         </div>
       )}

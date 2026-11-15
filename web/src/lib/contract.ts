@@ -42,7 +42,9 @@ export type StageKey =
   | "release_readiness"
   | "performance"
   | "accessibility"
-  | "security_assessment";
+  | "security_assessment"
+  | "change_analysis"
+  | "exploratory";
 
 export type StageStatus =
   | "not_started"
@@ -240,6 +242,8 @@ export type StageGate = {
   preconditions?: GatePrecondition[];
   /** Phase 2 (G3/G4): items new or changed since the last approval; 0 if never approved. */
   changes_since_approval?: number;
+  /** P6-01 (G2 only): a scan of this project was approved at Gate 2, so rescans are compared with it. */
+  ever_approved?: boolean;
 };
 
 export type StageState = {
@@ -299,6 +303,12 @@ export type ScanSummary = {
   pages_found: number;
   started_at: IsoDate | null;
   finished_at: IsoDate | null;
+  number?: number;
+  created_at?: IsoDate | null;
+  /** P6-01: a rescan, the scan it is compared with (D25), and whether this scan was approved at Gate 2. */
+  is_rescan?: boolean;
+  baseline_number?: number | null;
+  g2_approved?: boolean;
 };
 
 export type ScanStats = {

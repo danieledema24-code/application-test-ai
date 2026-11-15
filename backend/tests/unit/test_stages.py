@@ -18,9 +18,10 @@ from app.domain.stages import (
 )
 
 
-def test_seventeen_stages_phase_five_available() -> None:
-    # P5-00 adds the optional accessibility and security branches; release readiness (Phase 6) is the only one left.
-    assert len(STAGES) == 17
+def test_nineteen_stages_all_available_in_phase_six() -> None:
+    # P5-00 added the optional accessibility and security branches; P6-00 adds change analysis and exploratory
+    # testing, and release readiness becomes available.
+    assert len(STAGES) == 19
     available = [s.key for s in STAGES if s.available]
     assert available == [
         StageKey.intake,
@@ -36,9 +37,12 @@ def test_seventeen_stages_phase_five_available() -> None:
         StageKey.execution,
         StageKey.failure_analysis,
         StageKey.defects_summary,
+        StageKey.release_readiness,
         StageKey.performance,
         StageKey.accessibility,
         StageKey.security_assessment,
+        StageKey.change_analysis,
+        StageKey.exploratory,
     ]
 
 
@@ -48,8 +52,9 @@ def test_phase_four_stage_rules() -> None:
     assert not ({StageKey.execution, StageKey.failure_analysis} & RUNNABLE_IN_PHASE)
     assert RUN_DRIVEN_STAGES[StageKey.execution] == "Start a test run from Test Execution"
     assert DERIVED_STAGES[StageKey.defects_summary] == StageKey.failure_analysis
-    # G7 per run and G8 per defect: locked to required and never decided through /gates.
-    assert set(SUBJECT_GATES) == {GateKey.G7, GateKey.G8} and {GateKey.G7, GateKey.G8} <= set(LOCKED_GATES)
+    # G7 per run, G8 per defect and (P6-00) G9 per release assessment: locked to required and never decided
+    # through /gates.
+    assert set(SUBJECT_GATES) == {GateKey.G7, GateKey.G8, GateKey.G9} <= set(LOCKED_GATES)
     for gate in ("G7", "G8"):
         assert policy_violations({gate: "recommended"}) and policy_violations({gate: "auto"})
 

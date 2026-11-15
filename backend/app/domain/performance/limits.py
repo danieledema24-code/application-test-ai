@@ -50,8 +50,11 @@ MAX_TARGETS = 10
 
 
 def default_org_settings() -> dict[str, Any]:
-    """`organisations.settings` for a new organisation (the migration's server default is the same value)."""
-    return {"load_ceiling": DEFAULT_CEILING.as_dict()}
+    """`organisations.settings` for a new organisation (the migration's server default is the same value): the D18
+    load ceiling and, from Phase 6 (P6-00), the D30 exploration ceiling."""
+    from app.domain.exploratory.limits import default_exploration_ceiling
+
+    return {"load_ceiling": DEFAULT_CEILING.as_dict(), "exploration_ceiling": default_exploration_ceiling()}
 
 
 def duration_text(seconds: int) -> str:

@@ -25,6 +25,7 @@ from app.db.models import (
     WorkflowStage,
 )
 from app.domain.enums import (
+    GateDecisionKind,
     GateKey,
     GateStatus,
     PageStatus,
@@ -243,6 +244,22 @@ async def scan_summary(session: AsyncSession, s: ScanSession, latest_id: uuid.UU
     version = (
         await session.execute(select(StageRun.version).where(StageRun.id == s.stage_run_id))
     ).scalar_one_or_none()
+    baseline = (
+        (
+            await session.execute(select(ScanSession.sequence).where(ScanSession.id == s.baseline_scan_session_id))
+        ).scalar_one_or_none()
+        if s.baseline_scan_session_id
+        else None
+    )
+    g2 = (
+        await session.execute(
+            select(GateDecision.id).where(
+                GateDecision.stage_run_id == s.stage_run_id,
+                GateDecision.gate_key == GateKey.G2,
+                GateDecision.decision == GateDecisionKind.approve,
+            )
+        )
+    ).first()
     return api.ScanSummary(
         id=s.id,
         key=s.key,
@@ -255,6 +272,9 @@ async def scan_summary(session: AsyncSession, s: ScanSession, latest_id: uuid.UU
         stage_run_version=version,
         created_at=s.created_at,
         is_latest=latest_id is None or latest_id == s.id,
+        is_rescan=s.is_rescan,
+        baseline_number=baseline,
+        g2_approved=g2 is not None,
     )
 
 
@@ -464,6 +484,20 @@ async def gate_state_for_run(
         if run is not None and run.finished_at is not None:
             live = await gates.recommendation(session, project, stage.gate_key)
             rec = api.GateRecommendation.model_validate(live) if live else rec
+    ever_approved = False
+    if stage.gate_key == GateKey.G2:
+        # P6-01 (design P6 §4.4, OQ1): once any scan was approved at G2, rescans compare instead of re-running.
+        ever_approved = (
+            await session.execute(
+                select(GateDecision.id)
+                .where(
+                    GateDecision.project_id == project.id,
+                    GateDecision.gate_key == GateKey.G2,
+                    GateDecision.decision == GateDecisionKind.approve,
+                )
+                .limit(1)
+            )
+        ).first() is not None
     return api.GateState(
         key=stage.gate_key.value,
         policy=policy.value,
@@ -473,6 +507,7 @@ async def gate_state_for_run(
         decision=decision,
         preconditions=preconditions,
         changes_since_approval=changes,
+        ever_approved=ever_approved,
     )
 
 
