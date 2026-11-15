@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "playwright test --project=unit",
     "test:ui": "playwright test --project=ui-mocked",
+    "test:ui:webkit": "PW_WEB_PROD=1 playwright test --project=ui-mocked-webkit",
     "test:e2e": "playwright test --project=e2e"
   },
   "dependencies": {
