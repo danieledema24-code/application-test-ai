@@ -1,5 +1,6 @@
 // Relative import so the pure helpers here can be unit-tested outside Next.
 import { ApiError, NETWORK_ERROR_MESSAGE } from "../../lib/api";
+import { pressedControl } from "../../lib/pointerFocus";
 
 /** Maps an auth API failure to the design copy (§4 states). Field errors are returned separately. */
 export function authErrorMessage(err: unknown, context: "login" | "register" | "reset"): string {
@@ -48,5 +49,7 @@ export const MIN_PASSWORD = 12;
 
 /** True when focus is moving to a submit button (used to skip blur validation, see register/login). */
 export function isSubmit(el: EventTarget | null): boolean {
-  return el instanceof HTMLButtonElement && el.type === "submit";
+  // Safari doesn't focus a clicked button, so a blur toward submit has no relatedTarget: use the pressed control.
+  const target = el ?? pressedControl();
+  return target instanceof HTMLButtonElement && target.type === "submit";
 }

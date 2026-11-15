@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api, getToken, setToken } from "./api";
+import { api, getToken, leavingForSignIn, setToken } from "./api";
 import type { AuthResponse, Me, Organisation, Role, User } from "./contract";
 
 export type RegisterInput = { full_name: string; email: string; password: string; organisation_name: string };
@@ -82,7 +82,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       /* the token may already be invalid; sign out locally regardless */
     }
     setToken(null);
-    setMe(null);
+    // Not setMe(null): the signed-out shell would redirect to /login?next=… itself, and in Safari that soft
+    // navigation wins over the hard one below, so the "You've signed out" notice never shows.
+    leavingForSignIn();
     // replace(): Back must not return to an app page that still shows data.
     window.location.replace("/login?signed_out=1");
   }, []);

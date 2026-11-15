@@ -116,6 +116,11 @@ function handleUnauthorised() {
   }
 }
 
+/** The page is leaving for sign-in on its own (sign-out): a 401 from a request still in flight must not redirect. */
+export function leavingForSignIn() {
+  redirecting = true;
+}
+
 /** Called by the SSE client when the stream answers 401. */
 export function onUnauthorised() {
   handleUnauthorised();
