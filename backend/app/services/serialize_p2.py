@@ -21,7 +21,7 @@ from app.db.models import (
     User,
     risk_requirements,
 )
-from app.domain.enums import ItemStatus, RiskLevel
+from app.domain.enums import ItemStatus, RiskLevel, Role
 from app.services import serialize as ser
 from app.services.revisions import jsonable
 
@@ -31,6 +31,19 @@ LEVEL_ORDER = {RiskLevel.low: 0, RiskLevel.medium: 1, RiskLevel.high: 2, RiskLev
 def user_dict(u: User | None) -> dict[str, Any] | None:
     ref = ser.user_ref(u)
     return ref.model_dump(mode="json") if ref else None
+
+
+def person(u: User | None, *, see_email: bool) -> dict[str, Any] | None:
+    """A user as Phase 4 responses show them (P3-07 rule): the name for everyone, the email only for owners and
+    admins (`see_email`)."""
+    d = user_dict(u)
+    if d is not None and not see_email:
+        d["email"] = None
+    return d
+
+
+def sees_email(role: Role) -> bool:
+    return role in (Role.owner, Role.admin)
 
 
 async def users(s: AsyncSession, ids: Iterable[uuid.UUID | None]) -> dict[uuid.UUID, User]:
@@ -72,6 +85,21 @@ def path(project_id: uuid.UUID, kind: str, key: str) -> str:
         "feature": f"{base}/discovery?feature={key}",
         "risk": f"{base}/test-strategy?tab=risks&risk={key}",
         "document": f"{base}/documents/{key}",
+        "test_case": f"{base}/test-cases/{key}",
+        "test_condition": f"{base}/test-cases?tab=conditions&condition={key}",
+        "test_data": f"{base}/test-cases?tab=data&data={key}",
+        # Phase 4 (P4-12): result keys are "{run key}-{n}".
+        "defect": f"{base}/defects/{key}",
+        "automation_script": f"{base}/automation?view=scripts&file={key}",
+        "execution_result": f"{base}/execution/{key.rsplit('-', 1)[0]}/results/{key}",
+        "execution_run": f"{base}/execution/{key}",
+        # Phase 5 (P5-07): checks, findings, load profiles and load tests; pages open in discovery.
+        "page": f"{base}/discovery?view=pages",
+        "quality_scan": f"{base}/non-functional/checks/{key}",
+        "quality_finding": f"{base}/non-functional/checks/{key.rsplit('-', 1)[0]}?finding={key}",
+        "performance_profile": f"{base}/non-functional/profiles/{key}",
+        "performance_run": f"{base}/non-functional/load-tests/{key}",
+        "threshold_result": f"{base}/non-functional/load-tests/{key.split('·')[0].strip()}",
     }.get(kind, base)
 
 
@@ -272,6 +300,29 @@ def ac_out(a: AcceptanceCriterion, req_key: str, us: dict[uuid.UUID, User]) -> d
     }
 
 
+TECHNIQUE_SHORT = {
+    "equivalence_partitioning": "EP",
+    "boundary_value_analysis": "BVA",
+    "decision_table": "Decision table",
+    "state_transition": "State transition",
+    "use_case": "Use case",
+    "error_guessing": "Error guessing",
+    "checklist": "Checklist",
+    "exploratory": "Exploratory",
+}
+
+
+async def _linked_cases(s: AsyncSession, r: Requirement) -> list[dict[str, Any]]:
+    """P3-01a: non-rejected cases of the current design run linked to the requirement's lineage."""
+    from app.services import testdesign
+
+    out = []
+    for c in await testdesign.linked_test_cases(s, r.project_id, r.lineage_id):
+        label = f"{c.key} · {c.status.value.capitalize()} · {TECHNIQUE_SHORT.get(c.technique, c.technique)}"
+        out.append(artefact_ref(r.project_id, "test_case", c.id, c.key, label))
+    return out
+
+
 async def requirement_detail(
     ctx: AppContext, s: AsyncSession, r: Requirement, *, risk_run_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
@@ -317,7 +368,7 @@ async def requirement_detail(
         "related_features": feats,
         "source_refs": {k: list(src.get(k, [])) for k in ("journey_ids", "page_ids", "document_ids")},
         "acceptance_criteria": [ac_out(a, r.key, us) for a in acs],
-        "linked_test_cases": [],
+        "linked_test_cases": await _linked_cases(s, r),
         "status_comment": r.status_comment,
         "status_reason": (src.get("status_reason") or {}).get("reason"),
         "duplicate_of": (src.get("status_reason") or {}).get("duplicate_of"),

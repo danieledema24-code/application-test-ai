@@ -8,8 +8,10 @@ import { EmptyState, ErrorState, LinkButton } from "@/components/ui";
 import { EvidenceProvider } from "@/components/domain/EvidenceDrawer";
 import { AssistantDrawerProvider } from "@/components/assistant/AssistantDrawer";
 import { LifecycleProgress } from "@/components/domain/LifecycleProgress";
+import { useExecSummary } from "@/components/execution/hooks";
 import { ProjectProvider, useProject } from "@/components/workspace/ProjectContext";
 import { ProjectHeader } from "@/components/workspace/ProjectHeader";
+import { DeletionCallout } from "@/components/settings/ArchiveDelete";
 import { CancelDiscoveryDialog, RescanDialog } from "@/components/workspace/ProjectDialogs";
 
 function Frame({ section, children }: { section: string; children: React.ReactNode }) {
@@ -24,10 +26,17 @@ function Frame({ section, children }: { section: string; children: React.ReactNo
     );
   if (p.projectError && !p.project) return <ErrorState error={p.projectError} title="Couldn’t load this project." message="Try again." onRetry={p.refresh} />;
   const overview = section === "";
+  return <FrameBody overview={overview}>{children}</FrameBody>;
+}
+
+function FrameBody({ overview, children }: { overview: boolean; children: React.ReactNode }) {
+  const p = useProject();
+  const subjects = useExecSummary(p.id, p.workflow);
   return (
     <div className="space-y-6">
       <ProjectHeader asHeading={overview} />
-      {!overview && <LifecycleProgress variant="compact" workflow={p.workflow} projectId={p.id} />}
+      <DeletionCallout />
+      {!overview && <LifecycleProgress variant="compact" workflow={p.workflow} projectId={p.id} subjects={subjects} />}
       <div>{children}</div>
     </div>
   );

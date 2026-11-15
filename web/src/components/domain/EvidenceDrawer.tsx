@@ -1,5 +1,6 @@
 "use client";
 
+import { RemovedEvidence, removedText } from "@/components/domain/RemovedEvidence";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Code, Copy, ExternalLink, FileWarning, Image as ImageIcon } from "lucide-react";
 import { ApiError, downloadFile } from "@/lib/api";
@@ -155,7 +156,9 @@ function DocumentExcerpt({ ev, item, subject, meta }: { ev: EvidenceLinkT; item:
 function EvidenceView({ item, subject }: { item: EvidenceItem; subject: string }) {
   // Always fetch the record: signed content URLs expire after 15 minutes, so a fresh one is needed.
   const { data, error } = useApi<EvidenceDetail>(`/evidence/${item.id}`);
-  const ev = data ?? item.link ?? null;
+  // The record first: a preloaded link can't know whether retention removed the file since (P5-BUG-03). The link
+  // is only a fallback when the record can't be read.
+  const ev = data ?? (error ? (item.link ?? null) : null);
   const missing = error instanceof ApiError && error.status === 404;
   if (missing) return <MissingEvidence />;
   if (!ev) return error ? <MissingEvidence /> : <Spinner label="Loading evidence…" />;
@@ -172,7 +175,9 @@ function EvidenceView({ item, subject }: { item: EvidenceItem; subject: string }
         <br />
         Captured by Application Discovery Agent · <span className="font-mono">{ev.id.slice(0, 8)}</span>
       </p>
-      {isImage(ev.mime, ev.kind) ? (
+      {removedText(ev) ? (
+        <RemovedEvidence text={removedText(ev)!} />
+      ) : isImage(ev.mime, ev.kind) ? (
         <figure>
           {/* eslint-disable-next-line @next/next/no-img-element -- signed, short-lived evidence URL from the API */}
           <img src={ev.content_url} alt={`Screenshot evidence for ${subject}`} className="w-full rounded-md ring-1 ring-line" />

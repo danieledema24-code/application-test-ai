@@ -28,6 +28,18 @@ export const STATUS_LABEL: Record<LifecycleStatus, string> = {
   later: "Coming later",
 };
 
+/**
+ * Waiting copy depends on who is looking (design P3 §4.3): people who can approve gates read "Waiting for your
+ * approval"; everyone else reads "Waiting for approval by someone who can approve gates".
+ */
+export function waitingLabel(canApprove: boolean): string {
+  return canApprove ? "Waiting for your approval" : "Waiting for approval by someone who can approve gates";
+}
+
+export function statusLabel(status: LifecycleStatus, canApprove = true): string {
+  return status === "waiting" ? waitingLabel(canApprove) : STATUS_LABEL[status];
+}
+
 export type LifecycleStageDef = {
   id: string;
   label: string;
@@ -95,7 +107,7 @@ export const LIFECYCLE: LifecycleStageDef[] = [
     apiStages: ["test_design", "traceability"],
     steps: [
       { n: 13, name: "Test conditions & test cases", agent: "Test Design Agent" },
-      { n: 14, name: "Traceability matrix", agent: "Test Design Agent" },
+      { n: 14, name: "Traceability matrix", agent: "Computed, no agent" },
     ],
     gate: { key: "G5", name: "Test case quality", position: "after" },
   },
@@ -109,7 +121,7 @@ export const LIFECYCLE: LifecycleStageDef[] = [
     steps: [
       { n: 15, name: "Automation suitability", agent: "Test Automation Engineer Agent" },
       { n: 16, name: "Generate scripts", agent: "Test Automation Engineer Agent" },
-      { n: 17, name: "Validate scripts", agent: "Test Automation Engineer Agent" },
+      { n: 17, name: "Validate scripts", agent: "Checks run by code (no AI)" },
     ],
     gate: { key: "G6", name: "Script validation", position: "after" },
   },
@@ -120,7 +132,7 @@ export const LIFECYCLE: LifecycleStageDef[] = [
     phase: 4,
     phaseLabel: "Phase 4",
     apiStages: ["execution"],
-    steps: [{ n: 18, name: "Execute approved tests", agent: "Test Execution Agent" }],
+    steps: [{ n: 18, name: "Execute approved tests", agent: "Playwright test runner" }],
     gate: { key: "G7", name: "Execution authorisation", position: "before" },
   },
   {
@@ -131,8 +143,8 @@ export const LIFECYCLE: LifecycleStageDef[] = [
     phaseLabel: "Phase 4",
     apiStages: ["failure_analysis", "defects_summary"],
     steps: [
-      { n: 19, name: "Analyse results & investigate failures", agent: "Failure Analysis Agent" },
-      { n: 20, name: "Defect reports & QA summary", agent: "Defect Reporting Agent" },
+      { n: 19, name: "Analyse results & investigate failures", agent: "Defect Analysis Agent" },
+      { n: 20, name: "Defect reports & QA summary", agent: "Defect Analysis Agent drafts; you confirm at Gate 8" },
     ],
     gate: { key: "G8", name: "Defect review", position: "after" },
   },
@@ -140,8 +152,8 @@ export const LIFECYCLE: LifecycleStageDef[] = [
     id: "reporting",
     label: "Reporting",
     section: "reports",
-    phase: 5,
-    phaseLabel: "Phase 5",
+    phase: 6,
+    phaseLabel: "Phase 6",
     apiStages: ["release_readiness"],
     steps: [{ n: 21, name: "Release readiness assessment", agent: "Lead QA Orchestrator" }],
     gate: { key: "G9", name: "Release readiness", position: "after" },
@@ -180,6 +192,19 @@ export function fromApiStatus(s: StageState | undefined): LifecycleStatus {
   }
 }
 
+/**
+ * Per-subject gates (design P4 §4.3): G7 is decided per run and G8 per defect, so their status comes from the runs and
+ * defects, not from the workflow. Built from the run and defect lists (lib/execution `execSummary`).
+ */
+export type SubjectGates = {
+  /** Run keys waiting for authorisation. */
+  waiting: string[];
+  running: string | null;
+  latestAuthorised: boolean;
+  drafts: number;
+  analysed: boolean;
+};
+
 export type LifecycleStage = LifecycleStageDef & {
   status: LifecycleStatus;
   /** "Step 4 of 8" while running, 1-based within the stage. */
@@ -188,6 +213,8 @@ export type LifecycleStage = LifecycleStageDef & {
   gateStatus: LifecycleStatus | null;
   /** The API stage that carries this lifecycle stage's gate, if any. */
   gateStage: StageState | null;
+  /** G7: the run waiting for authorisation; G8: undecided drafts (design P4 §4.3). */
+  subject?: { runKey: string | null; drafts: number } | null;
 };
 
 /**
@@ -261,16 +288,37 @@ export function phase2Step(id: string, stages: StageState[]): number | null {
     return null;
   }
   if (id === "strategy") return working(by("test_strategy")) ? 1 : null;
+  // Test design: step 13 is the agent; step 14 (traceability) is computed and never "Running" (design P3 §4.3).
+  if (id === "test-design") return working(by("test_design")) ? 1 : null;
   return null;
 }
 
-export function buildLifecycle(workflow: Workflow | undefined | null): LifecycleStage[] {
+/** G7 and G8 from runs and defects: waiting while a run or draft is undecided, done once one was decided. */
+function subjectGate(def: LifecycleStageDef, x: SubjectGates): { approved: boolean; stage: StageState | null; status: LifecycleStatus } | null {
+  if (def.gate?.key === "G7") {
+    const status: LifecycleStatus = x.waiting.length ? "waiting" : x.latestAuthorised ? "done" : "not_started";
+    return { approved: status === "done", stage: null, status };
+  }
+  if (def.gate?.key === "G8") {
+    const status: LifecycleStatus = x.drafts ? "waiting" : x.analysed ? "done" : "not_started";
+    return { approved: status === "done", stage: null, status };
+  }
+  return null;
+}
+
+export function buildLifecycle(workflow: Workflow | undefined | null, subjects?: SubjectGates | null): LifecycleStage[] {
   const all = workflow?.stages ?? [];
   return LIFECYCLE.map((def) => {
     const stages = def.apiStages.map((k) => all.find((s) => s.key === k)).filter((s): s is StageState => !!s);
     const available = stages.length > 0 ? stages.some((s) => s.available) : false;
-    const gate = gateApprovedFor(stages, def.gate?.key);
-    const statuses = stages.filter((s) => s.available).map(fromApiStatus);
+    const perSubject = subjects ? subjectGate(def, subjects) : null;
+    // Without run or defect data a per-subject gate is never read from the workflow (it is never decided there).
+    const gate = perSubject ?? (def.gate?.key === "G7" || def.gate?.key === "G8" ? { approved: true, stage: null, status: "not_started" as LifecycleStatus } : gateApprovedFor(stages, def.gate?.key));
+    // Traceability mirrors test design: a computed step never reads "Running" on its own.
+    const design = stages.find((s) => s.key === "test_design");
+    const statuses = stages
+      .filter((s) => s.available)
+      .map((s) => (s.key === "traceability" && (s.status === "running" || s.status === "queued") ? fromApiStatus(design) : fromApiStatus(s)));
     if (gate.status === "waiting") statuses.push("waiting");
     const status = rollUp(statuses, gate.approved, available);
     return {
@@ -280,19 +328,25 @@ export function buildLifecycle(workflow: Workflow | undefined | null): Lifecycle
       currentStep: status !== "running" ? null : def.id === "discovery" ? discoveryStep(stages) : phase2Step(def.id, stages),
       gateStatus: available ? gate.status : null,
       gateStage: gate.stage,
+      subject: perSubject ? { runKey: def.gate?.key === "G7" ? (subjects?.waiting[0] ?? null) : null, drafts: def.gate?.key === "G8" ? (subjects?.drafts ?? 0) : 0 } : null,
     };
   });
 }
 
 /** Text for the stage's status, e.g. "Running, step 4 of 8", "Running, step 10 (2 of 3)" or "Phase 2". */
 export function stageStatusText(stage: LifecycleStage): string {
+  return stageStatusTextFor(stage, true);
+}
+
+/** As stageStatusText, with the role-aware waiting copy. */
+export function stageStatusTextFor(stage: LifecycleStage, canApprove: boolean): string {
   if (stage.status === "later") return stage.phaseLabel;
   if (stage.status === "running" && stage.currentStep) {
     if (stage.id === "discovery") return `Running, step ${stage.currentStep} of ${stage.steps.length}`;
     const step = stage.steps[stage.currentStep - 1];
     return `Running, step ${step?.n ?? stage.currentStep} (${stage.currentStep} of ${stage.steps.length})`;
   }
-  return STATUS_LABEL[stage.status];
+  return statusLabel(stage.status, canApprove);
 }
 
 /** "After Gate 2" under a Phase 2 stage that is waiting for its upstream gate (design §12.1). */
@@ -305,7 +359,7 @@ export function upstreamGateHint(stage: LifecycleStage, all: LifecycleStage[]): 
 }
 
 /** API stage status → StatusPill key used across the app. */
-export function stageStatusLabel(s: StageStatus | null | undefined): string {
+export function stageStatusLabel(s: StageStatus | null | undefined, canApprove = true): string {
   switch (s) {
     case "queued":
       return "Queued";
@@ -314,7 +368,7 @@ export function stageStatusLabel(s: StageStatus | null | undefined): string {
     case "paused":
       return "Paused";
     case "awaiting_approval":
-      return "Waiting for your approval";
+      return waitingLabel(canApprove);
     case "approved":
       return "Approved";
     case "changes_requested":
@@ -335,10 +389,44 @@ export function stageStatusLabel(s: StageStatus | null | undefined): string {
 
 /** Is any stage of the workflow currently working (queued, running) or paused? */
 export function activeStage(workflow: Workflow | undefined | null): StageState | null {
-  return workflow?.stages.find((s) => s.status === "running" || s.status === "queued" || s.status === "paused") ?? null;
+  // Test runs are not workflow work: they are cancelled from the run page, never paused (design P4 §8).
+  return workflow?.stages.find((s) => s.key !== "execution" && (s.status === "running" || s.status === "queued" || s.status === "paused")) ?? null;
 }
 
 /** The stage waiting for a gate decision, if any. */
 export function waitingGateStage(workflow: Workflow | undefined | null): StageState | null {
-  return workflow?.stages.find((s) => gateReview(s) !== null) ?? null;
+  return workflow?.stages.find((s) => s.gate?.key !== "G7" && s.gate?.key !== "G8" && gateReview(s) !== null) ?? null;
+}
+
+/**
+ * True when test design was started by the Gate 4 approval itself (design P3 §4, check 5): the run began within
+ * two minutes after the G4 approval decision. While running right after an approval with no decision time
+ * known, it is treated the same way.
+ */
+export function autoStartedAfterG4(design: StageState | null | undefined, strategy: StageState | null | undefined): boolean {
+  const d = strategy?.gate?.decision;
+  if (!design || (d?.decision !== "approve" && strategy?.gate?.status !== "approved")) return false;
+  const at = d?.decided_at ?? d?.created_at;
+  if (!at || !design.started_at) return design.status === "running" && strategy?.gate?.status === "approved";
+  const diff = Date.parse(design.started_at) - Date.parse(at);
+  return diff >= 0 && diff <= 120_000;
+}
+
+/**
+ * Text for a gate row (design P4 §4.3). G7: "RUN-0003 is waiting for your authorisation" (role-aware); G8: "Waiting: 2
+ * defect drafts" / "Done: no drafts waiting". Null for the other gates (they use the generic approval copy).
+ */
+export function subjectGateText(stage: Pick<LifecycleStage, "gate" | "gateStatus" | "subject">, canApprove: boolean): string | null {
+  const key = stage.gate?.key;
+  if (key !== "G7" && key !== "G8") return null;
+  if (key === "G7") {
+    if (stage.gateStatus === "waiting" && stage.subject?.runKey)
+      return `${stage.subject.runKey} is waiting for ${canApprove ? "your authorisation" : "authorisation by someone who can approve gates"}`;
+    if (stage.gateStatus === "done") return "Done: the latest run was authorised";
+    return "Every run needs authorisation";
+  }
+  const n = stage.subject?.drafts ?? 0;
+  if (stage.gateStatus === "waiting") return `Waiting: ${n} defect draft${n === 1 ? "" : "s"}`;
+  if (stage.gateStatus === "done") return "Done: no drafts waiting";
+  return "Not started";
 }

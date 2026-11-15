@@ -6,10 +6,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronsUpDown, CircleHelp, FolderKanban, LayoutDashboard, ScanSearch, Settings, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/hooks";
-import type { Page, ProjectDetail, ProjectSummary, Proposal, Workflow } from "@/lib/contract";
+import type { Page, ProjectDetail, ProjectSummary, Proposal, TestCaseStats, Workflow } from "@/lib/contract";
 import { PROJECT_SECTIONS, comingLabel, isBuilt, phaseLabel, projectRoute, sectionBadge } from "@/lib/sections";
 import { LoadingBlock } from "@/components/ui";
 import { Topbar } from "./Topbar";
+import type { RunList } from "@/lib/execution";
+import type { DefectList } from "@/lib/defects";
+import { nfCounts, type Overview } from "@/lib/nonfunctional";
+import { takeRouteFocusClaim } from "@/lib/focusReturn";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -89,6 +93,17 @@ function ProjectNav({ id, section, onNavigate }: { id: string; section: string; 
   const { data: workflow } = useApi<Workflow>(`/projects/${id}/workflow`);
   const { data: proposals } = useApi<Page<Proposal>>(`/projects/${id}/assistant/proposals`, { status: "pending", limit: 100 }, { shouldRetryOnError: false });
   const pending = proposals?.items?.filter((x) => x.status === "pending").length ?? 0;
+  const designed = !!workflow?.stages.find((x) => x.key === "test_design")?.current_version;
+  const { data: caseStats } = useApi<TestCaseStats>(designed ? `/projects/${id}/test-cases/stats` : null, undefined, { shouldRetryOnError: false });
+  // Test Execution and Defects badges (design P4 §4.2): only once scripts exist, so earlier projects make no calls.
+  const scripted = !!workflow?.stages.find((x) => x.key === "automation")?.current_version;
+  const { data: runs } = useApi<RunList>(scripted ? `/projects/${id}/execution-runs` : null, { limit: 20 }, { shouldRetryOnError: false, refreshInterval: 15000 });
+  const { data: defects } = useApi<DefectList>(scripted ? `/projects/${id}/defects` : null, { status: "draft", limit: 1 }, { shouldRetryOnError: false, refreshInterval: 15000 });
+  const execution = runs || defects ? { runsWaiting: runs?.waiting.length ?? 0, running: !!runs?.running, drafts: defects?.counts.draft ?? 0 } : undefined;
+  // Non-functional badge (design P5 §4.2): only once the optional checks are reachable (G2), so earlier projects make no call.
+  const g2 = workflow?.stages.find((x) => x.key === "accessibility")?.available && !!workflow?.stages.find((x) => x.key === "discovery")?.current_version;
+  const { data: nfOverview } = useApi<Overview>(g2 ? `/projects/${id}/non-functional` : null, undefined, { shouldRetryOnError: false, refreshInterval: 15000 });
+  const nonFunctional = nfCounts(nfOverview);
   return (
     <div className="mt-6">
       <p className="px-3 text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted">Project</p>
@@ -105,7 +120,7 @@ function ProjectNav({ id, section, onNavigate }: { id: string; section: string; 
             const active = section === s.slug;
             const Icon = s.icon;
             const built = isBuilt(s);
-            const badge = built ? sectionBadge(s.slug, workflow?.stages, pending) : null;
+            const badge = built ? sectionBadge(s.slug, workflow?.stages, pending, caseStats?.open_questions ?? 0, execution, nonFunctional) : null;
             return (
               <li key={s.slug || "overview"}>
                 <Link
@@ -225,6 +240,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
     let tries = 0;
     const t = setInterval(() => {
+      // A screen that restored focus itself (e.g. back to a list row) keeps it.
+      if (takeRouteFocusClaim(window.location.pathname)) {
+        clearInterval(t);
+        return;
+      }
       const h1 = document.querySelector<HTMLElement>("main h1");
       if (h1 || ++tries > 20) {
         clearInterval(t);

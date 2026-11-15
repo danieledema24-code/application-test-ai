@@ -41,7 +41,7 @@ ALLOW_PRIVATE_TARGETS=true uv run uvicorn app.main:app --port 8200
 
 You only need `ALLOW_PRIVATE_TARGETS=true` to analyse a site on localhost, such as the demo shop:
 
-1. Start it with `cd api && npx tsx src/demo/target-app.ts`.
+1. Start it with `cd demo-shop && npm start`.
 2. Analyse `http://localhost:4100`.
 
 The setting is refused when `ENV=production`. Even when it is on, the scanner can only reach the approved target's origin, and only on loopback (127.0.0.0/8, ::1). LAN (192.168.x, 10.x, …), link-local and other local ports stay blocked, and cloud metadata addresses are always blocked. `GET /api/v1/health` reports the flag as `allow_private_targets`.

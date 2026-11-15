@@ -24,7 +24,7 @@ from app.domain.enums import (
     StageStatus,
     UrlRole,
 )
-from app.domain.stages import DEFAULT_APPROVAL_POLICY
+from app.domain.stages import DEFAULT_APPROVAL_POLICY, STAGES
 from app.orchestrator.orchestrator import Orchestrator
 from app.schemas import api
 from app.security.ssrf import UrlRejected, normalise_url
@@ -312,3 +312,94 @@ def list_filter(status: str | None) -> list[Any]:
         )
         return [Project.archived_at.is_(None), Project.id.in_(waiting)]
     return [or_(Project.archived_at.is_(None), Project.archived_at.is_not(None))]
+
+
+async def require_g5_signoff(ctx: AppContext) -> int:
+    """Startup data step (P3-00, decision D1): existing projects storing `G5: recommended` switch to `required`.
+
+    Projects whose audit log shows G5 was set through `PATCH /projects/{id}` keep their choice. Runs across
+    organisations (system task, tenant filter bypassed) and only touches projects still storing `recommended`, so a
+    second start changes nothing.
+    """
+    return await _switch_stored_default(ctx, "G5", "recommended", "required")
+
+
+async def apply_g6_hybrid_default(ctx: AppContext) -> int:
+    """Startup data step (P4-00, decision D10): G6 moves from the old `required` default to `recommended`.
+
+    Under D10 static validation always blocks and AI-written scripts need a review (P4-04), so a bundle of
+    rule-written valid scripts needs no human sign-off. Projects that chose G6 explicitly keep their choice;
+    idempotent like `require_g5_signoff`.
+    """
+    return await _switch_stored_default(ctx, "G6", "required", "recommended")
+
+
+async def ensure_stage_rows(ctx: AppContext) -> int:
+    """Startup data step (P5-00): projects created before a stage key existed get its workflow row (`not_started`).
+
+    Phase 5 adds `accessibility` and `security_assessment`. Done here rather than in migration 0017 so that a Phase 4
+    process still running on the migrated database never reads a stage key it doesn't know. Runs across
+    organisations (system task, tenant filter bypassed) and only adds missing rows, so a second start adds none.
+    """
+    from app.db.tenant import BYPASS
+
+    n = 0
+    async with ctx.session_factory() as s:
+        projects = (await s.execute(select(Project.id, Project.organisation_id).execution_options(**BYPASS))).all()
+        have: dict[uuid.UUID, set[str]] = {}
+        for pid, key in (
+            await s.execute(select(WorkflowStage.project_id, WorkflowStage.stage_key).execution_options(**BYPASS))
+        ).all():
+            have.setdefault(pid, set()).add(str(key))
+        for pid, org_id in projects:
+            for d in STAGES:
+                if d.key.value in have.get(pid, set()):
+                    continue
+                s.add(
+                    WorkflowStage(
+                        organisation_id=org_id,
+                        project_id=pid,
+                        stage_key=d.key,
+                        gate_key=d.gate,
+                        gate_status=GateStatus.none,
+                        status=StageStatus.not_started,
+                    )
+                )
+                n += 1
+        if n:
+            await s.commit()
+    return n
+
+
+async def _switch_stored_default(ctx: AppContext, gate: str, old: str, new: str) -> int:
+    from app.db.models import AuditLog
+    from app.db.tenant import BYPASS
+
+    n = 0
+    async with ctx.session_factory() as s:
+        projects = (await s.execute(select(Project).execution_options(**BYPASS))).scalars().all()
+        candidates = [p for p in projects if (p.approval_policy or {}).get(gate) == old]
+        if not candidates:
+            return 0
+        explicit: set[uuid.UUID] = set()
+        rows = (
+            await s.execute(
+                select(AuditLog.project_id, AuditLog.meta)
+                .where(
+                    AuditLog.action == "project.updated",
+                    AuditLog.project_id.in_([p.id for p in candidates]),
+                )
+                .execution_options(**BYPASS)
+            )
+        ).all()
+        for pid, meta in rows:
+            if pid is not None and gate in ((meta or {}).get("approval_policy") or {}):
+                explicit.add(pid)
+        for p in candidates:
+            if p.id in explicit:
+                continue
+            p.approval_policy = {**(p.approval_policy or {}), gate: new}
+            n += 1
+        if n:
+            await s.commit()
+    return n

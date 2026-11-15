@@ -26,13 +26,13 @@ Two mechanisms:
 
 ### Tenant isolation enforcement
 
-- `TenantScope(org_id, user_id, role)` is resolved from the session in `api/deps.py` and passed to every repository.
+- `TenantScope(org_id, user_id, role)` is resolved from the session in `app/api/deps.py` and passed to every repository.
 - `TenantRepository[Model]` base: every `select` adds `Model.organisation_id == scope.org_id`; inserts set it; updates/deletes filter by it. Cross-tenant access returns **404** (not 403) to avoid existence leaks.
 - Safety net: a SQLAlchemy `do_orm_execute` listener raises `TenantScopeMissing` if a query touches a tenant model without a scope option (system jobs use an explicit `SystemScope(org_id)` taken from the job row).
 - Worker jobs carry `organisation_id`; the worker rebuilds the scope from the job, never from payload content.
 - Tests: a parametrised integration test calls every endpoint with a second organisation's token and asserts 404.
 - PostgreSQL production (Phase 5): Row-Level Security policies on `organisation_id` using `SET LOCAL app.org_id`, as defence in depth.
-- Permissions: org roles `owner > admin > member > viewer`. Viewers read only; members run workflows and edit artefacts; admins approve locked gates (G7, G8, G9 need `member` with `can_approve`, configurable) and manage members. Project-level membership (`project_members`) arrives in Phase 3 if needed; until then org role applies to all projects.
+- Permissions: org roles `owner > admin > member > viewer`. Viewers read only; members run workflows and edit artefacts; admins approve locked gates (G7, G8, G9 need `member` with `can_approve`, configurable) and manage members. Phase 3 (P3-07) adds member management and invitations at organisation level. Project-level membership (`project_members`) is a deliberate Phase 3 non-goal, so the org role applies to all projects.
 
 ## Entity overview
 
@@ -52,11 +52,13 @@ erDiagram
   application_features }o--o{ discovered_pages : on
   requirements ||--o{ acceptance_criteria : has
   requirements }o--o{ application_features : covers
-  requirements }o--o{ test_conditions : derived
+  requirements }o--o{ test_conditions : derived_by_lineage
+  acceptance_criteria }o--o{ test_conditions : covered_by_lineage
   test_conditions ||--o{ test_cases : realised_by
-  test_cases }o--o{ requirements : traces
+  test_cases }o--o{ requirements : traces_by_lineage
+  test_cases }o--o{ test_data : uses_by_lineage
   test_cases ||--o{ automation_scripts : automated_by
-  test_cases ||--o{ test_data : uses
+  organisations ||--o{ invitations : invites
   execution_runs ||--o{ execution_results : contains
   automation_scripts ||--o{ execution_results : executed_as
   execution_results ||--o{ defects : raises
@@ -88,6 +90,7 @@ erDiagram
 | `organisations` | P1 | `name`, `slug`, `plan`, `limits JSON` (max_projects, max_concurrent_scans, max_pages_cap, perf ceilings) | unique `slug` |
 | `users` (no org id) | P1 | `email` (lower-cased), `full_name`, `password_hash` (argon2id), `is_active`, `last_login_at` | unique `email` |
 | `memberships` | P1 | `user_id → users`, `organisation_id`, `role` (owner/admin/member/viewer), `can_approve bool` | unique `(organisation_id, user_id)` |
+| `invitations` | P3 | See "Workspace members (Phase 3)" | unique `token_hash` |
 | `sessions` (no org id) | P1 | `user_id`, `token_hash` (sha256 of opaque token), `organisation_id` (active org), `expires_at`, `revoked_at`, `ip`, `user_agent` | unique `token_hash`; `(user_id)` |
 | `password_reset_tokens` (no org id) | P1 | `user_id`, `token_hash`, `expires_at`, `used_at` | unique `token_hash` |
 | `audit_logs` | P1 | `actor_type` (user/agent/system), `actor_user_id?`, `action` (dotted, e.g. `project.created`, `gate.approved`), `target_type`, `target_id`, `project_id?`, `ip?`, `request_id`, `metadata JSON` (redacted) — no `updated_at` | `(organisation_id, created_at desc)`, `(organisation_id, target_type, target_id)`. Append-only: repository exposes insert/list only; on PG `REVOKE UPDATE, DELETE` from the app role. |
@@ -166,39 +169,163 @@ All tables below are tenant tables (`id`, `organisation_id`, `created_at`, `upda
 | `project_counters` | New `kind`s: `REQ`, `AC`, `DOR`, `DOD`, `TS`, `RISK`, `TP`, `DOC`, `PROP`. Keys reused per lineage; a counter is consumed only for new lineages. | P2-00+ |
 | `organisations.limits` | + `assistant_ai_turns_per_day` (default 200), `max_documents_per_project` (default 10), `max_document_mb` (default 20). | P2-08, P2-10 |
 
-### Test design (Phase 3)
+### Test design and traceability (Phase 3)
 
-| Table | Key columns | Indexes |
+Migration `0013_test_design` (P3-01a; also holds the columns first written by P3-02, P3-03 and P3-05). These are tenant tables, accessed only through `TenantRepository`.
+
+`test_conditions`, `test_cases` and `test_data` use the Phase 2 `RegenerableMixin`:
+- `project_id`, `stage_run_id`, `lineage_id`, `key`, `match_key`, `carried_from_id`
+- `provenance`, `confidence`, `evidence_refs`, `generated_by`, `rule_id`
+- `locked`, `human_edited`, `version`, `updated_by`
+- `suggested_change`
+
+Their current view is the rows of `workflow_stages(test_design).current_stage_run_id`. Links to Phase 2 artefacts use **lineage ids**, as `risk_requirements` does, so editing or regenerating requirements never breaks traceability. Links resolve to the current row on read.
+
+| Table | Key columns (beyond the mixin) | Indexes / constraints |
 |---|---|---|
-| `test_conditions` | `project_id`, `stage_run_id`, `lineage_id`, `key` (TCOND-0001), `description`, `technique`, `priority` | `(project_id)` |
-| `condition_requirements` | `test_condition_id`, `requirement_id`, `acceptance_criterion_id?` | PK pair |
-| `test_cases` | `project_id`, `stage_run_id`, `lineage_id`, `test_condition_id?`, `key` (TC-0001), `title`, `objective`, `preconditions JSON`, `steps JSON` ([{action, data, expected}]), `expected_result`, `test_type`, `test_level`, `technique`, `priority`, `risk_score`, `automation_suitability` (suitable/partial/manual_only + reason), `execution_status` (not_run/passed/failed/blocked/error — denormalised latest), `status` (draft/approved/rejected/deprecated), `evidence_refs JSON`, `locked`, `version` | unique `(project_id, key)` per lineage; `(project_id, status)`, `(project_id, execution_status)` |
-| `test_case_requirements` | `test_case_id`, `requirement_id` | PK pair; index `requirement_id` (reverse traceability) |
-| `test_data` | `project_id`, `test_case_id?`, `key`, `name`, `kind` (valid/invalid/boundary/synthetic), `values JSON` (no real PII; secrets by reference), `generator` | `(project_id)` |
+| `test_conditions` | `title`, `description`, `technique` (equivalence_partitioning/boundary_value_analysis/decision_table/state_transition/use_case/error_guessing), `test_type`, `feature_lineage_id?`, `design_basis JSON` (technique-specific: EP `{field, classes:[{id, kind: valid\|invalid, description}]}`; BVA `{field, constraint, boundary, values:[{id, length\|value, side: on\|below\|above}], mode: 2_value\|3_value}`; decision table `{conditions, actions, rules}`; state transition `{states, transitions, coverage}`; use case `{journey_lineage_id?, flow}`; error guessing `{catalogue_id}`), `notes JSON` (e.g. "No maximum length was discovered…"), `status` (draft/approved/rejected), `status_comment?` | unique `(project_id, stage_run_id, key)`; unique `(stage_run_id, lineage_id)`; `(organisation_id, project_id, stage_run_id, technique)` |
+| `condition_requirements` | `test_condition_id → test_conditions CASCADE`, `requirement_lineage_id`, `acceptance_criterion_lineage_id?` | PK `(test_condition_id, requirement_lineage_id, acceptance_criterion_lineage_id)` (AC part stored as the zero UUID when absent); index `requirement_lineage_id` |
+| `test_cases` | `test_condition_id? → test_conditions` (same stage run; null for manual cases), `title`, `objective`, `preconditions JSON` (list[str]), `steps JSON` (`[{n, action, data_refs: [TD lineage ids], expected}]`), `expected_result`, `expected_result_status` (defined/open_question), `open_question_ref JSON?` (`{requirement_lineage_id, key}`), `test_type`, `test_level`, `technique`, `suites JSON` (`["smoke","regression"]`), `side_effects JSON` (submits_form/signs_in/creates_data/external_transaction), `design_basis_ref JSON` (coverage item id within the condition), `automation_suitability` (suitable/partial/manual_only), `automation_reason`, `automation_assessed` (`preliminary` in Phase 3; P4-02 writes `assessed`), `execution_status` (not_run/passed/failed/blocked/error; always `not_run` in Phase 3, written only by Phase 4), `status` (draft/approved/rejected/deprecated), `status_comment?`, `status_changed_by?`, `status_changed_at?`, `source` (design/user/assistant), **P3-05:** `risk_level?`, `risk_score?`, `derived_priority` (critical/high/medium/low), `priority_override?`, `priority_override_reason?` (effective priority = override or derived; computed in the serializer), `lint JSON` (`[{code, severity, message, path}]`), `lint_rules_version` | unique `(project_id, stage_run_id, key)`; unique `(stage_run_id, lineage_id)`; `(organisation_id, project_id, stage_run_id, status)`; `(project_id, stage_run_id, derived_priority)`; CHECK `execution_status = 'not_run'` is **not** added (Phase 4 writes it); CHECK `priority_override IS NULL OR priority_override_reason IS NOT NULL` |
+| `test_case_requirements` | `test_case_id → test_cases CASCADE`, `requirement_lineage_id`, `acceptance_criterion_lineage_id?` | PK as `condition_requirements`; index `requirement_lineage_id` (reverse traceability) |
+| `test_data` | `name`, `feature_lineage_id?`, `form_ref JSON` (page id, form index, selector), `field_label`, `field_selector`, `kind` (valid/invalid/boundary/secret_ref), `value_type` (text/email/number/empty/whitespace/secret_ref), `value?` (never a secret; ≤ 5000 chars), `secret_ref?` (secret **name** only), `length?`, `boundary_ref JSON?` (condition lineage + coverage item it tests; locks the length), `generator` (factory rule id + seed), `synthetic bool` (true for generated; guard-checked for human values), `status` (active/retired) | unique `(project_id, stage_run_id, key)`; unique `(stage_run_id, lineage_id)`; `(organisation_id, project_id, stage_run_id, field_label)`; CHECK `(kind = 'secret_ref') = (secret_ref IS NOT NULL AND value IS NULL)` |
+| `test_case_data` | `test_case_id → test_cases CASCADE`, `test_data_lineage_id` | PK both; index `test_data_lineage_id` ("used by" lookups) |
+
+The `traceability` stage stores nothing. The matrix, coverage and gap lists are computed on read by `TraceabilityService`, from the current rows or from the last G5 `artefact_snapshot`. Only reports freeze a copy, in `qa_reports.content`.
+
+**As built (P3 backend) — differences from the table above:**
+- `test_cases.condition_lineage_id?` (plain UUID, no FK) replaces `test_condition_id → test_conditions`: a case points at its condition's **lineage**, like every other Phase 3 link, so carrying cases into a regenerated run never needs a remap. Resolved to the condition row of the same stage run on read.
+- `test_conditions.technique` also takes `checklist` (non-functional cases); `test_conditions` adds `coverage_items JSON` (`[{id, label}]`, the items the condition's cases realise) and `requirement_lineage_ids JSON` / `ac_lineage_ids JSON` (denormalised copies of `condition_requirements`, which stays the indexed link table).
+- `test_cases` adds `requirement_lineage_ids JSON`, `ac_lineage_ids JSON`, `data_lineage_ids JSON` (denormalised copies of `test_case_requirements` / `test_case_data`, kept in step by the service), `risk_lineage_id?` (the risk the derived priority comes from), `priority_overridden_by? → users` and `priority_overridden_at?` (migration 0015). `open_question_ref` is `{requirement_lineage_id, key, message, field}`. `design_basis_ref` is `{coverage_item, explanation, positive}`.
+- `test_conditions.feature_lineage_id` / `test_data.feature_lineage_id` hold the `application_features.id` (features are not regenerable, so the id is stable).
+- `test_data.form_ref` is `{form_anchor, path, page_id, form_index, field_key, field_type}` (generated items; human items keep the subset they send).
+- Entity revisions of `test_data` store the credentials reference under `account_ref` (the revision redactor masks keys containing "secret"); the value is the secret's **name**, never its content.
+
+**Removed from the earlier sketch:**
+- `test_cases.risk_score` as a free column; it is now derived together with `risk_level`/`derived_priority`.
+- The `test_data.kind = synthetic` value; every generated item is synthetic, so this is now a boolean.
+- The cross-run `test_cases (project_id, key)` uniqueness; keys are now unique per stage run and reused per lineage, as in Phase 2.
+
+### Workspace members (Phase 3, P3-07)
+
+Migration `0014_invitations`.
+
+| Table | Key columns | Indexes / constraints |
+|---|---|---|
+| `invitations` (tenant table) | `email` (lower-cased), `role` (admin/member/viewer; never owner), `can_approve bool`, `token_hash` (SHA-256 of a 32-byte token; the raw token is returned once and never stored), `invited_by → users`, `expires_at` (7 days), `accepted_at?`, `accepted_user_id? → users`, `revoked_at?`, `revoked_by?` | unique `token_hash`; `(organisation_id, email)`; `(organisation_id, expires_at)` |
+| `memberships` | + `invited_by?`, `joined_at?` (nullable; Phase 1/2 rows keep null). Removal **deletes** the membership row (the audit log keeps `member.removed`); the user row and authored artefacts remain. | unchanged |
+
+### Phase 3 changes to existing tables
+
+| Table | Change | Story |
+|---|---|---|
+| `workflow_stages` / `stage_runs` | No schema change. `test_design` uses `review_status`, `approved_input` (`{requirements_snapshot_hash, strategy_snapshot_hash, versions}`) and `guidance`. `traceability` rows have status only (derived, never a run). | P3-00 |
+| `projects` | No schema change. **Data step (P3-00, decision D1):** `approval_policy.G5` changes from `recommended` to `required` for existing projects, unless their audit log shows G5 was set explicitly. It runs in app code at startup and is idempotent. New projects get `required` from `DEFAULT_APPROVAL_POLICY`. | P3-00 |
+| `gate_decisions` | No schema change. G5 `artefact_snapshot` = approved test cases + their conditions + the test data items they use (`[{type, id, version}]`). | P3-00, P3-02 |
+| `entity_revisions` | No schema change (`entity_type` is a plain string). New values `test_condition`, `test_case`, `test_data`. | P3-00 |
+| `assistant_proposals` | No schema change (`kind` is a plain string). New kinds `add_test_cases`, `update_test_case`, `set_suite`; `regenerate_stage` accepts `test_design`. | P3-06 |
+| `knowledge_items` | No schema change. Rejected cases, conditions and data write `kind='decision'` with `metadata.lineage_id`. | P3-01b, P3-02 |
+| `qa_reports` | No schema change. `report_type` already allows `test_case_spec`, `rtm`; `files` gains `format='csv'`; `source_versions` holds G3/G4/G5 snapshot hashes. | P3-08 |
+| `project_counters` | New `kind`s `TCOND`, `TC`, `TD`. A counter is consumed only for new lineages. | P3-00 |
+| `requirements` | No schema change. `linked_test_cases` is computed on read from `test_case_requirements`. | P3-01a |
+| `organisations.limits` | + `max_test_cases_per_run` (default 300), `max_test_data_per_run` (400), `invitations_per_hour` (20). | P3-01a, P3-07 |
 
 ### Automation, execution, defects (Phase 4)
 
-| Table | Key columns | Indexes |
+Migration `0016_automation_execution` (written by P4-00 with every Phase 4 column created up front; see roadmap Phase 4). All tables are tenant tables (`organisation_id`, `project_id`). Planned in Phase 4 planning (2026-11-13); refine "as built" notes at P4-15.
+
+| Table | Key columns | Indexes / constraints |
 |---|---|---|
-| `automation_scripts` | `project_id`, `test_case_id`, `test_case_version`, `stage_run_id`, `path`, `language` ('typescript'), `code` (or `storage_key` if large), `version`, `validation JSON` (tsc/eslint/guard results), `status` (draft/valid/invalid/approved/outdated), `generated_by` | `(test_case_id, version)` unique; `(project_id, status)` |
-| `automation_assets` | `project_id`, `kind` (page_object/fixture/factory/config/ci), `path`, `code`, `version` | unique `(project_id, path, version)` |
-| `execution_runs` | `project_id`, `key` (RUN-0001), `approval_gate_decision_id`, `environment_url_id`, `config JSON` (browsers, viewports, workers, retries), `status`, `totals JSON` (computed), `started_at`, `finished_at`, `triggered_by` | `(project_id, created_at desc)` |
-| `execution_results` | `execution_run_id`, `project_id`, `test_case_id`, `automation_script_id`, `script_version`, `browser`, `viewport`, `status` (passed/failed/error/skipped/flaky), `attempt`, `duration_ms`, `error JSON`, `failed_step`, `analysis JSON` (FailureAnalysis), `classification` | `(execution_run_id)`, `(test_case_id, created_at desc)` |
-| `defects` | `project_id`, `key` (DEF-0001), `summary`, `description`, `environment`, `preconditions`, `steps JSON`, `expected`, `actual`, `severity`, `priority`, `reproducibility`, `root_cause_hypothesis`, `status` (draft/confirmed/rejected/fixed/verified/closed), `confirmed_by?`, `execution_result_id?`, `evidence_refs JSON`, `version` | `(project_id, status)` |
-| `defect_links` | `defect_id`, `requirement_id?`, `test_case_id?` | index each FK |
+| `automation_assessments` (P4-02) | `stage_run_id`, `test_case_id`, `case_lineage_id`, `case_version`, `suitability` (suitable/partial/manual_only), `reasons JSON`, `blockers JSON`, `step_model JSON` (typed actions and assertions) | unique `(stage_run_id, case_lineage_id)` |
+| `automation_assets` (P4-03a) | `stage_run_id` (bundle version), `kind` (page_object/factory/platform/config), `path`, `code`, `sha256`, `version`, `generated_by` (rules/ai/heal/platform) | unique `(stage_run_id, path)` |
+| `automation_scripts` (P4-03a/b, P4-04) | `stage_run_id`, `test_case_id`, `case_lineage_id`, `case_version`, `lineage_id` (= case lineage), `version`, `path`, `code`, `sha256`, `assertion_map JSON`, `status` (draft/valid/invalid/outdated), `validation JSON` (guard, tsc, eslint, secret_scan, tags, locators; each `{ok, messages[{line, message}]}`), `generated_by` (rules/ai/heal), `review JSON?` (AI scripts: decision, by, at, comment) | unique `(stage_run_id, case_lineage_id)`; `(project_id, status)` |
+| `execution_runs` (P4-06) | `key` (RUN-0001), `stage_run_id`, `mode` (automated; manual only with P4-14), `selection JSON`, `scope JSON` (cases, possible side effects, approvals needed, target origin, uses credentials, estimate), `scope_hash`, `config JSON` (browsers, viewports, workers, retries, timeouts), `bundle_version`, `g7_decision_id?`, `status` (awaiting_authorisation/rejected/queued/running/passed/failed/error/cancelled), `totals JSON` (computed), `requested_by`, `started_at?`, `finished_at?`, `error?` | `(project_id, created_at desc)`; `(project_id, status)` |
+| `execution_results` (P4-06, P4-08) | `execution_run_id`, `key` (RUN-0001-07), `test_case_id`, `case_lineage_id`, `automation_script_id`, `script_version`, `browser`, `viewport`, `status` (passed/failed/error/skipped/blocked/flaky), `attempts`, `duration_ms`, `steps JSON`, `failed_step?`, `error?` (redacted, ≤ 8 KB), `page_state JSON?`, `actual_result`, `classification?`, `analysis JSON?` (FailureAnalysis incl. overrides), `heal_suggestions JSON` | `(execution_run_id)`; `(project_id, case_lineage_id, created_at desc)` |
+| `approvals` (P4-05) | `key` (APR-0001), `kind` (destructive/external_transaction/real_user_data/load_test/security_test), `execution_run_id?` (P5 adds `performance_run_id?`), `scope JSON`, `requested_by`, `decided_by?`, `decided_at?`, `status` (pending/approved/rejected/expired/used), `comment?`, `expires_at` | `(project_id, kind, status)` |
+| `defects` (P4-09) | `key` (DEF-0001), `summary`, `description`, `environment JSON`, `preconditions JSON`, `steps JSON`, `expected`, `actual`, `severity` (critical/major/minor/trivial), `severity_derived`, `severity_reason?`, `priority`, `priority_derived`, `priority_reason?`, `reproducibility JSON` (`{attempts_failed, attempts, kind: always/intermittent}`), `root_cause_hypothesis?`, `evidence_refs JSON`, `status` (draft/confirmed/rejected/fixed/verified/closed), `status_reason?`, `status_comment?`, `confirmed_by?`, `confirmed_at?`, `source` (analysis/user), `execution_result_id?`, `version` | unique `(project_id, key)`; `(project_id, status)`; `(project_id, severity)` |
+| `defect_links` | `defect_id`, `requirement_lineage_id?`, `test_case_lineage_id?` | index each column |
+| `defect_occurrences` | `defect_id`, `execution_result_id`, `seen_at` | unique `(defect_id, execution_result_id)` |
+
+Changes to existing tables in `0016`: `gate_decisions` + `subject_type` (null/`execution_run`/`defect`/`automation_script`) and `subject_id` (nullable; G7 is per run, G8 per defect); `evidence.execution_result_id` gains its FK and an index; `project_counters` kinds `RUN`, `DEF`, `APR`; `entity_revisions.entity_type` values `automation_script`, `defect` (plain string, no migration). `test_cases.automation_suitability`, `automation_reason`, `automation_assessed` and `execution_status` are written as **derived** fields (no version bump, no G5 reopen).
+
+**As built (P4-00) — differences from the table above:**
+- `gate_decisions.stage_run_id` is now **nullable**: per-subject decisions (G7 per run, G8 per defect, AI-script reviews with `subject_type='automation_script'`) need not belong to a stage run. New index `ix_gate_decisions_subject (project_id, subject_type, subject_id)`; `subject_type` has CHECK `ck_gate_decisions_gate_decision_subject_type`. Downgrade deletes per-subject rows (and rows without a stage run) before restoring NOT NULL.
+- `execution_runs.stage_run_id` is nullable (a run awaiting authorisation has no stage run yet; the `execution` stage run is created when the run is first mirrored) and has unique `(project_id, key)`.
+- `execution_results` has unique `(execution_run_id, key)`; `test_case_id` and `automation_script_id` are nullable (manual results, deleted scripts); `browser` defaults to `chromium` and `viewport` to `1440x900` (decision D7).
+- `approvals` has unique `(project_id, key)`; `automation_scripts` has `(project_id, status)` as planned.
+- **Data step (P4-00, decision D10):** `approval_policy.G6` changes from `required` to `recommended` for existing projects unless their audit log shows G6 was set explicitly (same mechanism as the P3 G5 step; startup, idempotent). New projects get `recommended`. Static validation still blocks regardless of the policy.
+- Migrating an existing SQLite database: batch rebuilds of `evidence`/`gate_decisions` need foreign keys off. `app.db.migrate` and `migrations/env.py` (the `alembic` CLI) both switch them off for the migration and run `PRAGMA foreign_key_check` before committing.
+
+**As built (P4-02..P4-05) — no new migration:**
+- Assessment writes `test_cases.automation_suitability` (`suitable`/`partial`/`manual_only`), `automation_reason` and `automation_assessed='assessed'` as derived fields. Saving or deleting the project's test credentials flips `partial` ↔ `suitable` in place (`services.automation.refresh_credentials`).
+- `automation_scripts` keeps unique `(stage_run_id, case_lineage_id)`, so one bundle (stage run) has one script per case. When an AI script is rejected at review, the run uses the latest valid **rules** script with the same case lineage and `case_version` from an **earlier** bundle (`services.automation.rules_fallback`); if there is none, the case is left out as "Not automated: script rejected in review".
+- Validation results are not a table: they live in the `automation` stage run's `output["validation"]` (`status`, `checked_at`, `counts{valid, invalid, not_checked, locators_not_checked, outdated}`, `toolkit`, per-asset locator rows with `unique`/`multiple`/`missing`/`not_checked`, `issues`). Per-script checks stay in `automation_scripts.validation`.
+- `approvals` rows: key `APR-0001…` (counter kind `APR`), kinds `external_transaction` and `destructive_action`; status `pending → approved | rejected | expired → used`. A pending approval expires 24 h after it is requested; a run request with no approvals expires after 7 days; any change to the scripts in scope (scope hash) invalidates a pending request.
+
+**As built (P4-06..P4-09) — no new migration:**
+- `execution_runs.config` holds `plan` (one item per case × browser × size, keyed `RUN-0001-01…`, with script id/version/sha256, `retried`, `signs_in`, `blocked`), `skipped` (cases whose approval was not given), `notes`, `workers`, `retries`, `test_timeout_s`, `cancel_requested` and `cancelled_by`. `totals` holds the per-status counts and, while running, `live` (per test `{state, attempt, status}`) and `progress` (`finished`, `passed`, `flaky`, `failed`). Project limit: one running run per project (the job re-queues itself after 5 s); organisation limit: two (`execution` concurrency group).
+- `execution_results.steps` is a list of attempts `[{attempt, status, duration_ms, steps[{n, title, status, duration_ms, error}], error}]`; `failed_step` is `{n, title}`; `error` is redacted and capped at 8 KB. `analysis` holds the FailureAnalysis dict (see api-contracts.md, P4-06..P4-09 notes); `classification` mirrors `analysis.classification`. `heal_suggestions` is not written yet.
+- Evidence rows per attempt carry `execution_result_id` and `meta.attempt` (screenshot with `meta.masked`, video and trace for failures, console and network logs always; no trace for sign-in tests).
+- `test_cases.execution_status` is derived from the latest result per case lineage.
+- `defects.environment` also holds `run_key`, `result_key`, `date`, `failed_step`, `script_version`, and when set `duplicate_of` / `related_to`. `reproducibility` adds `occurrences` and `text` ("2 of 2 attempts (always)"). Links go in `defect_links` (case and requirement lineages); repeat failures of the same case lineage and failed step on an open defect add a `defect_occurrences` row instead of a new draft. Edits record `entity_revisions` (`entity_type='defect'`).
+
+**As built (P4-03b, P4-08 heal, P4-10..P4-13) — no new migration:**
+- `execution_results.heal_suggestions` (P4-08): `[{asset_path, getter, element, old, reason, note, candidates[{expression, recommended, diff{old,new}}], accepted?{n, by, at, version}}]`. Candidates are checked read-only on the live page (found exactly once). Accepting writes a new `automation_assets` version (`generated_by` heal path, one changed line) and sets the scripts that import it back to `draft` (not checked); `automation_scripts.code` and `assertion_map` never change.
+- AI scripts (P4-03b): an accepted AI script is an `automation_scripts` row with `generated_by='ai'` (one script per case per bundle, so it replaces that bundle's rule script; a rejected AI script falls back to the latest valid rules script of the same case version from an earlier bundle). The automation `stage_runs.output` gains `ai{scripts, issues[{code, case_key, message}], fallback_used, llm_usage}` and `generated_by: "mixed"`.
+- Reports (P4-11): `reports.report_type` adds `execution` and `defect`; `reports.parameters.run_key` holds the run a Test Execution Report is about (absent for "latest result per test case"). Execution reports are frozen when their run finishes cleanly (`freeze_for_run`). CSV files are stored as evidence like the other formats.
+- `test_cases.execution_status` now also takes `flaky`, `error`, `blocked` and `skipped` from the latest result per lineage.
+- Manual results (P4-14) were not built: `0017_manual_results` is not written.
+
+### Non-functional testing (Phase 5)
+
+Migration `0017_nonfunctional` (written by P5-00 with every column P5-01b, P5-02, P5-03 and P5-07 use created up front; see roadmap Phase 5). All new tables are tenant tables (`organisation_id`, `project_id`).
+
+| Table | Key columns | Indexes / constraints |
+|---|---|---|
+| `quality_scans` (P5-02, P5-03) | `key` (A11Y-0001 / SEC-0001), `kind` (accessibility/security), `stage_run_id?`, `config JSON` (pages, viewports, keyboard pass, signed-in pages), `status` (queued/running/completed/partial/failed/cancelled), `summary JSON` (computed counts), `not_checked JSON` ([{item, reason}]), `tool_versions JSON`, `requested_by?`, `started_at?`, `finished_at?`, `error?` | unique `(project_id, key)`; `(project_id, kind, created_at)`; `(stage_run_id)` |
+| `quality_findings` (P5-02, P5-03) | `key` (A11Y-0001-01), `scan_id`, `kind`, `rule_id`, `severity` (critical/serious/moderate/minor for accessibility; high/medium/low/info for security), `title`, `page_id?`, `url`, `viewport?`, `nodes JSON` (≤ 20 per rule per page: target, redacted HTML ≤ 500 chars, summary), `references JSON`, `fingerprint` (rule + normalised path + target), `status` (open/accepted_risk/false_positive/fixed), `status_reason?`, `status_by?`, `defect_id?`, `evidence_refs JSON`, `mapped JSON` (feature, requirement and case lineages) | unique `(scan_id, key)`; `(project_id, kind, status)`; `(project_id, fingerprint)`; `(scan_id)`, `(page_id)`, `(defect_id)` |
+| `performance_profiles` (P5-01b) | `key` (PRF-01), `name`, `type` (load/stress/spike/soak), `stages JSON` ([{duration_s, target_vus}]), `max_rps`, `think_time_ms JSON` ({min, max}), `targets JSON` ([{path, weight, page_id?}]), `thresholds JSON` ([{metric p95/p99/error_rate, scope all/path, path?, op, value, source requirement_lineage_id/default}]), `status` (draft/ready/stale/retired), `stale_reason?`, `generated_by` (rules/ai/human/mixed), `rationale?`, `created_by?`, `version` (optimistic concurrency) | unique `(project_id, key)`; `(project_id, status)` |
+| `performance_runs` (P5-01b) | `key` (PERF-0001), `profile_id`, `profile_snapshot JSON`, `profile_hash`, `stage_run_id?`, `approval_id?` (no FK; `approvals.performance_run_id` is the FK side), `engine JSON` ({name, version}), `status` (awaiting_approval/rejected/expired/queued/running/passed/failed/stopped/aborted/error), `metrics JSON` (overall and per target; `live` while running), `threshold_results JSON`, `aborted_reason?`, `stopped_by?`, `requested_by?`, `started_at?`, `finished_at?`, `error?` | unique `(project_id, key)`; `(project_id, created_at)`; `(project_id, status)`; `(profile_id)`, `(stage_run_id)` |
+
+Changes to existing tables in `0017`:
+- `approvals.performance_run_id` (nullable FK, indexed). Kind `load_test` already existed in `0016`.
+- `evidence.performance_run_id` gains its FK and index; new `evidence.quality_scan_id` (nullable FK, indexed). The `evidence.kind` CHECK adds `perf_summary`, `perf_timeseries` and `security_headers` (`axe_result` and `k6_summary` already existed).
+- `defects.source` CHECK adds `accessibility`, `security` and `performance`.
+- `workflow_stages.stage_key` and `stage_runs.stage_key` CHECKs add `accessibility` and `security_assessment` (`performance` already existed).
+- New `organisations.settings JSON NOT NULL`, server default `{"load_ceiling": {"vus": 20, "rps": 20, "duration_s": 300}}` (decision D18), so every existing organisation has the default ceiling after the upgrade. New organisations get the same value from the ORM default.
+- Counter kinds `a11y_scan` (A11Y), `security_scan` (SEC), `perf_profile` (PRF, two digits) and `perf_run` (PERF) in `services/counters.py` (no migration: `project_counters.kind` is a plain string).
+
+**As built (P5-00) — differences from the roadmap's list:**
+- `organisations` had no `settings` column before Phase 5 (only `limits`, used for the page cap and assistant quota); `0017` creates it.
+- Added beyond the roadmap: `performance_profiles.stale_reason`, `rationale`, `created_by`; `performance_runs.stage_run_id` and `error`. `quality_scans.stage_run_id` is nullable (a queued scan may exist before its stage run). `performance_profiles.version` is SQLAlchemy's `version_id_col`; whether "editing creates a new version" also keeps the old row is P5-01b's call.
+- Workflow rows for the two new stage keys are **not** written by the migration. The startup data step `services.projects.ensure_stage_rows` adds a `not_started` row for every missing stage key of every project (idempotent; new projects get all rows from `init_stages`). This way a Phase 4 process still running on a migrated database never reads a stage key it doesn't know. Until the new code has started once, an old project has no `accessibility`/`security_assessment` row.
+- Downgrade to `0016` deletes Phase 5 rows that can't exist under the Phase 4 CHECKs and foreign keys: evidence of the new kinds or linked to a scan or run, `load_test` approvals of performance runs, defects with a non-functional source (with their G8 decisions, links and occurrences), and the stage rows and stage runs of the two new stage keys. Stored files are left in storage.
+- Tested in `tests/integration/test_p5_foundation.py`: a database with Phase 4 rows (run, result, approval, defect, evidence, report) goes `0016 → head`, every Phase 4 row is unchanged on its Phase 4 columns, the batch-rebuilt `evidence` keeps its CHECK and FKs, every organisation has the default ceiling, then `downgrade base → upgrade head` succeeds.
+
+**As built (P5-01b, P5-02, P5-03) — no new migration:**
+- Non-functional defect occurrences live in `defects.environment.occurrences` (`[{scan_key|run_key, url?, measured?, at}]`) plus `quality_findings.defect_id`, because `defect_occurrences` requires an `execution_result_id`. Grouping keys: `environment.rule_id` (accessibility/security) and `environment.threshold_key` (`p95|/path`, performance).
+- Finding extras without columns are in `quality_findings.mapped`: `seen_before` (key of the earlier finding with the same fingerprint), `reopened`, `details` (security `observed`, `why`, `fix`, `subject`).
+- Profile versions: `performance_profiles.version` is the `version_id_col` (it also bumps on status changes); every saved version is kept in `entity_revisions` (`entity_type = "performance_profile"`), read by `?v=`.
+- Scan cancellation is `quality_scans.config.cancel_requested`; run stop is `performance_runs.stopped_by` (as built, R3-BUG-01: set by one conditional `UPDATE ... WHERE status IN (queued, running)`, never inside `metrics`, so a progress write can't erase it). Live progress is `performance_runs.metrics.live` / `live_series` (numbers only), written with a single `json_set` (SQLite) / `jsonb ||` (PostgreSQL) that touches only those two keys.
+
+**As built (P5-04a, P5-05c) — migration `0018_retention`:**
+- `evidence.purged_at` (nullable): set when the retention clean-up deleted the stored file. The row, its metadata and `sha256` stay; the content URL then answers 410.
+- `projects.purge_scheduled_at` (nullable) and `projects.purge_requested_by` (nullable FK to `users`, RESTRICT): the owner's scheduled permanent deletion of an archived project, cancellable until then; unarchiving clears both. The worker's purge (every minute) deletes the project's rows in every table, children first, and its stored files once the time has passed; `audit_logs` rows stay (no foreign key on `project_id`).
+- `qa_reports.report_type` CHECK adds `accessibility` and `security` (batch-recreated on SQLite). Downgrade to `0017` deletes reports of those two types (their files stay in storage).
+- Retention of load test time series also empties `performance_runs.metrics.timeseries` and sets `metrics.timeseries_removed_at` (no column).
+- No column for the retention policy: it lives in `organisations.settings.retention` (`{videos_traces_days, screenshots_days, timeseries_days}`); the defaults 30/90/90 are only a suggestion until saved.
 
 ### Performance and reports
 
 | Table | Phase | Key columns | Indexes |
 |---|---|---|---|
-| `performance_runs` | P5 | `project_id`, `approval_id`, `profile JSON` (type, vus, ramp, duration, thresholds, max_rps, target), `script_storage_key`, `status`, `metrics JSON` (p50/p90/p95/p99, rps, error_rate), `threshold_results JSON`, `aborted_reason?` | `(project_id, created_at desc)` |
+| `performance_runs` | P5 | Superseded by the Phase 5 table above ("Non-functional testing (Phase 5)"). | – |
 | `qa_reports` | P1 | `project_id`, `report_type` (discovery, requirements_spec, test_strategy, test_plan, test_case_spec, rtm, execution, defect, performance, completion, release_readiness), `version`, `stage_run_id?`, `source_versions JSON`, `content JSON` (structured, source of truth), `files JSON` ([{format, storage_key, size, sha256}]), `ai_sections JSON` (labelled), `generated_by`, `created_by` | `(project_id, report_type, version desc)` |
 
 ### Evidence, AI and infrastructure
 
 | Table | Phase | Key columns | Indexes |
 |---|---|---|---|
-| `evidence` | P1 | `project_id`, `kind`, `storage_key`, `mime`, `size`, `sha256`, `source_url?`, `viewport?`, `scan_session_id?`, `page_id?`, `execution_result_id?` (P4), `performance_run_id?` (P5), `captured_at`, `metadata JSON`, no `updated_at` (immutable) | `(project_id, kind)`, `(scan_session_id)`, `(page_id)` |
+| `evidence` | P1 | `project_id`, `kind`, `storage_key`, `mime`, `size`, `sha256`, `source_url?`, `viewport?`, `scan_session_id?`, `page_id?`, `execution_result_id?` (P4), `performance_run_id?` and `quality_scan_id?` (P5), `captured_at`, `metadata JSON`, no `updated_at` (immutable) | `(project_id, kind)`, `(scan_session_id)`, `(page_id)` |
 | `knowledge_items` | P1 | `project_id`, `kind`, `title`, `content`, `provenance`, `evidence_refs JSON`, `source`, `status`, `version`, `superseded_by?` | `(project_id, kind, status)` |
 | `agent_tasks` | P1 | `project_id`, `stage_run_id?`, `agent_key`, `status` (queued/running/succeeded/failed/cancelled/paused), `input JSON` (ids + parameters, no secrets), `output_ref JSON`, `error JSON`, `attempt`, `llm JSON` (provider, model, tokens_in/out, repairs, fallback_used), `started_at`, `finished_at`, `heartbeat_at` | `(project_id, created_at desc)`; partial unique on `(project_id, agent_key, stage_run_id)` where status in (queued, running) — emulated by service check + unique `dedupe_key` |
 | `agent_events` | P1 | `id BIGINT autoincrement` (monotonic cursor; not UUID), `organisation_id`, `project_id`, `agent_task_id?`, `stage_key?`, `agent_key?`, `type`, `level` (info/warn/error), `message` (user-readable), `data JSON`, `created_at` | `(project_id, id)`, `(organisation_id, id)` |
@@ -230,3 +357,14 @@ Each story ships its own migration (numbers follow the roadmap build order; renu
 `0005_revisions_gates` (entity_revisions; gate_decisions and stage_runs review columns) → `0006_requirements` (requirements, requirement_features, acceptance_criteria) → `0007_readiness_criteria` → `0008_strategy_risks` (test_strategies, risks, risk_requirements, risk_features) → `0009_test_plans` → `0010_assistant` (assistant_threads, assistant_messages, assistant_proposals) → `0011_secrets_auth_scan` (secrets columns, scan_sessions.auth, discovered_pages.auth_context) → `0012_source_documents` (source_documents, evidence kind + column).
 
 Rules: all `render_as_batch=True` (SQLite ALTERs; CHECK changes on `evidence.kind` and `secrets` go through batch table recreation); every migration has a working `downgrade`; CI runs `upgrade head → downgrade base → upgrade head` on a fresh SQLite DB and on a copy of a **Phase 1 database with data** (fixture DB from the P1 e2e run) to prove that existing projects, scans and secrets survive. New columns on existing tables are nullable or have server defaults so no Phase 1 row needs rewriting. The secrets backfill is the only data change and runs in app code (see above).
+
+## Phase 3 migration set
+
+`0013_test_design` (test_conditions, condition_requirements, test_cases, test_case_requirements, test_data, test_case_data; written by P3-01a, with the columns P3-02, P3-03 and P3-05 use created up front) → `0014_invitations` (invitations; memberships `invited_by`, `joined_at`).
+
+Rules as in Phase 2:
+- Use `render_as_batch=True`, and give every migration a working `downgrade`.
+- CI runs `upgrade head → downgrade base → upgrade head` on a fresh SQLite DB, and on a copy of a **Phase 2 database with data** (the fixture DB from the P2-11 e2e run). This proves that requirements, strategies, risks, assistant threads and secrets survive.
+- New columns on `memberships` are nullable, so no existing row needs them filled.
+- The only data change is the G5 policy switch on existing projects. It runs in app code (P3-00), not in Alembic, and is tested on the Phase 2 fixture DB.
+- If P3-07 merges before P3-01a, the numbers swap at merge time. Never edit a merged migration.

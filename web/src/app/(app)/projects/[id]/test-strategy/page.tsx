@@ -328,6 +328,7 @@ function TestStrategyWorkspace() {
                       inScopeTypes={inScopeTypes}
                       generatedBy={s?.generated_by ?? null}
                       readOnly={readOnly}
+                      focusKey={params.get("risk")}
                       onChanged={() => {
                         void risks.mutate();
                         void matrix.mutate();

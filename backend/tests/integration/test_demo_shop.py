@@ -1,12 +1,13 @@
 """Real discovery of the demo shop on http://localhost:4100 producing the Discovery Report as JSON, HTML and PDF.
 
-Start the shop first: `cd api && npx tsx src/demo/target-app.ts`. Skipped when it is not running.
+Start the shop first: `cd demo-shop && npm start`. Skipped when it is not running.
 The three files are also written to backend/data/test-artifacts/ for manual inspection.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import httpx
@@ -15,7 +16,9 @@ import pytest
 from app.context import AppContext
 from tests.conftest import client_for, register, worker_for
 
-DEMO = "http://localhost:4100"
+# DEMO_SHOP_URL runs the same checks against another copy of the shop (P5-00 used it to prove the flaws change
+# nothing for Phases 1–4 before the shared :4100 instance was restarted).
+DEMO = os.environ.get("DEMO_SHOP_URL", "http://localhost:4100")
 ARTIFACTS = Path(__file__).resolve().parents[2] / "data" / "test-artifacts"
 pytestmark = pytest.mark.demo_shop
 
@@ -27,7 +30,7 @@ def _demo_running() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _demo_running(), reason="demo shop is not running on http://localhost:4100")
+@pytest.mark.skipif(not _demo_running(), reason=f"demo shop is not running on {DEMO}")
 async def test_demo_shop_discovery_report(make_ctx) -> None:  # type: ignore[no-untyped-def]
     ctx: AppContext = await make_ctx(allow_private_targets=True)
     async with client_for(ctx) as c:

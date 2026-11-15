@@ -22,6 +22,7 @@ import { AcceptanceCriteriaList } from "./AcceptanceCriteria";
 import { RejectDialog } from "./RejectDialog";
 import { RequirementStatusPill, sourceText } from "./RequirementsTable";
 import { noteGateReopened, useDiscoveryFeatures } from "./hooks";
+import { LinkedTestCases } from "@/components/testcases/LinkedCases";
 
 type EditForm = { title: string; description: string; category: RequirementCategory; feature_ids: string[]; assumptions: string[]; reason: string };
 
@@ -835,10 +836,7 @@ export function RequirementDetail({
                 <p className="mt-1 text-body text-fg-muted">None linked.</p>
               )}
             </section>
-            <section className="px-4 py-3">
-              <h2 className="text-small font-semibold text-fg-strong">Linked test cases</h2>
-              <p className="mt-1 text-body text-fg-muted">None yet. Test cases are written in Phase 3, after the Test Strategy is approved.</p>
-            </section>
+            <LinkedTestCases requirementKey={r.key} status={r.status} />
             <section className="px-4 py-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-small font-semibold text-fg-strong">Revision history ({latestRevisions.length})</h2>

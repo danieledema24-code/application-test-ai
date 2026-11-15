@@ -17,6 +17,7 @@ from app.db.models import AgentTask, ProjectSecret, ProjectUrl
 from app.db.types import utcnow
 from app.domain.enums import AuthorisationStatus, SecretKind, TaskStatus, UrlRole
 from app.security.ssrf import UrlRejected, host_matches, normalise_url
+from app.services import automation
 from app.services import serialize_p2 as out
 from app.services.audit import audit
 from app.services.secrets import CREDENTIALS_SECRET, link_primary_url, metadata_for
@@ -129,6 +130,8 @@ async def put_credentials(
         row.last_result_at = None
     await s.flush()
     await link_primary_url(s, project_id, row.id)
+    # P4-02: cases that only needed credentials can now be automated.
+    await automation.refresh_credentials(s, project_id, True)
     audit(s, org_id=project.organisation_id, action="secret.created" if created else "secret.rotated",
           target_type="secret", target_id=row.id, actor_user_id=p.user.id, project_id=project_id,
           metadata={"name": row.name, "version": row.version})  # fmt: skip
@@ -155,6 +158,8 @@ async def delete_secret(project_id: uuid.UUID, secret_id: uuid.UUID, s: ScopedSe
           actor_user_id=p.user.id, project_id=project_id, metadata={"name": row.name})  # fmt: skip
     await s.flush()
     await s.delete(row)
+    if row.name == CREDENTIALS_SECRET:
+        await automation.refresh_credentials(s, project_id, False)
     await s.commit()
     return Response(status_code=204)
 

@@ -12,6 +12,7 @@ import { Button, ConfirmDialog, SelectField, useToast } from "@/components/ui";
 import { AiStatus, type AiMode } from "@/components/domain/AiStatus";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { gateApproved, requirementsStages, useAllRequirements, useDiscoveryFeatures, useDocuments } from "@/components/requirements/hooks";
+import { useAllTestCases } from "@/components/testcases/hooks";
 import { AssistantTaskList, Composer, TasksDisclosure, ThreadMessages } from "./Assistant";
 import { useAssistantThread, useCapabilities } from "./useThread";
 
@@ -21,6 +22,7 @@ export function scopeLine(v: Partial<Record<StageKey, number>>, documents: numbe
   if (v.discovery) parts.push(`Scan ${v.discovery}`);
   if (v.requirements) parts.push(`Requirements v${v.requirements}`);
   if (v.test_strategy) parts.push(`Strategy v${v.test_strategy}`);
+  if (v.test_design) parts.push(`Test design run ${v.test_design}`);
   if (documents) parts.push(`${documents} document${documents === 1 ? "" : "s"}`);
   const base = parts.length ? `Answers use only this project’s data: ${parts.join(", ")}.` : "Answers use only this project’s data.";
   const note = !v.requirements && !v.test_strategy ? " Requirements and the strategy aren’t ready yet, so answers draw on discovery results only." : "";
@@ -62,6 +64,8 @@ export function AssistantWorkspace({
   const reqs = useAllRequirements(p.id, null, !!stages.req?.current_version);
   const features = useDiscoveryFeatures(p.id);
   const docs = useDocuments(p.id);
+  const designed = !!stages.design?.current_version;
+  const cases = useAllTestCases(p.id, null, designed);
   const [tasksOpen, setTasksOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -81,12 +85,17 @@ export function AssistantWorkspace({
     strategyVersion: stages.strategy?.current_version ?? null,
     g4Approved: gateApproved(stages.g4),
     context,
+    cases: cases.data ?? [],
+    designed,
+    g5Approved: gateApproved(stages.g5),
   };
   const gateReopens = (m: AssistantMessage): string | null => {
     const targets = m.proposals.map((x) => x.target?.type);
     const gates: string[] = [];
     if (targets.some((x) => x === "requirement" || x === "acceptance_criterion") && gateApproved(stages.g3)) gates.push("Gate 3");
     if (targets.some((x) => x === "risk" || x === "strategy_section") && gateApproved(stages.g4)) gates.push("Gate 4");
+    const designKinds = m.proposals.some((x) => x.kind === "add_test_cases" || x.kind === "update_test_case" || x.kind === "set_suite");
+    if ((designKinds || targets.some((x) => x === "test_case" || x === "test_condition" || x === "test_data")) && gateApproved(stages.g5)) gates.push("Gate 5");
     return gates.length ? `${gates.join(" and ")} will need approval again.` : null;
   };
   const send = (input: Parameters<typeof t.send>[0]) => void t.send(input);

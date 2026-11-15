@@ -6,6 +6,7 @@ private service. The scanner may only reach the target origin, even with ALLOW_P
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -36,6 +37,11 @@ class FixtureSite:
     # P2-01: with credentials set, POST /login with them starts a cookie session that unlocks /account/*.
     credentials: tuple[str, str] | None = None
     captcha: bool = False  # the sign-in page carries a CAPTCHA widget
+    message_label: str = "Message"  # P4-04: rename it to make a generated locator miss
+    # P4-06/P4-08: the demo shop's bug. The Message field loses `required` and POST /contact says "Thank you".
+    contact_bug: bool = False
+    down: bool = False  # P4-08: every request is answered by closing the connection (site unreachable)
+    contact_posts: list[str] = field(default_factory=list)
     login_posts: list[str] = field(default_factory=list)  # raw bodies of POST /login (tests assert attempts)
     requests: list[tuple[str, str]] = field(default_factory=list)
     internal_hits: list[str] = field(default_factory=list)
@@ -111,12 +117,13 @@ class FixtureSite:
             q = query.get("q", [""])[0]
             return 200, html, _layout("Search results", f"<p>Results for {q!s:.40}</p>")
         if path == "/contact":
+            required = "" if self.contact_bug else ' required minlength="10"'
             body = (
                 '<form action="/contact" method="post"><label for="name">Name</label>'
                 '<input id="name" name="name" required maxlength="80">'
                 '<label for="email">Email</label><input id="email" name="email" type="email" required>'
                 '<label for="phone">Phone</label><input id="phone" name="phone" pattern="[0-9 ]{6,}">'
-                '<label for="msg">Message</label><textarea id="msg" name="msg" required minlength="10"></textarea>'
+                f'<label for="msg">{self.message_label}</label><textarea id="msg" name="msg"{required}></textarea>'
                 '<button type="submit">Send message</button></form>'
                 '<button type="button" aria-haspopup="dialog">Opening hours</button>'
                 '<dialog id="hours"><p>Mon-Fri</p></dialog>'
@@ -157,6 +164,11 @@ def _handler(site: FixtureSite, internal: bool) -> type[BaseHTTPRequestHandler]:
             pass
 
         def _serve(self) -> None:
+            if site.down and not internal:
+                self.close_connection = True
+                with contextlib.suppress(OSError):
+                    self.connection.shutdown(2)
+                return
             parts = urlsplit(self.path)
             with site.lock:
                 (site.internal_hits.append(parts.path) if internal else site.requests.append((self.command, self.path)))
@@ -167,6 +179,16 @@ def _handler(site: FixtureSite, internal: bool) -> type[BaseHTTPRequestHandler]:
                 with site.lock:
                     site.login_posts.append(raw)
                 status, headers, body = site.login(raw)
+            elif self.command == "POST" and parts.path == "/contact" and site.contact_bug:
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+                with site.lock:
+                    site.contact_posts.append(raw)
+                body_html = '<p class="success">Message sent</p>'
+                status, headers, body = (
+                    200,
+                    {"Content-Type": "text/html; charset=utf-8"},
+                    _layout("Thank you", body_html),
+                )
             elif self.command != "GET":
                 status, headers, body = 405, {"Content-Type": "text/plain"}, "no"
             else:

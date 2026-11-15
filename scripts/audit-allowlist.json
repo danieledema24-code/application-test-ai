@@ -1,0 +1,17 @@
+{
+  "_comment": "High/critical npm advisories accepted for now, by GHSA id. Each needs a reason and a review_by date (YYYY-MM-DD); scripts/npm-audit.mjs fails once review_by has passed and warns about entries no longer needed.",
+  "npm": {
+    "GHSA-6g55-p6wh-862q": {
+      "package": "postcss (bundled in next 15.5)",
+      "reason": "Build-time only: Next compiles our own CSS and source maps with it; no user-supplied CSS is parsed. The fix needs Next 16 (breaking), planned separately.",
+      "review_by": "2027-01-31",
+      "package_dir": "web"
+    },
+    "GHSA-r28c-9q8g-f849": {
+      "package": "postcss (bundled in next 15.5)",
+      "reason": "Build-time only: Next compiles our own CSS and source maps with it; no user-supplied CSS is parsed. The fix needs Next 16 (breaking), planned separately.",
+      "review_by": "2027-01-31",
+      "package_dir": "web"
+    }
+  }
+}

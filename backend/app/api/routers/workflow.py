@@ -9,7 +9,7 @@ from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, ScopedSession
 from app.api.errors import NotFound, RateLimited, ValidationFailed
 from app.api.routers.projects import load_project
 from app.db.models import GateDecision, StageRun, WorkflowStage
-from app.domain.enums import GateDecisionKind, GateKey, StageKey
+from app.domain.enums import GateDecisionKind, GateKey, StageKey, StageStatus
 from app.orchestrator.orchestrator import Orchestrator
 from app.schemas import api
 from app.services import serialize as ser
@@ -136,10 +136,22 @@ async def list_runs(
         .all()
     )
     users = await ser.users_by_id(s, [r.triggered_by for r in runs])
+    current = next((r for r in runs if r.id == st.current_stage_run_id), None)
+
+    def superseded(r: StageRun) -> bool:
+        """An older run replaced by the current one (its own status is kept for history)."""
+        return (
+            current is not None
+            and r.id != current.id
+            and r.version < current.version
+            and r.status in (StageStatus.awaiting_approval, StageStatus.approved, StageStatus.completed)
+        )
+
     return [
         api.StageRunSummary(
             version=r.version,
-            status=r.status.value,
+            status="superseded" if superseded(r) else r.status.value,
+            superseded=superseded(r),
             generated_by=r.generated_by.value if r.generated_by else None,
             partial=r.partial,
             started_at=r.started_at,

@@ -56,6 +56,13 @@ class NotFound(AppError):
         super().__init__(message, **kw)
 
 
+class Gone(AppError):
+    """P5-05b: the record exists but its file was removed (retention)."""
+
+    status_code = 410
+    code = "gone"
+
+
 class Conflict(AppError):
     status_code = 409
     code = "conflict"

@@ -7,9 +7,10 @@ from sqlalchemy import and_, func, select
 
 from app.api.deps import Ctx, CurrentPrincipal, ScopedSession
 from app.api.routers.events import MILESTONE_TYPES
-from app.db.models import AgentEvent, DiscoveredPage, Project, ScanSession, WorkflowStage
+from app.db.models import AgentEvent, Defect, DiscoveredPage, ExecutionRun, Project, ScanSession, WorkflowStage
 from app.db.types import utcnow
-from app.domain.enums import GateStatus, PageStatus, ScanStatus, StageStatus
+from app.domain.enums import DefectStatus, GateStatus, PageStatus, RunStatus, ScanStatus, StageStatus
+from app.domain.stages import SUBJECT_GATES
 from app.schemas import api
 from app.services import serialize as ser
 
@@ -48,21 +49,46 @@ async def dashboard(ctx: Ctx, s: ScopedSession, p: CurrentPrincipal) -> api.Dash
             )
         ).scalar_one()
     )
-    awaiting = int(
+    # Projects waiting on a person: an open gate (G2–G6), a run waiting for G7 or a defect draft for G8 (P4 §4.3).
+    waiting_ids = set(
         (
             await s.execute(
-                select(func.count(func.distinct(WorkflowStage.project_id))).where(
+                select(WorkflowStage.project_id).where(
                     WorkflowStage.organisation_id == org_id,
                     WorkflowStage.project_id.in_(live_ids),
                     WorkflowStage.gate_key.is_not(None),
+                    WorkflowStage.gate_key.not_in(list(SUBJECT_GATES)),
                     WorkflowStage.status.in_(
                         [StageStatus.awaiting_approval, StageStatus.completed, StageStatus.cancelled]
                     ),
                     WorkflowStage.gate_status.in_([GateStatus.pending, GateStatus.recommended]),
                 )
             )
-        ).scalar_one()
+        ).scalars()
     )
+    waiting_ids |= set(
+        (
+            await s.execute(
+                select(ExecutionRun.project_id).where(
+                    ExecutionRun.organisation_id == org_id,
+                    ExecutionRun.project_id.in_(live_ids),
+                    ExecutionRun.status == RunStatus.awaiting_authorisation,
+                )
+            )
+        ).scalars()
+    )
+    waiting_ids |= set(
+        (
+            await s.execute(
+                select(Defect.project_id).where(
+                    Defect.organisation_id == org_id,
+                    Defect.project_id.in_(live_ids),
+                    Defect.status == DefectStatus.draft,
+                )
+            )
+        ).scalars()
+    )
+    awaiting = len(waiting_ids)
     failed = int(
         (
             await s.execute(

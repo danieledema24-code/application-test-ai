@@ -8,7 +8,7 @@ Rebuild of Application Test AI against `docs/spec/qa-analyst-platform.md` (the "
 | [database-schema.md](database-schema.md) | Every §14 entity, tenancy, versioning, audit, Phase 1 tables |
 | [api-contracts.md](api-contracts.md) | REST + SSE contracts (Phase 1 in full, later phases outlined) |
 | [security-risks.md](security-risks.md) | Threats mapped to spec §19, mitigations, delivery phase |
-| [roadmap.md](roadmap.md) | Phases 1–6 stories, retirement of old `api/`, test strategy |
+| [roadmap.md](roadmap.md) | Phases 1–6 stories, retirement of the old Node API (done in P4-15), test strategy |
 
 ## Fixed decisions (from the user, not re-opened here)
 
@@ -17,9 +17,22 @@ Rebuild of Application Test AI against `docs/spec/qa-analyst-platform.md` (the "
 - Backend browser automation: Playwright for Python. Generated tests: Playwright Test in TypeScript (Phase 4).
 - New code in `backend/`, port **8200**. `web/` (Next.js, port 3002) is reused and restyled to the light navy design.
 - LLM behind a provider-independent interface; Claude first (`claude-opus-5-5`, `anthropic` Python SDK). Everything works with AI off via labelled rule-based fallbacks.
-- Old `api/` stays runnable until each phase replaces its features, then is deleted.
+- Old `api/` stayed runnable until each phase replaced its features; it was deleted in P4-15 (decision D16) after the demo shop moved to `demo-shop/`. The old product remains on `main`.
+
+## Run locally (as of Phase 4)
+
+| Piece | Command | Port |
+|---|---|---|
+| Backend (API + inline worker) | `cd backend && ALLOW_PRIVATE_TARGETS=true uv run uvicorn app.main:app --port 8200` | 8200 |
+| Web | `cd web && npx next dev -p 3002` (`NEXT_PUBLIC_API_URL=http://localhost:8200`) | 3002 |
+| Automation toolkit | `cd automation && npm install && npx playwright install chromium` (no server; the backend calls it) | – |
+| Demo shop | `cd demo-shop && npm start` (no dependencies; test login in `demo-shop/demo-login.mjs`) | 4100 |
+
+`ALLOW_PRIVATE_TARGETS=true` is for development only (localhost targets). Real-stack journeys: `cd web && npx playwright test --project=e2e e2e/phase4-journey.spec.ts`.
 
 ## Repository inspection (spec §21.1–21.2)
+
+The inspection below is the planning snapshot (before the rebuild); `api/` no longer exists on this branch.
 
 ### What exists (branch `qa-analyst-rebuild`, based on `main` @ e1be90d)
 
@@ -53,7 +66,7 @@ Rebuild of Application Test AI against `docs/spec/qa-analyst-platform.md` (the "
 | Assistant (`assistant.ts`, `actions.ts`: assistant calls the same functions as REST) | **Keep the principle** for spec §16 (Phase 3+) | |
 | Integrations, webhooks, notifications, global search | **Dropped** from the rebuild scope | Not in the spec. Can return later on the new model. |
 | Prisma schema | **Replaced** | New schema (database-schema.md). No data migration: old data is dev/demo only. |
-| `demo/target-app.ts` (deliberately buggy site) | **Port idea** | Static fixture site served by pytest for discovery integration tests; old one still usable manually on 4100. |
+| `demo/target-app.ts` (deliberately buggy site) | **Port idea**, then **moved** | Static fixture site served by pytest for integration tests; the demo shop itself moved to `demo-shop/` in P4-15 (`npm start`, port 4100). |
 | `web/` primitives, auth context, API wrapper, SWR hooks | **Reuse + restyle** | Tokens in `globals.css` change to light navy; component APIs stay. API client gets a new base URL (`http://localhost:8200/api/v1`). |
 | `web/` project tabs (Test cases, Runs, API, Defects, Reports, Environments) | Removed from navigation in P1-12, files deleted in P1-16 | They cannot authenticate against the new backend. The old product stays usable from a `main` worktree. See the roadmap retirement plan. |
 

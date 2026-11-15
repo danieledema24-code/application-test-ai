@@ -6,11 +6,11 @@ from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import func, select
 
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, ScopedSession, client_ip
-from app.api.errors import Conflict, NotFound, ValidationFailed
+from app.api.errors import Conflict, Forbidden, NotFound, ValidationFailed
 from app.api.pagination import clamp_limit, decode_cursor, encode_cursor
 from app.db.models import Project, WorkflowStage
 from app.db.types import utcnow
-from app.domain.enums import ProjectStatus, StageStatus
+from app.domain.enums import ProjectStatus, Role, StageStatus
 from app.domain.stages import policy_violations
 from app.schemas import api
 from app.services import projects as svc
@@ -121,6 +121,8 @@ async def _set_archived(
     s: ScopedSession, project_id: uuid.UUID, p: MemberPrincipal, request: Request, archived: bool
 ) -> None:
     project = await load_project(s, project_id)
+    if p.membership.role not in (Role.owner, Role.admin):  # P5-05c (design open question 4)
+        raise Forbidden("Only owners and admins can archive or unarchive a project.")
     if archived:
         busy = (
             await s.execute(
@@ -137,6 +139,8 @@ async def _set_archived(
     else:
         project.archived_at = None
         project.status = ProjectStatus.active
+        project.purge_scheduled_at = None  # unarchiving cancels a scheduled deletion
+        project.purge_requested_by = None
     project.updated_at = utcnow()
     audit(
         s,

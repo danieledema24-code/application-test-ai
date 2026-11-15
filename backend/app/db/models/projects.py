@@ -16,6 +16,7 @@ from app.domain.enums import (
     GateDecisionKind,
     GateKey,
     GateStatus,
+    GateSubjectType,
     GeneratedBy,
     ProjectStatus,
     ReviewStatus,
@@ -40,6 +41,11 @@ class Project(IdMixin, TenantMixin, TimestampMixin, Base):
     settings: Mapped[dict[str, Any]] = mapped_column(default=json_default_dict)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     archived_at: Mapped[datetime | None] = mapped_column(default=None)
+    # P5-05c (migration 0018): an owner's scheduled purge of an archived project; cancellable until it runs.
+    purge_scheduled_at: Mapped[datetime | None] = mapped_column(default=None)
+    purge_requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), default=None
+    )
     version: Mapped[int] = mapped_column(Integer, default=1)
 
     __mapper_args__ = {"version_id_col": version}  # noqa: RUF012 - SQLAlchemy declarative attribute
@@ -151,11 +157,16 @@ class StageRun(IdMixin, TenantMixin, TimestampMixin, Base):
 
 class GateDecision(IdMixin, TenantMixin, TimestampMixin, Base):
     __tablename__ = "gate_decisions"
-    __table_args__ = (Index("ix_gate_decisions_project_gate_created", "project_id", "gate_key", "created_at"),)
+    __table_args__ = (
+        Index("ix_gate_decisions_project_gate_created", "project_id", "gate_key", "created_at"),
+        Index("ix_gate_decisions_subject", "project_id", "subject_type", "subject_id"),
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
     gate_key: Mapped[GateKey] = mapped_column(str_enum(GateKey, "decision_gate_key"))
-    stage_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("stage_runs.id", ondelete="RESTRICT"))
+    # Null only for per-subject decisions that have no stage run (a G7 rejection of a run that never queued, G8 on
+    # a defect raised by a person).
+    stage_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("stage_runs.id", ondelete="RESTRICT"))
     decision: Mapped[GateDecisionKind] = mapped_column(str_enum(GateDecisionKind, "gate_decision"))
     comment: Mapped[str] = mapped_column(Text, default="")
     decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
@@ -164,3 +175,9 @@ class GateDecision(IdMixin, TenantMixin, TimestampMixin, Base):
     artefact_snapshot: Mapped[list[Any] | None] = mapped_column(default=None)
     snapshot_hash: Mapped[str | None] = mapped_column(String(64), default=None)
     stage_run_versions: Mapped[dict[str, Any] | None] = mapped_column(default=None)
+    # Phase 4 (P4-00): per-subject gates. G7 is decided per execution run, G8 per defect, the G6 review per
+    # AI-written script. Null for stage-level decisions (G1–G6).
+    subject_type: Mapped[GateSubjectType | None] = mapped_column(
+        str_enum(GateSubjectType, "gate_decision_subject_type"), default=None
+    )
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(default=None)

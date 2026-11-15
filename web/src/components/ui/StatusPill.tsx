@@ -1,4 +1,4 @@
-import { Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, CirclePause, CircleSlash, CircleX, Loader2, Lock, MessageSquareWarning, RefreshCw, UserRoundCheck, type LucideIcon } from "lucide-react";
+import { Archive, Circle, Clock, CircleCheck, CircleDashed, CircleDot, CircleHelp, CirclePause, CircleSlash, CircleX, Loader2, Lock, MessageSquareWarning, RefreshCw, UserRoundCheck, type LucideIcon } from "lucide-react";
 import { humanize } from "@/lib/format";
 
 export type Tone = "green" | "red" | "amber" | "blue" | "grey" | "violet";
@@ -41,6 +41,12 @@ const TONES: Record<string, Tone> = {
   NOT_STARTED: "grey",
   LATER: "grey",
   ARCHIVED: "grey",
+  // Phase 3 (design P3 §3)
+  OPEN_QUESTION: "amber",
+  NOT_RUN: "grey",
+  EXPIRED: "grey",
+  REVOKED: "grey",
+  NOT_AVAILABLE: "grey",
   // legacy screens (kept until P1-16)
   PASSED: "green",
   NOT_EXECUTED: "grey",
@@ -121,6 +127,10 @@ const ICONS: Record<string, LucideIcon> = {
   EXTRACTING: Loader2,
   UPLOADING: Loader2,
   CHANGES_REQUESTED: MessageSquareWarning,
+  DEPRECATED: Archive,
+  OPEN_QUESTION: CircleHelp,
+  NOT_RUN: CircleDashed,
+  NOT_AVAILABLE: Clock,
 };
 
 function norm(status: string): string {
@@ -146,12 +156,15 @@ export function StatusPill({
   label,
   tone,
   dot = true,
+  wrap = false,
   className = "",
 }: {
   status: string | null | undefined;
   label?: string;
   tone?: Tone;
   dot?: boolean;
+  /** Let a long label wrap (narrow screens) instead of pushing the page sideways. */
+  wrap?: boolean;
   className?: string;
 }) {
   const t = tone || statusTone(status);
@@ -160,7 +173,7 @@ export function StatusPill({
   const spinning = key === "RUNNING" || key === "RENDERING" || key === "EXTRACTING" || key === "UPLOADING";
   return (
     <span
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES[t]} ${className}`}
+      className={`inline-flex items-center gap-1.5 ${wrap ? "max-w-full" : "whitespace-nowrap"} rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES[t]} ${className}`}
     >
       {Icon ? (
         <>

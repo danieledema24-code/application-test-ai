@@ -17,6 +17,8 @@ from app.db.types import utcnow
 from app.logging import job_id_var, org_id_var, project_id_var
 
 log = logging.getLogger(__name__)
+RETENTION_EVERY_S = 24 * 3600
+PURGE_EVERY_S = 60
 JobHandler = Callable[[Job], Awaitable[None]]
 InterruptHandler = Callable[[Job], Awaitable[None]]
 
@@ -48,7 +50,9 @@ class Worker:
 
     @property
     def group_limits(self) -> dict[str, int]:
-        return {"scan": self.ctx.settings.max_concurrent_scans_per_org}
+        # P4-06: at most 2 test runs per organisation at once (1 per project, enforced by the run job itself).
+        # P5-01b: one load test per organisation at once (decision D18); checks share the browser `scan` group.
+        return {"scan": self.ctx.settings.max_concurrent_scans_per_org, "execution": 2, "performance": 1}
 
     async def start(self) -> None:
         self._stop.clear()
@@ -101,6 +105,8 @@ class Worker:
         last_reap = 0.0
         last_beat = 0.0
         loop = asyncio.get_running_loop()
+        last_retention = loop.time()  # P5-05b: the daily evidence clean-up, first one a day after start
+        last_purge = 0.0  # P5-05c: scheduled project deletions, checked every minute
         while not self._stop.is_set():
             now = loop.time()
             try:
@@ -110,6 +116,16 @@ class Worker:
                 if now - last_reap >= self.reap_every_s:
                     await self.reap_once()
                     last_reap = now
+                if now - last_purge >= PURGE_EVERY_S:
+                    last_purge = now
+                    from app.services.hardening import purge_due
+
+                    await purge_due(self.ctx)
+                if now - last_retention >= RETENTION_EVERY_S:
+                    last_retention = now
+                    from app.services.hardening import apply_retention_all
+
+                    await apply_retention_all(self.ctx)
                 await self._fill()
             except Exception:
                 log.exception("worker loop error")

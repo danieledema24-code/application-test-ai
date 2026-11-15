@@ -12,7 +12,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,7 @@ from app.db.models import (
     WorkflowStage,
 )
 from app.db.tenant import TenantScope, bind_scope, system_scope
+from app.db.touch import touch_project
 from app.db.types import utcnow
 from app.domain.enums import (
     ActorType,
@@ -54,13 +55,20 @@ from app.domain.enums import (
 )
 from app.domain.stages import (
     ACTIVE_STATUSES,
+    DERIVED_STAGES,
+    EXECUTION_STAGE_STATUS,
     GATE_STAGE,
     GATE_TITLES,
+    OPTIONAL_STAGE_BLOCK,
+    OPTIONAL_STAGES,
     OUTPUT_STATUSES,
     REGENERABLE_STAGES,
+    RERUN_STALE_REASONS,
+    RUN_DRIVEN_STAGES,
     RUNNABLE_IN_PHASE,
     STAGE_BY_KEY,
     STAGES,
+    SUBJECT_GATES,
     downstream_of,
     merged_policy,
 )
@@ -82,15 +90,40 @@ def _summary(output: dict[str, Any]) -> dict[str, Any]:
     return {"summary": review.get("summary", {})}
 
 
+def g6_unchecked(output: dict[str, Any] | None) -> str | None:
+    """Why the scripts of a bundle haven't been checked yet, or None once validation finished (QA P4-BUG-04): Gate 6
+    is not announced as waiting while its checks never ran."""
+    v = (output or {}).get("validation") or {}
+    if v.get("status") != "done":
+        return "the script checks haven't finished"
+    problem = v.get("toolkit")
+    if problem and (v.get("counts") or {}).get("not_checked"):
+        return str(problem)
+    return None
+
+
+async def _g6_wait_event(orch: Any, project: Project, reason: str) -> None:
+    await orch._emit(
+        project,
+        "automation.validation_incomplete",
+        f"Gate 6 waits until the scripts are checked: {reason}. Use Validate again on Automation.",
+        stage=StageKey.automation,
+        level=EventLevel.warn,
+        data={"kind": "warning", "gate": GateKey.G6.value},
+    )
+
+
 def _phase2_agents() -> dict[StageKey, Any]:
     from app.agents.readiness.agent import ReadinessAgent
     from app.agents.requirements.agent import RequirementsAgent
     from app.agents.strategy.agent import StrategyAgent
+    from app.agents.testdesign.agent import TestDesignAgent
 
     return {
         StageKey.requirements: RequirementsAgent,
         StageKey.readiness_criteria: ReadinessAgent,
         StageKey.test_strategy: StrategyAgent,
+        StageKey.test_design: TestDesignAgent,
     }
 
 
@@ -111,6 +144,79 @@ class _LazyAgents(dict[StageKey, Any]):
 
 
 PHASE2_AGENTS = _LazyAgents()
+
+
+class StageNotAvailable(RuntimeError):
+    """Raised by a registry stub when its stage's story has not landed yet."""
+
+
+class NotAvailableYet:
+    """Stage-handler registry stub (P4-00). Real handlers take the Phase 2 agent signature and return a StageOutcome.
+
+    `advance()` never queues a stage whose handler is a stub, and `POST /stages/{stage}/run` answers 422, so no
+    project ends up with a failed stage before the story lands.
+    """
+
+    implemented = False
+    story = ""
+
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    async def run(self) -> StageOutcome:
+        raise StageNotAvailable(f"This stage is not available yet ({self.story})")
+
+
+def _stub(story: str) -> type[NotAvailableYet]:
+    return type(f"NotAvailableYet_{story.replace('-', '_')}", (NotAvailableYet,), {"story": story})
+
+
+class _LazyHandler:
+    """A real stage handler, imported on first use (agents import services that import this module)."""
+
+    implemented = True
+
+    def __init__(self, module: str, name: str) -> None:
+        self.module, self.name = module, name
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        import importlib
+
+        return getattr(importlib.import_module(self.module), self.name)(*args, **kwargs)
+
+
+# Phase 4 stage handlers (P4-00). Each story replaces its stub: P4-02 the assessment, P4-03a the bundle, P4-06 the
+# execution engine, P4-08 the failure analysis.
+PHASE4_HANDLERS: dict[StageKey, Any] = {
+    StageKey.automation_assessment: _LazyHandler("app.agents.automation.assessment", "AssessmentAgent"),
+    StageKey.automation: _LazyHandler("app.agents.automation.engineer", "AutomationAgent"),
+    # Runs are started from Test Execution (job `execution_run`), never as a stage task (RUN_DRIVEN_STAGES).
+    StageKey.execution: type("RunDriven_P4_06", (NotAvailableYet,), {"story": "P4-06", "implemented": True}),
+    StageKey.failure_analysis: _LazyHandler("app.agents.defects.analysis", "FailureAnalysisAgent"),
+    # Phase 5: checks (job `quality_scan`, P5-02/P5-03) and load tests (job `performance_run`, P5-01b) start from
+    # Non-functional, never as a stage task (RUN_DRIVEN_STAGES).
+    StageKey.accessibility: type("RunDriven_P5_02", (NotAvailableYet,), {"story": "P5-02", "implemented": True}),
+    StageKey.security_assessment: type("RunDriven_P5_03", (NotAvailableYet,), {"story": "P5-03", "implemented": True}),
+    StageKey.performance: type("RunDriven_P5_01b", (NotAvailableYet,), {"story": "P5-01b", "implemented": True}),
+}
+
+
+def handler_ready(key: StageKey) -> bool:
+    """False while the stage's registry entry is still a stub."""
+    handler = PHASE4_HANDLERS.get(key)
+    return handler is None or bool(getattr(handler, "implemented", True))
+
+
+# Message when a stage's upstream gate blocks it, where the gate title alone would not say what to do.
+_GATE_BLOCK_NAMES: dict[GateKey, str] = {GateKey.G5: "Test design approval"}
+# Why a downstream stage is out of date after its gate input was re-approved with different content.
+_STALE_REASONS: dict[tuple[GateKey, StageKey], str] = {
+    (GateKey.G3, StageKey.test_strategy): "Requirements changed after this strategy was written",
+    (GateKey.G3, StageKey.test_design): "Requirements changed after these test cases were designed",
+    (GateKey.G4, StageKey.test_design): "Strategy changed after these test cases were designed",
+    (GateKey.G5, StageKey.automation_assessment): "Test cases changed after this assessment",
+    (GateKey.G5, StageKey.automation): "Test cases changed after these scripts were written",
+}
 
 
 class Orchestrator:
@@ -308,7 +414,8 @@ class Orchestrator:
 
         Automatic runs (architecture.md §4): discovery once the project exists; the discovery report whenever
         discovery has a new version; provisional requirements once discovery has results; Definition of Ready/Done
-        whenever the requirements version changes; the test strategy once G3 is approved.
+        whenever the requirements version changes; the test strategy once G3 is approved; test design once G4 is
+        approved (P3-00). Traceability is derived on read and never queued.
         """
         queued: list[StageKey] = []
         async with self.ctx.session_factory() as s:
@@ -323,8 +430,8 @@ class Orchestrator:
                 ).scalars()
             }
             for d in STAGES:
-                if d.key not in RUNNABLE_IN_PHASE:
-                    continue
+                if d.key not in RUNNABLE_IN_PHASE or d.key in OPTIONAL_STAGES or not handler_ready(d.key):
+                    continue  # optional branches (P5-00) start only from their workspace or the assistant
                 st = stages[d.key]
                 if st.status in ACTIVE_STATUSES or st.status == StageStatus.paused:
                     continue
@@ -335,6 +442,8 @@ class Orchestrator:
                 params = {"auto_apply": True} if d.key == StageKey.readiness_criteria else None
                 await self._queue_stage(s, project, st, triggered_by=triggered_by, parameters=params)
                 queued.append(d.key)
+            if await self._queue_failure_analysis(s, project, stages[StageKey.failure_analysis], triggered_by):
+                queued.append(StageKey.failure_analysis)
             await s.commit()
         await self._enqueue_pending(scope, project_id)
         return queued
@@ -377,9 +486,89 @@ class Orchestrator:
             if st.status == StageStatus.not_started or run is None:
                 return True
             return (run.upstream_versions or {}).get("requirements") != urun.version
-        if key == StageKey.test_strategy:
+        if key in (StageKey.test_strategy, StageKey.test_design):
             return st.status == StageStatus.not_started
+        if key == StageKey.automation_assessment:
+            # P4-00: after G5 approval, and again when a G5 re-approval with a different snapshot made it stale.
+            return st.status in (StageStatus.not_started, StageStatus.stale)
+        if key == StageKey.automation:
+            # Once the assessment has output; again after a newer assessment version replaced the one it used.
+            if st.status == StageStatus.not_started:
+                return True
+            return (
+                st.status == StageStatus.stale
+                and run is not None
+                and (run.upstream_versions or {}).get(StageKey.automation_assessment.value) != urun.version
+            )
         return False
+
+    async def _queue_failure_analysis(
+        self, s: AsyncSession, project: Project, st: WorkflowStage, triggered_by: uuid.UUID | None
+    ) -> bool:
+        """P4-00: one failure_analysis run per finished execution run with >=1 failed or errored result. A cancelled
+        run is analysed too when it has real failures; tests stopped by the cancel are not results (QA P4-BUG-06).
+
+        Queued by code only, one at a time (the next one is queued when the current one finishes and `advance`
+        runs again). The analysed run is recorded in the stage run's parameters.
+        """
+        from app.db.models import ExecutionResult, ExecutionRun
+        from app.domain.enums import ResultStatus, RunStatus
+        from app.services.execution import NOT_RESULTS
+
+        if not handler_ready(StageKey.failure_analysis) or st.status in ACTIVE_STATUSES:
+            return False
+        if st.status == StageStatus.paused:
+            return False
+        finished = (
+            (
+                await s.execute(
+                    select(ExecutionRun.id)
+                    .where(
+                        ExecutionRun.project_id == project.id,
+                        ExecutionRun.status.in_(
+                            [RunStatus.passed, RunStatus.failed, RunStatus.error, RunStatus.cancelled]
+                        ),
+                        ExecutionRun.finished_at.is_not(None),
+                    )
+                    .order_by(ExecutionRun.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not finished:
+            return False
+        cancelled = set(
+            (
+                await s.execute(
+                    select(ExecutionRun.id).where(
+                        ExecutionRun.id.in_(finished), ExecutionRun.status == RunStatus.cancelled
+                    )
+                )
+            ).scalars()
+        )
+        with_failures = {
+            run_id
+            for run_id, status, error in (
+                await s.execute(
+                    select(ExecutionResult.execution_run_id, ExecutionResult.status, ExecutionResult.error).where(
+                        ExecutionResult.execution_run_id.in_(finished),
+                        # Flaky results are analysed too (classified `flaky`, never a defect; D9).
+                        ExecutionResult.status.in_([ResultStatus.failed, ResultStatus.error, ResultStatus.flaky]),
+                    )
+                )
+            ).all()
+            if run_id not in cancelled or not (status == ResultStatus.error and (error or "") in NOT_RESULTS)
+        }
+        analysed = {
+            str((p or {}).get("execution_run_id"))
+            for p in (await s.execute(select(StageRun.parameters).where(StageRun.workflow_stage_id == st.id))).scalars()
+        }
+        todo = next((rid for rid in finished if rid in with_failures and str(rid) not in analysed), None)
+        if todo is None:
+            return False
+        await self._queue_stage(s, project, st, triggered_by=triggered_by, parameters={"execution_run_id": str(todo)})
+        return True
 
     async def _queue_stage(
         self,
@@ -427,6 +616,20 @@ class Orchestrator:
         if st.stage_key == StageKey.test_strategy:
             items, versions = await gate_rules.g3_snapshot(s, project.id)
             approved_input = {"g3_hash": gate_rules.snapshot_hash(items), "versions": versions}
+        elif st.stage_key == StageKey.test_design:
+            # P3-00: the design is built from exactly these G3/G4 approvals (G5 checks the G4 one still holds).
+            g3_items, g3_versions = await gate_rules.g3_snapshot(s, project.id)
+            g4_items, g4_versions = await gate_rules.g4_snapshot(s, project.id)
+            approved_input = {
+                "requirements_snapshot_hash": gate_rules.snapshot_hash(g3_items),
+                "strategy_snapshot_hash": gate_rules.snapshot_hash(g4_items),
+                "versions": {**g3_versions, **g4_versions},
+            }
+        elif st.stage_key in (StageKey.automation_assessment, StageKey.automation):
+            # P4-00: built from the cases frozen in the last G5 approval (stays the input while G5 is reopened).
+            g5 = await gate_rules.last_approval(s, project.id, GateKey.G5)
+            if g5 is not None:
+                approved_input = {"g5_hash": g5.snapshot_hash, "versions": dict(g5.stage_run_versions or {})}
         run = StageRun(
             organisation_id=project.organisation_id,
             workflow_stage_id=st.id,
@@ -498,6 +701,135 @@ class Orchestrator:
         self._pending_events.append((project, st.stage_key, old, StageStatus.queued, version))
         return run
 
+    async def mirror_execution_run(self, s: AsyncSession, project: Project, run: Any) -> StageStatus | None:
+        """P4-00: the `execution` stage mirrors the latest execution run, and each run is its own stage run.
+
+        Called inside the caller's transaction whenever an `ExecutionRun` changes status (P4-06). The first call for a
+        run that has left `awaiting_authorisation` creates its stage run (version n) and makes it current; later calls
+        update it. Runs awaiting or refused authorisation never move the stage. Emit with `_enqueue_pending`-style
+        events after commit (the status event is queued on `self`).
+        """
+        new = EXECUTION_STAGE_STATUS.get(run.status)
+        if new is None:
+            return None
+        st = await self.stage(s, project.id, StageKey.execution)
+        srun = (
+            (await s.execute(select(StageRun).where(StageRun.id == run.stage_run_id))).scalar_one_or_none()
+            if run.stage_run_id is not None
+            else None
+        )
+        if srun is None:
+            version = (
+                int(
+                    (
+                        await s.execute(
+                            select(func.coalesce(func.max(StageRun.version), 0)).where(
+                                StageRun.workflow_stage_id == st.id
+                            )
+                        )
+                    ).scalar_one()
+                )
+                + 1
+            )
+            auto = await self.stage(s, project.id, StageKey.automation)
+            arun = await self.current_run(s, auto)
+            srun = StageRun(
+                organisation_id=project.organisation_id,
+                workflow_stage_id=st.id,
+                project_id=project.id,
+                stage_key=StageKey.execution,
+                version=version,
+                status=new,
+                upstream_versions={StageKey.automation.value: arun.version} if arun is not None else {},
+                parameters={"execution_run_id": str(run.id), "run_key": run.key},
+                generated_by=GeneratedBy.rules,
+                triggered_by=run.requested_by,
+            )
+            s.add(srun)
+            await s.flush()
+            run.stage_run_id = srun.id
+            st.current_stage_run_id = srun.id
+        srun.status = new
+        if new == StageStatus.running and srun.started_at is None:
+            srun.started_at = run.started_at or utcnow()
+        if new not in ACTIVE_STATUSES:
+            srun.finished_at = run.finished_at or utcnow()
+            srun.output = {"execution_run_id": str(run.id), "run_key": run.key, "totals": dict(run.totals or {})}
+            srun.error = run.error
+        if st.current_stage_run_id != srun.id:
+            return None  # a newer run owns the stage; this one only updates its own history row
+        old = st.status
+        st.status = new
+        st.stale_reason = None
+        if old != new:
+            self._pending_events.append((project, StageKey.execution, old, new, srun.version))
+        return new
+
+    async def mirror_nonfunctional(
+        self, s: AsyncSession, project: Project, stage_key: StageKey, item: Any, new: StageStatus | None
+    ) -> StageStatus | None:
+        """P5-02/P5-03/P5-01b: the `accessibility`, `security_assessment` and `performance` stages mirror their latest
+        scan or run (QUALITY_SCAN_STAGE_STATUS, PERF_RUN_STAGE_STATUS), each its own stage run, as
+        `mirror_execution_run` does for test runs. `item` is a QualityScan or PerformanceRun; `new` None (a run
+        waiting for or refused its approval) leaves the stage alone. Called inside the caller's transaction."""
+        if new is None:
+            return None
+        st = await self.stage(s, project.id, stage_key)
+        srun = await s.get(StageRun, item.stage_run_id) if item.stage_run_id is not None else None
+        if srun is None:
+            version = (
+                int(
+                    (
+                        await s.execute(
+                            select(func.coalesce(func.max(StageRun.version), 0)).where(
+                                StageRun.workflow_stage_id == st.id
+                            )
+                        )
+                    ).scalar_one()
+                )
+                + 1
+            )
+            disc = await self.current_run(s, await self.stage(s, project.id, StageKey.discovery))
+            srun = StageRun(
+                organisation_id=project.organisation_id,
+                workflow_stage_id=st.id,
+                project_id=project.id,
+                stage_key=stage_key,
+                version=version,
+                status=new,
+                upstream_versions={StageKey.discovery.value: disc.version} if disc is not None else {},
+                parameters={"item_id": str(item.id), "key": item.key},
+                generated_by=GeneratedBy.rules,
+                triggered_by=item.requested_by,
+            )
+            s.add(srun)
+            await s.flush()
+            item.stage_run_id = srun.id
+            st.current_stage_run_id = srun.id
+        srun.status = new
+        if new == StageStatus.running and srun.started_at is None:
+            srun.started_at = item.started_at or utcnow()
+        if new not in ACTIVE_STATUSES:
+            srun.finished_at = item.finished_at or utcnow()
+            srun.output = {"item_id": str(item.id), "key": item.key, "status": item.status.value}
+            srun.error = item.error
+        if st.current_stage_run_id != srun.id:
+            return None
+        old = st.status
+        st.status = new
+        st.stale_reason = None
+        if old != new:
+            self._pending_events.append((project, stage_key, old, new, srun.version))
+        return new
+
+    async def check_optional_upstream(self, s: AsyncSession, project: Project, stage_key: StageKey) -> None:
+        """P5-02/P5-03: a check needs discovery output with G2 satisfied (409 `gate_blocked` otherwise)."""
+        for u in STAGE_BY_KEY[stage_key].upstream:
+            try:
+                await self._check_upstream(s, project, stage_key, await self.stage(s, project.id, u))
+            except GateBlocked as exc:
+                raise GateBlocked(OPTIONAL_STAGE_BLOCK) from exc
+
     async def _enqueue_pending(self, scope: TenantScope, project_id: uuid.UUID) -> None:
         """Enqueues jobs for queued tasks without a job (after the stage rows are committed) and emits events."""
         events, self._pending_events = (
@@ -545,6 +877,16 @@ class Orchestrator:
         reason: str | None,
     ) -> None:
         d = STAGE_BY_KEY[stage_key]
+        if stage_key in DERIVED_STAGES:
+            what = "Traceability" if stage_key == StageKey.traceability else d.title
+            raise ValidationFailed(
+                f"{what} is computed automatically",
+                details=[{"field": "stage", "message": f"{what} is computed automatically"}],
+            )
+        if stage_key in RUN_DRIVEN_STAGES and d.available:
+            raise ValidationFailed(
+                RUN_DRIVEN_STAGES[stage_key], details=[{"field": "stage", "message": RUN_DRIVEN_STAGES[stage_key]}]
+            )
         if not d.available or stage_key not in RUNNABLE_IN_PHASE:
             raise ValidationFailed(
                 f"The stage '{stage_key.value}' is not available in this phase",
@@ -571,7 +913,18 @@ class Orchestrator:
                 raise Conflict(f"A regenerated version of {d.title} is waiting for review; apply or discard it first")
             for u in d.upstream:
                 ust = await self.stage(s, project.id, u)
-                await self._check_upstream(s, project, stage_key, ust)
+                if stage_key in OPTIONAL_STAGES:
+                    try:
+                        await self._check_upstream(s, project, stage_key, ust)
+                    except GateBlocked as exc:
+                        raise GateBlocked(OPTIONAL_STAGE_BLOCK) from exc
+                else:
+                    await self._check_upstream(s, project, stage_key, ust)
+            if not handler_ready(stage_key):
+                raise ValidationFailed(
+                    f"{d.title} is not available yet",
+                    details=[{"field": "stage", "message": f"{d.title} is not available yet"}],
+                )
             prev = await self.current_run(s, st)
             try:
                 run = await self._queue_stage(s, project, st, triggered_by=scope.user_id, parameters=parameters)
@@ -581,13 +934,15 @@ class Orchestrator:
             if run.review_status != ReviewStatus.pending_review:
                 # A candidate changes nothing until it is applied; a direct re-run supersedes downstream outputs.
                 for dk in downstream_of(stage_key):
+                    if dk in DERIVED_STAGES or (dk in RUN_DRIVEN_STAGES and dk not in RERUN_STALE_REASONS):
+                        continue  # derived on read, or mirrors execution runs (never re-run as a stage)
                     dst = await self.stage(s, project.id, dk)
                     if dst.status in OUTPUT_STATUSES or dst.status in (
                         StageStatus.failed,
                         StageStatus.changes_requested,
                     ):
                         dst.status = StageStatus.stale
-                        dst.stale_reason = f"{d.title} was re-run (version {run.version})"
+                        dst.stale_reason = RERUN_STALE_REASONS.get(dk, f"{d.title} was re-run (version {run.version})")
                         stale.append(dk)
             audit(
                 s,
@@ -605,7 +960,7 @@ class Orchestrator:
                     "candidate": run.review_status == ReviewStatus.pending_review,
                 },
             )
-            project.updated_at = utcnow()
+            await touch_project(s, project)
             await s.commit()
         await self._enqueue_pending(scope, project_id)
         for dk in stale:
@@ -626,12 +981,14 @@ class Orchestrator:
                 StageStatus.stale,
             ):
                 assert ust.gate_key is not None
-                raise GateBlocked(f"{GATE_TITLES[ust.gate_key]} ({ust.gate_key.value}) must be approved first")
+                name = _GATE_BLOCK_NAMES.get(ust.gate_key, GATE_TITLES[ust.gate_key])
+                raise GateBlocked(f"{name} ({ust.gate_key.value}) must be approved first")
             raise GateBlocked(f"{title} must finish first")
         exempt = stage_key in (StageKey.discovery_report, StageKey.readiness_criteria)
         if not exempt and not await gate_rules.gate_satisfied(s, project, ust):
             assert ust.gate_key is not None
-            raise GateBlocked(f"{GATE_TITLES[ust.gate_key]} ({ust.gate_key.value}) must be approved first")
+            name = _GATE_BLOCK_NAMES.get(ust.gate_key, GATE_TITLES[ust.gate_key])
+            raise GateBlocked(f"{name} ({ust.gate_key.value}) must be approved first")
         if ust.stage_key == StageKey.discovery:
             urun = await self.current_run(s, ust)
             if urun is None or int((urun.output or {}).get("pages", 0)) == 0:
@@ -821,6 +1178,12 @@ class Orchestrator:
         stage_key = GATE_STAGE[gate]
         if gate == GateKey.G1:
             raise Conflict("Gate 1 is recorded when the project is created")
+        if gate in SUBJECT_GATES and STAGE_BY_KEY[stage_key].available:
+            # P4-00: G7 is decided per execution run, G8 per defect (decisions D8, D11).
+            raise ValidationFailed(
+                f"{gate.value} is decided per {'test run' if gate == GateKey.G7 else 'defect'}",
+                details=[{"field": "gate", "message": SUBJECT_GATES[gate]}],
+            )
         if not STAGE_BY_KEY[stage_key].available:
             raise ValidationFailed(f"{gate.value} is not available in this phase")
         async with self.ctx.session_factory() as s:
@@ -835,10 +1198,23 @@ class Orchestrator:
             decidable = st.status in (StageStatus.awaiting_approval, StageStatus.completed, StageStatus.cancelled)
             if not decidable or st.gate_status not in (GateStatus.pending, GateStatus.recommended):
                 raise Conflict(f"{gate.value} is not waiting for a decision")
+            # Claim the decision (QA P4-BUG-09): of two requests that both read "waiting", only the first records a
+            # decision; the second waits for its write lock, then matches no row and gets the 409 above.
+            claimed = await s.execute(
+                update(WorkflowStage)
+                .where(
+                    WorkflowStage.id == st.id,
+                    WorkflowStage.gate_status.in_([GateStatus.pending, GateStatus.recommended]),
+                )
+                .values(updated_by=scope.user_id)
+                .execution_options(synchronize_session=False)
+            )
+            if getattr(claimed, "rowcount", 1) != 1:
+                raise Conflict(f"{gate.value} is not waiting for a decision")
             recommendation = (run.output or {}).get("recommendation")
             items: list[dict[str, Any]] = []
             versions: dict[str, int] = {}
-            if gate in (GateKey.G3, GateKey.G4):
+            if gate in (GateKey.G3, GateKey.G4, GateKey.G5, GateKey.G6):
                 if decision == GateDecisionKind.approve:
                     blocking = gate_rules.blockers(await gate_rules.preconditions(s, project, gate))
                     if blocking:
@@ -888,7 +1264,7 @@ class Orchestrator:
                 project_id=project.id,
                 metadata={"decision": decision.value, "comment": comment.strip(), "stage_run_version": run.version},
             )
-            project.updated_at = utcnow()
+            await touch_project(s, project)
             # Re-render the latest report of this scan so its status (Draft/Approved) matches the decision.
             report = (
                 await s.execute(
@@ -919,6 +1295,22 @@ class Orchestrator:
                 rtype = ReportType.requirements_spec if gate == GateKey.G3 else ReportType.test_strategy
                 if await phase2_reports.has_source(s, project.id, rtype):
                     report = await phase2_reports.create(s, project, rtype, user_id=scope.user_id, frozen=True)
+            extra_reports: list[uuid.UUID] = []
+            if decision == GateDecisionKind.approve and gate == GateKey.G5:
+                # P3-08: frozen Test Case Specification and RTM for exactly the approved snapshot.
+                from app.agents.reporting import phase2_reports
+
+                for rtype in (ReportType.test_case_spec, ReportType.rtm):
+                    if await phase2_reports.has_source(s, project.id, rtype):
+                        rep_row = await phase2_reports.create(s, project, rtype, user_id=scope.user_id, frozen=True)
+                        extra_reports.append(rep_row.id)
+            if decision == GateDecisionKind.approve and gate == GateKey.G4:
+                # P3-05: risk-derived priorities follow the approved register (derived: no version bump).
+                from app.services import testdesign as tds
+
+                updated = await tds.recompute_priorities(s, project.id)
+            else:
+                updated = 0
             await s.commit()
             report_id = report.id if report is not None else None
         word = "approved" if decision == GateDecisionKind.approve else "returned with requested changes"
@@ -944,13 +1336,21 @@ class Orchestrator:
                 stage=dk,
                 data={"kind": "status", "stage_key": dk.value, "from": "approved", "to": "stale", "version": None},
             )
-        if report_id is not None:
+        for rid in [*([report_id] if report_id is not None else []), *extra_reports]:
             await self.ctx.queue.enqueue(
                 "report_render",
-                {"report_id": str(report_id)},
+                {"report_id": str(rid)},
                 org_id=project.organisation_id,
                 project_id=project.id,
-                dedupe_key=f"report:{report_id}",
+                dedupe_key=f"report:{rid}",
+            )
+        if updated:
+            await self._emit(
+                project,
+                "test_cases.priorities_updated",
+                f"Risk-based priority changed on {updated} test case(s)",
+                stage=StageKey.test_design,
+                data={"kind": "result", "count": updated},
             )
         if decision == GateDecisionKind.approve and gate == GateKey.G4:
             await self.ctx.queue.enqueue(
@@ -966,22 +1366,56 @@ class Orchestrator:
     async def _mark_changed_downstream(
         self, s: AsyncSession, project: Project, stage_key: StageKey, digest: str, previous: GateDecision | None
     ) -> list[StageKey]:
-        """On re-approval with different content, downstream outputs built from the old approval become stale."""
+        """On re-approval with different content, downstream outputs built from the old approval become stale.
+
+        Each downstream run records the approval it was built from in `approved_input` (G3 hash for the strategy;
+        G3 and G4 hashes for the test design); a stage built from another approval goes stale. Its current output
+        stays in use until it is regenerated and reviewed.
+        """
         if previous is None or previous.snapshot_hash == digest:
             return []
+        if STAGE_BY_KEY[stage_key].gate == GateKey.G4:
+            await self._mark_profiles_stale(s, project)
         out: list[StageKey] = []
+        keys = {
+            GateKey.G3: ("g3_hash", "requirements_snapshot_hash"),
+            GateKey.G4: ("strategy_snapshot_hash",),
+            GateKey.G5: ("g5_hash",),
+        }
+        gate = STAGE_BY_KEY[stage_key].gate
         for dk in downstream_of(stage_key):
-            if dk == StageKey.readiness_criteria:
+            if dk == StageKey.readiness_criteria or dk in DERIVED_STAGES or gate not in keys:
                 continue
             dst = await self.stage(s, project.id, dk)
             drun = await self.current_run(s, dst)
             if drun is None or dst.status not in OUTPUT_STATUSES:
                 continue
-            if (drun.approved_input or {}).get("g3_hash") not in (None, digest):
+            built = drun.approved_input or {}
+            used = next((built[k] for k in keys[gate] if built.get(k)), None)
+            if used is not None and used != digest and gate is not None:
                 dst.status = StageStatus.stale
-                dst.stale_reason = "Requirements changed after this strategy was written"
+                dst.stale_reason = _STALE_REASONS.get((gate, dk), f"{GATE_TITLES[gate]} was approved with changes")
                 out.append(dk)
         return out
+
+    @staticmethod
+    async def _mark_profiles_stale(s: AsyncSession, project: Project) -> None:
+        """P5-00: a G4 re-approval with a different strategy marks draft and ready performance profiles stale. They
+        keep working (a stale profile can still be run); the Performance workspace suggests regenerating."""
+        from app.db.models import PerformanceProfile
+        from app.domain.enums import PerfProfileStatus
+
+        profiles = (
+            await s.execute(
+                select(PerformanceProfile).where(
+                    PerformanceProfile.project_id == project.id,
+                    PerformanceProfile.status.in_([PerfProfileStatus.draft, PerfProfileStatus.ready]),
+                )
+            )
+        ).scalars()
+        for prof in profiles:
+            prof.status = PerfProfileStatus.stale
+            prof.stale_reason = "The test strategy changed after this profile was written"
 
     async def reopen_gate(
         self,
@@ -1050,8 +1484,99 @@ class Orchestrator:
             await self.document_job(scope, uuid.UUID(job.payload["document_id"]))
         elif job.kind == "signin_test":
             await self.signin_test_job(scope, uuid.UUID(job.payload["task_id"]))
+        elif job.kind == "automation_validate":
+            await self.automation_validate_job(scope, job)
+        elif job.kind == "execution_run":
+            from app.agents.execution.engine import execute_run
+
+            await execute_run(self.ctx, scope, uuid.UUID(job.payload["run_id"]), job)
+        elif job.kind == "quality_scan":
+            from app.agents.nonfunctional.scan import run_scan
+
+            await run_scan(self.ctx, scope, uuid.UUID(job.payload["scan_id"]), job)
+        elif job.kind == "performance_run":
+            from app.agents.performance.runner import run_load_test
+
+            await run_load_test(self.ctx, scope, uuid.UUID(job.payload["run_id"]), job)
         else:
             raise ValueError(f"Unknown job kind {job.kind}")
+
+    async def automation_validate_job(self, scope: TenantScope, job: Job) -> None:
+        """P4-04: re-checks a bundle's scripts (all of them, or `script_ids`), then moves G6 to its D10 state."""
+        from app.agents.automation.validation import validate_bundle
+
+        project_id = uuid.UUID(job.payload["project_id"])
+        run_id = uuid.UUID(job.payload["stage_run_id"])
+        only = {uuid.UUID(x) for x in job.payload.get("script_ids") or []} or None
+        async with self.ctx.session_factory() as s:
+            bind_scope(s, scope)
+            project = (await s.execute(select(Project).where(Project.id == project_id))).scalar_one()
+        try:
+            output, summary = await validate_bundle(self.ctx, scope, project_id, run_id, only_scripts=only)
+        except Exception as exc:
+            log.exception("script validation failed")
+            async with self.ctx.session_factory() as s:
+                bind_scope(s, scope)
+                run = (await s.execute(select(StageRun).where(StageRun.id == run_id))).scalar_one()
+                out = dict(run.output or {})
+                out["validation"] = {**(out.get("validation") or {}), "status": "failed"}
+                run.output = out
+                await s.commit()
+            await self._emit(
+                project,
+                "automation.validation_failed",
+                f"Checking the scripts failed: {str(exc).splitlines()[0][:200]}",
+                stage=StageKey.automation,
+                level=EventLevel.error,
+                data={"kind": "error"},
+            )
+            return
+        await self._emit(
+            project,
+            "automation.validated",
+            summary,
+            stage=StageKey.automation,
+            agent=STAGE_BY_KEY[StageKey.automation].agent_key or ORCH,
+            data={"kind": "result", **((output.get("validation") or {}).get("counts") or {})},
+        )
+        await self.finalise_g6(scope, project_id, run_id=run_id)
+
+    async def finalise_g6(self, scope: TenantScope, project_id: uuid.UUID, *, run_id: uuid.UUID | None = None) -> None:
+        """Moves the automation stage to its D10 state after validation or a script review, with the events."""
+        from app.services import automation as automation_svc
+
+        async with self.ctx.session_factory() as s:
+            bind_scope(s, scope)
+            proj = (await s.execute(select(Project).where(Project.id == project_id))).scalar_one()
+            st = await automation_svc.stage(s, project_id, StageKey.automation)
+            old, new, version = (st.status, st.status, None)
+            if run_id is None or st.current_stage_run_id == run_id:
+                old, new, version = await automation_svc.apply_g6(s, proj)
+            current = await s.get(StageRun, st.current_stage_run_id) if st.current_stage_run_id else None
+            output = dict(current.output or {}) if current is not None else {}
+            await s.commit()
+        if version is None or old == new:
+            return
+        await self._status_event(proj, StageKey.automation, old, new, version)
+        if new == StageStatus.completed:
+            await self._emit(
+                proj,
+                "gate.passed_automatically",
+                f"Gate 6: {GATE_TITLES[GateKey.G6]} passed automatically",
+                stage=StageKey.automation,
+                data={"kind": "gate", "gate": GateKey.G6.value},
+            )
+        elif new == StageStatus.awaiting_approval and (reason := g6_unchecked(output)) is not None:
+            await _g6_wait_event(self, proj, reason)
+        elif new == StageStatus.awaiting_approval:
+            await self._emit(
+                proj,
+                "gate.awaiting_approval",
+                f"Gate 6: {GATE_TITLES[GateKey.G6]} is waiting for approval",
+                stage=StageKey.automation,
+                data={"kind": "gate", "gate": GateKey.G6.value, "policy": "required"},
+            )
+        await self.advance(scope, project_id)
 
     async def run_task(self, scope: TenantScope, task_id: uuid.UUID, job: Job | None) -> None:
         async with self.ctx.session_factory() as s:
@@ -1091,7 +1616,7 @@ class Orchestrator:
                 await self._run_discovery(scope, project, task_id, run.id, job)
             elif stage_key == StageKey.discovery_report:
                 await self._run_report_stage(scope, project, task_id, run.id)
-            elif stage_key in PHASE2_AGENTS:
+            elif stage_key in PHASE2_AGENTS or stage_key in PHASE4_HANDLERS:
                 await self._run_phase2(scope, project, task_id, run.id, stage_key)
             else:
                 raise ValueError(f"Stage {stage_key.value} is not implemented in this phase")
@@ -1105,10 +1630,12 @@ class Orchestrator:
         self, scope: TenantScope, project: Project, task_id: uuid.UUID, run_id: uuid.UUID, stage_key: StageKey
     ) -> None:
         """Runs a Phase 2 generator and finalises its stage: gate status for a first version, review for a candidate."""
-        outcome: StageOutcome = await PHASE2_AGENTS[stage_key](
+        agent_cls = PHASE4_HANDLERS[stage_key] if stage_key in PHASE4_HANDLERS else PHASE2_AGENTS[stage_key]
+        outcome: StageOutcome = await agent_cls(
             self.ctx, scope, project_id=project.id, run_id=run_id, task_id=task_id
         ).run()
         gate_event: dict[str, Any] | None = None
+        g6_auto = False
         async with self.ctx.session_factory() as s:
             bind_scope(s, scope)
             task = (await s.execute(select(AgentTask).where(AgentTask.id == task_id))).scalar_one()
@@ -1137,7 +1664,15 @@ class Orchestrator:
                     new = StageStatus.completed
                 else:
                     policy = merged_policy(proj.approval_policy)[gate]
-                    if policy == GatePolicy.required:
+                    if gate == GateKey.G6:
+                        # Decision D10: no person needed unless something blocks (or the policy is `required`).
+                        from app.services import automation as automation_svc
+
+                        await s.flush()
+                        new, st.gate_status = await automation_svc.g6_state(s, proj)
+                        if st.gate_status == GateStatus.approved:
+                            g6_auto = True
+                    elif policy == GatePolicy.required:
                         new, st.gate_status = StageStatus.awaiting_approval, GateStatus.pending
                     elif policy == GatePolicy.recommended:
                         new, st.gate_status = StageStatus.completed, GateStatus.recommended
@@ -1168,7 +1703,7 @@ class Orchestrator:
                         gate_event = {"gate": gate.value, "policy": policy.value}
                 run.status = new
                 st.status = new
-            proj.updated_at = utcnow()
+            await touch_project(s, proj)
             await s.commit()
             version = run.version
         for type_, message, data in outcome.events:
@@ -1191,16 +1726,30 @@ class Orchestrator:
                 stage=stage_key,
                 data={"kind": "review", "stage_key": stage_key.value, "version": version, **_summary(outcome.output)},
             )
-        if gate_event is not None:
+        if (
+            gate_event is not None
+            and gate_event["gate"] == GateKey.G6.value
+            and (unchecked := g6_unchecked(outcome.output))
+        ):
+            await _g6_wait_event(self, project, unchecked)
+        elif gate_event is not None:
             g = GateKey(gate_event["gate"])
             await self._emit(
                 project,
                 "gate.awaiting_approval",
-                f"Gate {g.value[1:]}: {GATE_TITLES[g]} is waiting for your approval"
-                if gate_event["policy"] == "required"
+                f"Gate {g.value[1:]}: {GATE_TITLES[g]} is waiting for approval"
+                if gate_event["policy"] == "required" or g == GateKey.G6
                 else f"Gate {g.value[1:]}: {GATE_TITLES[g]} is ready for review (approval recommended)",
                 stage=stage_key,
                 data={"kind": "gate", **gate_event},
+            )
+        if g6_auto:
+            await self._emit(
+                project,
+                "gate.passed_automatically",
+                f"Gate 6: {GATE_TITLES[GateKey.G6]} passed automatically",
+                stage=stage_key,
+                data={"kind": "gate", "gate": GateKey.G6.value},
             )
 
     async def _fail(
@@ -1241,6 +1790,19 @@ class Orchestrator:
 
     async def on_job_interrupted(self, job: Job) -> None:
         """Called when the reaper gives up on a job (attempts exhausted)."""
+        if job.kind == "execution_run":
+            await self._execution_interrupted(job)
+            return
+        if job.kind == "quality_scan":
+            from app.agents.nonfunctional.scan import scan_interrupted
+
+            await scan_interrupted(self.ctx, job)
+            return
+        if job.kind == "performance_run":
+            from app.agents.performance.runner import run_interrupted
+
+            await run_interrupted(self.ctx, job)
+            return
         if job.kind != "agent_task":
             return
         scope = system_scope(job.organisation_id)
@@ -1254,6 +1816,29 @@ class Orchestrator:
             project = (await s.execute(select(Project).where(Project.id == task.project_id))).scalar_one()
             stage_run_id = task.stage_run_id
         await self._fail(scope, project, task.id, stage_run_id, "interrupted")
+
+    async def _execution_interrupted(self, job: Job) -> None:
+        """P4-06 restart safety: a run whose worker stopped is `error`; stored results stay, the rest are errors."""
+        from app.db.models import ExecutionRun
+        from app.domain.enums import RunStatus
+        from app.services import execution as xsvc
+
+        scope = system_scope(job.organisation_id)
+        async with self.ctx.session_factory() as s:
+            bind_scope(s, scope)
+            run = await s.get(ExecutionRun, uuid.UUID(job.payload["run_id"]))
+            if run is None or run.status not in (RunStatus.running, RunStatus.queued):
+                return
+            project = (await s.execute(select(Project).where(Project.id == run.project_id))).scalar_one()
+            await xsvc.write_unfinished(s, run, xsvc.WORKER_STOPPED)
+            run.error = xsvc.WORKER_STOPPED
+            run.finished_at = utcnow()
+            run.status = RunStatus.error
+            await self.mirror_execution_run(s, project, run)
+            await s.commit()
+        await self._enqueue_pending(scope, project.id)
+        await self._emit(project, "execution.run_status", f"{run.key} didn't complete", stage=StageKey.execution,
+                         level=EventLevel.error, data={"kind": "error", "run_key": run.key, "status": "error"})  # fmt: skip
 
     async def _run_discovery(
         self, scope: TenantScope, project: Project, task_id: uuid.UUID, run_id: uuid.UUID, job: Job | None
@@ -1351,7 +1936,7 @@ class Orchestrator:
                 st.status = new
                 if st.gate_status in (GateStatus.pending, GateStatus.recommended):
                     gate_event = {"gate": "G2", "policy": policy.value, "recommendation": rec}
-            proj.updated_at = utcnow()
+            await touch_project(s, proj)
             await s.commit()
             version = run.version
         await self._status_event(project, StageKey.discovery, old, new, version)

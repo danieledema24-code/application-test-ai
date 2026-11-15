@@ -44,6 +44,9 @@ class NetworkPolicy:
     blocked: list[dict[str, str]] = field(default_factory=list)
     nav_redirects: dict[str, str] = field(default_factory=dict)
     nav_blocked: dict[str, str] = field(default_factory=dict)
+    # Response headers of fulfilled top-level documents, as fetched: Chromium drops Set-Cookie from the page's own
+    # view of a fulfilled response, so the passive security check reads them here (P5-03). Consumers pop them.
+    nav_headers: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     _host_cache: dict[tuple[str, bool], str | None] = field(default_factory=dict)
 
     def _record(self, url: str, reason: str) -> None:
@@ -113,6 +116,8 @@ class NetworkPolicy:
                     return
                 resp = await route.fetch(url=nxt, max_redirects=0, timeout=self.fetch_timeout_ms)
                 current = nxt
+            if top_level and len(self.nav_headers) < 100:
+                self.nav_headers[url] = [(h["name"], h["value"]) for h in resp.headers_array]
             await route.fulfill(response=resp)
         except Error as exc:
             log.debug("policy fetch failed for %s: %s", url, str(exc).splitlines()[0])

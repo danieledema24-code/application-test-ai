@@ -45,6 +45,8 @@ export function wordDiff(from: string, to: string): DiffPart[] {
   return out;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Text form of any field value, for diffing and display. */
 export function valueText(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -57,7 +59,17 @@ export function valueText(v: unknown): string {
     if (typeof o.text === "string") return o.text;
     if (typeof o.key === "string" && typeof o.title === "string") return `${o.key} ${o.title}`;
     if ("given" in o || "when" in o || "then" in o) return `Given ${valueText(o.given)} · When ${valueText(o.when)} · Then ${valueText(o.then)}`;
-    return JSON.stringify(o);
+    // A test step: "2. Press Send → The form is sent · data TD-0001". Raw ids (data_refs) are never shown.
+    if (typeof o.action === "string") {
+      const data = (Array.isArray(o.data) ? o.data : []).map((d) => (d && typeof d === "object" ? ((d as { key?: unknown }).key ?? (d as { label?: unknown }).label) : null)).filter((x): x is string => typeof x === "string");
+      const expected = typeof o.expected === "string" && o.expected.trim() ? ` → ${o.expected}` : "";
+      return `${typeof o.n === "number" ? `${o.n}. ` : ""}${o.action}${expected}${data.length ? ` · data ${data.join(", ")}` : ""}`;
+    }
+    // Anything else reads as "name: value" pairs, without ids, rather than JSON.
+    return Object.entries(o)
+      .filter(([k, x]) => x !== null && x !== undefined && x !== "" && !/(^|_)ids?$|_refs?$/.test(k) && !(typeof x === "string" && UUID.test(x)))
+      .map(([k, x]) => `${k.replace(/_/g, " ")}: ${valueText(x)}`)
+      .join(" · ");
   }
   return String(v);
 }

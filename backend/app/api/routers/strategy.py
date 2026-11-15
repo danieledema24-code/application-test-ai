@@ -14,7 +14,8 @@ from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, ScopedSession
 from app.api.errors import Conflict, GateBlocked, NotFound, ValidationFailed
 from app.api.pagination import clamp_limit, decode_cursor, encode_cursor
 from app.api.routers import p2common as c
-from app.db.models import GateDecision, Requirement, Risk, StageRun, TestPlan, TestStrategy, risk_requirements
+from app.context import AppContext
+from app.db.models import GateDecision, Project, Requirement, Risk, StageRun, TestPlan, TestStrategy, risk_requirements
 from app.db.types import utcnow
 from app.domain.enums import (
     GateKey,
@@ -28,6 +29,7 @@ from app.domain.enums import (
     StageStatus,
 )
 from app.domain.risk import requires_approval, risk_level, risk_score
+from app.orchestrator.orchestrator import Orchestrator
 from app.services import gates, revisions
 from app.services import plan as plan_svc
 from app.services import serialize_p2 as out
@@ -346,9 +348,12 @@ async def list_risks(
     level: str | None = None,
     status: str | None = None,
     requirement_id: uuid.UUID | None = None,
+    uncovered: bool | None = None,
     limit: int | None = None,
     cursor: str | None = None,
 ) -> dict[str, Any]:
+    from app.services import traceability as trace
+
     await c.project_of(s, project_id)
     run, _ = await gates.current_strategy(s, project_id)
     if run is None:
@@ -366,10 +371,14 @@ async def list_risks(
             )
         )
     rows = list((await s.execute(stmt.order_by(Risk.score.desc(), Risk.key))).scalars())
+    tr = await trace.load(s, project_id)
+    cov = {r.id: trace.risk_coverage(tr, r) for r in rows}
+    if uncovered is not None:
+        rows = [r for r in rows if bool(cov[r.id]["uncovered_requirement_keys"]) == uncovered]
     off, lim = decode_cursor(cursor), clamp_limit(limit, 50)
     us = await out.users(s, [r.updated_by for r in rows[off : off + lim]])
     return {
-        "items": [await out.risk_out(s, r, us) for r in rows[off : off + lim]],
+        "items": [{**await out.risk_out(s, r, us), "coverage": cov[r.id]} for r in rows[off : off + lim]],
         "next_cursor": encode_cursor(off + lim) if off + lim < len(rows) else None,
     }
 
@@ -437,8 +446,28 @@ async def _risk_ctx(s: ScopedSession, risk_id: uuid.UUID) -> Risk:
 
 
 async def _risk_detail(s: ScopedSession, row: Risk) -> dict[str, Any]:
+    from app.services import traceability as trace
+
     us = await out.users(s, [row.updated_by])
-    return await out.risk_out(s, row, us)
+    return {**await out.risk_out(s, row, us), "coverage": trace.risk_coverage(await trace.load(s, row.project_id), row)}
+
+
+async def _recompute(s: ScopedSession, project_id: uuid.UUID) -> int:
+    """P3-05: risk writes recompute the derived risk/priority of current test cases (no version bump, no reopen)."""
+    from app.services import testdesign as tds
+
+    return await tds.recompute_priorities(s, project_id)
+
+
+async def _priorities_event(ctx: AppContext, project: Project, count: int) -> None:
+    if count:
+        await Orchestrator(ctx)._emit(
+            project,
+            "test_cases.priorities_updated",
+            f"Risk-based priority changed on {count} test case(s)",
+            stage=StageKey.test_design,
+            data={"kind": "result", "count": count},
+        )
 
 
 @router.post("/projects/{project_id}/risks", status_code=201)
@@ -496,8 +525,10 @@ async def create_risk(
         metadata={"key": row.key},
     )
     orch = await c.reopen_if_approved(ctx, s, project, GateKey.G4, f"{row.key} was added", p.user.id)
+    updated = await _recompute(s, project_id)
     await s.commit()
     await c.after_commit(orch, p.scope, project_id)
+    await _priorities_event(ctx, project, updated)
     return await _risk_detail(s, row)
 
 
@@ -569,8 +600,10 @@ async def patch_risk(
         metadata={"key": row.key, "fields": sorted(fields)},
     )
     orch = await c.reopen_if_approved(ctx, s, project, GateKey.G4, f"{row.key} was changed", p.user.id)
+    updated = await _recompute(s, row.project_id)
     await s.commit()
     await c.after_commit(orch, p.scope, row.project_id)
+    await _priorities_event(ctx, project, updated)
     return await _risk_detail(s, row)
 
 

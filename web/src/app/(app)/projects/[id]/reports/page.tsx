@@ -11,40 +11,42 @@ import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { useScans } from "@/components/discovery/hooks";
 import { hostOf, scanNumber } from "@/lib/url";
-import { REPORT_TYPES, phase2ReportFileName, type ReportType } from "@/lib/reports";
+import { FORMAT_HINT, FORMAT_TEXT, REPORT_TYPES, downloadFailedText, downloadFormats, isPhase3Report, phase2ReportFileName, preparingText, type DownloadFormat, type ReportType } from "@/lib/reports";
+import { useAuth } from "@/lib/auth";
 import { gateApproved, requirementsStages } from "@/components/requirements/hooks";
 
-/** [Download ▾] menu with PDF and HTML; the trigger shows the loading state (design P2 §10.1). */
+/** [Download ▾] menu: PDF and HTML, plus CSV for the Phase 3 reports; the trigger shows the loading state (design P2 §10.1, P3 §15.1). */
 function DownloadMenu({ report, name, host }: { report: ReportSummary; name: string; host: string }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<"pdf" | "html" | null>(null);
-  async function get(format: "pdf" | "html") {
+  const [busy, setBusy] = useState<DownloadFormat | null>(null);
+  const formats = downloadFormats(report.report_type as ReportType);
+  async function get(format: DownloadFormat) {
     setOpen(false);
     setBusy(format);
     try {
-      await downloadFile(`/reports/${report.id}/download?format=${format}`, phase2ReportFileName(host, report.report_type as ReportType, report.version, new Date(), format));
+      await downloadFile(`/reports/${report.id}/download?format=${format}`, phase2ReportFileName(host, report.report_type as ReportType, report.version, new Date(), format, report.run_key));
       toast("Report downloaded.");
     } catch {
-      toast(format === "pdf" ? "Couldn’t create the PDF. Try again." : "Couldn’t create the HTML file. Try again.", "error");
+      toast(downloadFailedText(format), "error");
     } finally {
       setBusy(null);
     }
   }
-  const item = "flex min-h-10 w-full items-center px-4 py-2 text-left text-body text-fg-strong hover:bg-overlay";
+  const item = "flex min-h-10 w-full flex-col items-start px-4 py-2 text-left text-body text-fg-strong hover:bg-overlay";
   return (
     <div className="relative inline-block" onKeyDown={(e) => e.key === "Escape" && setOpen(false)}>
       <Button size="sm" variant="secondary" aria-haspopup="menu" aria-expanded={open} aria-label={`Download ${name} version ${report.version}`} onClick={() => setOpen((o) => !o)} loading={!!busy}>
-        {busy === "pdf" ? "Preparing PDF…" : busy === "html" ? "Preparing HTML…" : "Download"}
+        {busy ? preparingText(busy) : "Download"}
       </Button>
       {open && (
-        <div role="menu" className="absolute right-0 top-10 z-30 w-48 rounded-lg bg-surface py-1 text-left shadow-lg ring-1 ring-line-strong">
-          <button role="menuitem" type="button" className={item} onClick={() => void get("pdf")}>
-            PDF
-          </button>
-          <button role="menuitem" type="button" className={item} onClick={() => void get("html")}>
-            HTML (single file)
-          </button>
+        <div role="menu" className="absolute right-0 top-10 z-30 w-60 rounded-lg bg-surface py-1 text-left shadow-lg ring-1 ring-line-strong">
+          {formats.map((f) => (
+            <button key={f} role="menuitem" type="button" className={item} onClick={() => void get(f)}>
+              {FORMAT_TEXT[f]}
+              {FORMAT_HINT[f] && <span className="text-small text-fg-muted">{FORMAT_HINT[f]}</span>}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -55,7 +57,7 @@ function approvalText(r: ReportSummary, gate: string | null): string {
   if (r.status === "rendering") return "Preparing";
   if (r.status === "failed") return "Failed";
   if (r.approval?.status === "approved") return gate ? `Approved (Gate ${gate.slice(1)})` : "Current";
-  return "Draft";
+  return gate === "G5" ? "Draft · Gate 5 waiting" : "Draft";
 }
 
 /** Reports list (design P1 §9.1, P2 §10.1): discovery report versions, then one row per Phase 2 report type. */
@@ -66,13 +68,24 @@ export default function ReportsPage() {
     refreshInterval: (d) => (d?.some((r) => r.status === "rendering") ? 3000 : 0),
   });
   const scans = useScans(p.id);
+  const { role } = useAuth();
   const [busy, setBusy] = useState(false);
+  const [drafting, setDrafting] = useState<ReportType | null>(null);
   const discovery = (reports.data ?? []).filter((r) => r.report_type === "discovery").sort((a, b) => b.created_at.localeCompare(a.created_at));
   const scanKey = (id: string | null | undefined) => scans.data?.items.find((s) => s.id === id)?.key;
   const discoveryDone = p.discovery && ["completed", "approved", "awaiting_approval", "cancelled", "failed"].includes(p.discovery.status);
   const stages = requirementsStages(p.workflow);
   const host = hostOf(p.project?.primary_url) || "site";
-  const phase2 = REPORT_TYPES.filter((t) => t.type !== "discovery").map((t) => {
+  const ran = !!p.workflow?.stages.find((x) => x.key === "execution")?.current_version;
+  const phase4 = REPORT_TYPES.filter((t) => t.phase === 4).map((t) => {
+    const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
+    return { ...t, versions, latest: versions[0], unavailable: !ran && !versions.length ? "Needs a test run" : null };
+  });
+  const phase5 = REPORT_TYPES.filter((t) => t.phase === 5).map((t) => {
+    const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
+    return { ...t, versions, latest: versions[0] };
+  });
+  const phase2 = REPORT_TYPES.filter((t) => t.type !== "discovery" && !t.phase).map((t) => {
     const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
     const unavailable =
       t.type === "test_plan" && !gateApproved(stages.g4)
@@ -81,7 +94,9 @@ export default function ReportsPage() {
           ? "Needs the Test Strategy"
           : t.type === "requirements_spec" && !stages.req?.current_version
             ? "Needs requirements"
-            : null;
+            : isPhase3Report(t.type) && !stages.design?.current_version
+              ? "Needs test cases"
+              : null;
     return { ...t, versions, latest: versions[0], unavailable };
   });
 
@@ -99,6 +114,19 @@ export default function ReportsPage() {
       toast(`Couldn’t generate the report. ${errorMessage(err)}`, "error");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function generateDraft(type: ReportType) {
+    setDrafting(type);
+    try {
+      await api(`/projects/${p.id}/reports`, { body: { report_type: type } });
+      toast("Creating a draft from the current version. It appears here when it’s ready.", "info");
+      await reports.mutate();
+    } catch (err) {
+      toast(`Couldn’t create the draft. ${errorMessage(err)}`, "error");
+    } finally {
+      setDrafting(null);
     }
   }
 
@@ -190,12 +218,15 @@ export default function ReportsPage() {
         )}
       </Card>
       <Card>
-        <CardHeader title="Requirements, strategy and plan" description="Frozen versions are created when Gate 3 and Gate 4 are approved and when the Test Plan is written." />
+        <CardHeader
+          title="Requirements, strategy, plan and test design"
+          description="Frozen versions are created when Gates 3, 4 and 5 are approved and when the Test Plan is written."
+        />
         {!reports.data ? (
           <LoadingBlock label="Loading reports…" />
         ) : (
           <>
-            <Table label="Phase 2 reports">
+            <Table label="Phase 2 and 3 reports">
               <THead>
                 <tr>
                   <Th>Report</Th>
@@ -228,8 +259,25 @@ export default function ReportsPage() {
                         <span className="text-fg-muted">Not available yet</span>
                       )}
                     </Td>
-                    <Td>{t.latest ? (t.latest.stage_run_version ? `${t.source} v${t.latest.stage_run_version}` : "—") : (t.unavailable ?? "—")}</Td>
-                    <Td className="text-right">{t.latest && t.latest.status === "ready" ? <DownloadMenu report={t.latest} name={t.name} host={host} /> : "—"}</Td>
+                    <Td>
+                      {t.latest
+                        ? t.latest.stage_run_version
+                          ? `${isPhase3Report(t.type) ? `${t.source} ${t.latest.stage_run_version}` : `${t.source} v${t.latest.stage_run_version}`}${t.gate === "G5" && t.latest.approval?.status === "approved" ? " · Gate 5" : ""}`
+                          : "—"
+                        : t.unavailable
+                          ? `Not available yet · ${t.unavailable}`
+                          : "—"}
+                    </Td>
+                    <Td className="text-right">
+                      <span className="inline-flex flex-wrap justify-end gap-2">
+                        {isPhase3Report(t.type) && !t.unavailable && role !== "viewer" && role !== null && (!t.latest || t.latest.is_latest_source === false) && (
+                          <Button size="sm" variant="secondary" onClick={() => void generateDraft(t.type)} loading={drafting === t.type}>
+                            Generate draft<span className="sr-only"> of the {t.name}</span>
+                          </Button>
+                        )}
+                        {t.latest && t.latest.status === "ready" ? <DownloadMenu report={t.latest} name={t.name} host={host} /> : !isPhase3Report(t.type) || t.unavailable ? "—" : null}
+                      </span>
+                    </Td>
                   </Tr>
                 ))}
               </TBody>
@@ -257,10 +305,138 @@ export default function ReportsPage() {
           </>
         )}
       </Card>
+      <Card>
+        <CardHeader title="Test execution and defects" description="A frozen Test Execution Report is created when each run finishes. Causes are hypotheses unless a person confirmed them." />
+        {!reports.data ? (
+          <LoadingBlock label="Loading reports…" />
+        ) : (
+          <Table label="Execution and defect reports">
+            <THead>
+              <tr>
+                <Th>Report</Th>
+                <Th>Latest</Th>
+                <Th>Status</Th>
+                <Th srOnly>Actions</Th>
+              </tr>
+            </THead>
+            <TBody>
+              {phase4.map((t) => (
+                <Tr key={t.type}>
+                  <Td rowHeader>
+                    {t.latest ? (
+                      <Link href={`/projects/${p.id}/reports/${t.slug}`} className="text-navy-700 underline underline-offset-2">
+                        {t.name}
+                      </Link>
+                    ) : (
+                      t.name
+                    )}
+                  </Td>
+                  <Td className="tabular-nums">{t.latest ? `Version ${t.latest.version}${t.latest.run_key ? ` · ${t.latest.run_key}` : t.type === "execution" ? " · latest per test case" : ""}` : "—"}</Td>
+                  <Td>
+                    {t.unavailable ? (
+                      <span className="text-fg-muted">Not available yet · {t.unavailable}</span>
+                    ) : t.latest ? (
+                      <StatusPill
+                        status={t.latest.status === "failed" ? "failed" : t.latest.status === "rendering" ? "running" : t.latest.approval?.status === "draft" ? "draft" : "approved"}
+                        label={t.latest.status === "rendering" ? "Preparing" : t.latest.status === "failed" ? "Failed" : t.latest.approval?.status === "draft" ? "Draft · Gate 8 waiting" : "Ready"}
+                      />
+                    ) : (
+                      <span className="text-fg-muted">No version yet</span>
+                    )}
+                  </Td>
+                  <Td className="text-right">
+                    <span className="inline-flex flex-wrap justify-end gap-2">
+                      {!t.unavailable && role !== "viewer" && role !== null && (
+                        <Button size="sm" variant="secondary" onClick={() => void generateDraft(t.type)} loading={drafting === t.type}>
+                          {t.type === "execution" ? "Generate (latest result per test case)" : "Generate"}
+                          <span className="sr-only"> {t.name}</span>
+                        </Button>
+                      )}
+                      {t.latest && t.latest.status === "ready" && <DownloadMenu report={t.latest} name={t.name} host={host} />}
+                    </span>
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        )}
+      </Card>
+      <Card>
+        <CardHeader title="Non-functional" description="A frozen report is created when each load test or check finishes." />
+        {!reports.data ? (
+          <LoadingBlock label="Loading reports…" />
+        ) : (
+          <>
+            <Table label="Non-functional reports">
+              <THead>
+                <tr>
+                  <Th>Report</Th>
+                  <Th>Latest</Th>
+                  <Th>Status</Th>
+                  <Th srOnly>Actions</Th>
+                </tr>
+              </THead>
+              <TBody>
+                {phase5.map((t) => (
+                  <Tr key={t.type}>
+                    <Td rowHeader>
+                      {t.latest ? (
+                        <Link href={`/projects/${p.id}/reports/${t.slug}`} className="text-navy-700 underline underline-offset-2">
+                          {t.name}
+                        </Link>
+                      ) : (
+                        t.name
+                      )}
+                    </Td>
+                    <Td className="tabular-nums">{t.latest ? `Version ${t.latest.version}${t.latest.run_key ? ` · ${t.latest.run_key}` : ""}` : "—"}</Td>
+                    <Td>
+                      {!t.latest ? (
+                        <span className="text-fg-muted">Not available yet · {t.unavailable}</span>
+                      ) : (
+                        <StatusPill
+                          status={t.latest.status === "failed" ? "failed" : t.latest.status === "rendering" ? "running" : "approved"}
+                          label={t.latest.status === "rendering" ? "Preparing" : t.latest.status === "failed" ? "Failed" : "Ready"}
+                        />
+                      )}
+                    </Td>
+                    <Td className="text-right">
+                      <span className="inline-flex flex-wrap justify-end gap-2">
+                        {t.latest && role !== "viewer" && role !== null && (
+                          <Button size="sm" variant="secondary" onClick={() => void generateDraft(t.type)} loading={drafting === t.type}>
+                            Generate<span className="sr-only"> {t.name} from the latest {t.source.toLowerCase()}</span>
+                          </Button>
+                        )}
+                        {t.latest && t.latest.status === "ready" ? <DownloadMenu report={t.latest} name={t.name} host={host} /> : null}
+                      </span>
+                    </Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+            {phase5
+              .filter((t) => t.versions.length > 1)
+              .map((t) => (
+                <div key={t.type} className="border-t border-line px-5 py-3">
+                  <Disclosure label={`${t.name}: earlier (${t.versions.length - 1})`}>
+                    <ul className="mt-2 space-y-1 text-body">
+                      {t.versions.slice(1).map((r) => (
+                        <li key={r.id} className="flex flex-wrap items-center gap-2">
+                          <Link href={`/projects/${p.id}/reports/${t.slug}?version=${r.version}`} className="text-navy-700 underline underline-offset-2">
+                            Version {r.version}
+                            {r.run_key ? ` · ${r.run_key}` : ""}
+                          </Link>
+                          <span className="text-fg-muted">{fmtDateTime(r.created_at)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Disclosure>
+                </div>
+              ))}
+          </>
+        )}
+      </Card>
       <Card className="px-5 py-4">
-        <p className="text-body text-fg-muted">
-          More reports arrive with later phases: Test Case Specification and Traceability Matrix in Phase 3; execution and defect reports in Phase 4; release readiness in Phase 5.
-        </p>
+        <p className="text-body text-fg-muted">Test Completion and Release Readiness reports arrive in Phase 6.</p>
       </Card>
     </div>
   );

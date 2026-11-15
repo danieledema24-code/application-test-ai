@@ -11,6 +11,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.performance.limits import DEFAULT_HARD_CAP, LoadLimits, cap_violations
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 DEV_SECRET_KEY = "dev-insecure-secret-key-change-me"  # noqa: S105 - placeholder refused in production
 
@@ -47,6 +49,17 @@ class Settings(BaseSettings):
     ai_model: str = "claude-opus-5-5"
     ai_max_output_tokens: int = 8000
     ai_timeout_s: float = 120.0
+
+    # Phase 4 (P4-01): the automation/ Node toolkit and the Node binary that runs it.
+    automation_dir: Path = BACKEND_DIR.parent / "automation"
+    node_binary: str = "node"
+    toolkit_timeout_s: float = 120.0
+
+    # Phase 5 (decision D18): platform hard cap on load. Startup is refused above the compiled maximum
+    # (app.domain.performance.limits.COMPILED_MAX, 200 / 200 / 30 min) whatever the environment says.
+    load_hard_cap_vus: int = DEFAULT_HARD_CAP.vus
+    load_hard_cap_rps: int = DEFAULT_HARD_CAP.rps
+    load_hard_cap_duration_s: int = DEFAULT_HARD_CAP.duration_s
 
     # Discovery limits (lead decisions: default 30 / max 100 pages, 20 min, 2 concurrent per org).
     scan_default_max_pages: int = 30
@@ -93,7 +106,16 @@ class Settings(BaseSettings):
                 raise ValueError("ENCRYPTION_KEY is required in production")
         if self.scan_default_max_pages > self.scan_max_pages_cap:
             raise ValueError("SCAN_DEFAULT_MAX_PAGES cannot exceed SCAN_MAX_PAGES_CAP")
+        issues = cap_violations(self.load_hard_cap)
+        if issues:
+            raise ValueError("; ".join(v.message for v in issues))
         return self
+
+    @property
+    def load_hard_cap(self) -> LoadLimits:
+        return LoadLimits(
+            vus=self.load_hard_cap_vus, rps=self.load_hard_cap_rps, duration_s=self.load_hard_cap_duration_s
+        )
 
     def encryption_key_bytes(self) -> bytes:
         if self.encryption_key is not None:

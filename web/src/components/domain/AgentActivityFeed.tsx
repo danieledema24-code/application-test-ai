@@ -41,6 +41,7 @@ function evidenceOf(e: AgentEvent): EvidenceItem[] {
   const d = (e.data ?? {}) as Record<string, unknown>;
   const out: EvidenceItem[] = [];
   const shot = d.screenshot as Partial<EvidenceLinkT> | undefined;
+  // The drawer reads the evidence record (with `removed`) before showing the file; the link only labels it.
   if (shot && typeof shot.id === "string") out.push({ id: shot.id, link: shot.content_url ? ({ mime: "image/png", kind: "screenshot", size: 0, captured_at: e.created_at, ...shot } as EvidenceLinkT) : null });
   if (typeof d.evidence_id === "string") out.push({ id: d.evidence_id });
   if (Array.isArray(d.evidence_ids)) for (const x of d.evidence_ids) if (typeof x === "string") out.push({ id: x });

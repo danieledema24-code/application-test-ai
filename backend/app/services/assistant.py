@@ -41,10 +41,13 @@ from app.services import gates
 from app.services import serialize_p2 as out
 from app.services.counters import next_key
 
-KEY_RE = re.compile(r"\b(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT)-\d{2,6}\b")
+KEY_RE = re.compile(
+    r"\b(?:(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT|TCOND|TC|TD|DEF|APR|PERF|PRF)-\d{2,6}"
+    r"|(?:RUN|A11Y|SEC)-\d{2,6}(?:-\d{2,4})?)\b"
+)
 AI_OFF_NOTICE = "Free-form answers need AI, which isn't configured. Built-in questions still work."
 DEFAULT_AI_TURNS_PER_DAY = 200
-REGENERABLE = ("requirements", "readiness_criteria", "test_strategy", "test_plan")
+REGENERABLE = ("requirements", "readiness_criteria", "test_strategy", "test_plan", "test_design")
 
 
 @dataclass(frozen=True)
@@ -83,7 +86,53 @@ INTENTS: dict[str, IntentSpec] = {
         IntentSpec("explain_gate", "Explain a gate", "Why can't I approve G3?", _schema(gate="string")),
         IntentSpec("list_access_gaps", "Access gaps", "Which areas couldn't be reached?", _schema()),
         IntentSpec("risk_summary", "Risk summary", "What are the highest risks?", _schema()),
-        IntentSpec("execution_results", "Test results", "Did the tests pass?", _schema()),
+        IntentSpec("execution_results", "Did the tests pass?", "Did the tests pass?", _schema()),
+        IntentSpec(
+            "explain_failed_test", "Explain a failed test", "Explain the failed test TC-0019", _schema(key="string")
+        ),
+        IntentSpec("analyse_defect", "Analyse a defect", "Analyse DEF-0001", _schema(key="string")),
+        IntentSpec(
+            "list_defects",
+            "List defects",
+            "Which defects are still drafts?",
+            _schema(status="string", severity="string"),
+        ),
+        IntentSpec("automation_status", "Automation status", "Which scripts can't run?", _schema()),
+        IntentSpec(
+            "propose_rerun",
+            "Re-run tests",
+            "Re-run the failed tests",
+            {"type": "object", "properties": {"only_failed": {"type": "boolean"}, "case_keys": {"type": "array"}}},
+            creates_proposal=True,
+        ),
+        IntentSpec("performance_summary", "Is the site fast enough?", "Is the site fast enough?", _schema()),
+        IntentSpec("accessibility_summary", "Can everyone use the site?", "Can everyone use the site?", _schema()),
+        IntentSpec(
+            "security_summary",
+            "Is the site missing basic protections?",
+            "Is the site missing basic protections?",
+            _schema(),
+        ),
+        IntentSpec("explain_finding", "Explain a finding", "Explain A11Y-0001-01", _schema(key="string")),
+        IntentSpec(
+            "propose_scan", "Check accessibility", "Check accessibility", _schema(kind="string"), creates_proposal=True
+        ),
+        IntentSpec(
+            "propose_performance_run",
+            "Plan a load test",
+            "Plan a load test",
+            _schema(profile="string"),
+            creates_proposal=True,
+        ),
+        IntentSpec(
+            "propose_script_improvement",
+            "Improve existing test scripts",
+            "Improve the script for TC-0019",
+            {"type": "object", "properties": {"test_case_keys": {"type": "array"}}},
+            creates_proposal=True,
+            requires_ai=True,
+            available=False,
+        ),
         IntentSpec(
             "propose_negative_criteria",
             "Add negative criteria",
@@ -104,6 +153,54 @@ INTENTS: dict[str, IntentSpec] = {
             "Regenerate the requirements",
             _schema(stage="string", reason="string"),
             creates_proposal=True,
+        ),
+        IntentSpec(
+            "list_test_cases",
+            "List test cases",
+            "Which test cases are still in draft?",
+            _schema(
+                status="string",
+                technique="string",
+                test_type="string",
+                priority="string",
+                requirement_key="string",
+                suite="string",
+                lint="string",
+            ),
+        ),
+        IntentSpec("explain_test_case", "Explain a test case", "Explain TC-0001", _schema(key="string")),
+        IntentSpec("traceability_for", "Trace an item", "What tests cover REQ-0001?", _schema(key="string")),
+        IntentSpec(
+            "propose_negative_cases",
+            "Generate more negative test cases",
+            "Generate more negative test cases for REQ-0002",
+            _schema(requirement_key="string", feature_key="string"),
+            creates_proposal=True,
+        ),
+        IntentSpec(
+            "propose_regression_suite",
+            "Generate regression scenarios",
+            "Build a regression set for the high risks",
+            _schema(scope="string"),
+            creates_proposal=True,
+        ),
+        IntentSpec(
+            "propose_test_case_update",
+            "Update test cases",
+            "Make the steps of TC-0003 more specific",
+            {"type": "object", "properties": {"test_case_keys": {"type": "array"}, "instruction": {"type": "string"}}},
+            creates_proposal=True,
+            requires_ai=True,
+            available=False,
+        ),
+        IntentSpec(
+            "propose_missing_test_cases",
+            "Suggest missing test cases",
+            "What test cases are missing for REQ-0004?",
+            {"type": "object", "properties": {"requirement_keys": {"type": "array"}, "focus": {"type": "string"}}},
+            creates_proposal=True,
+            requires_ai=True,
+            available=False,
         ),
         IntentSpec(
             "propose_requirement_update",
@@ -138,9 +235,8 @@ INTENTS: dict[str, IntentSpec] = {
 }
 
 LATER_PHASE = [
-    {"label": "Design test cases", "available_from_phase": 3, "needs": "Test design (Phase 3)"},
-    {"label": "Run tests and explain failures", "available_from_phase": 4, "needs": "Test execution (Phase 4)"},
-    {"label": "Performance, accessibility and security checks", "available_from_phase": 5, "needs": "Phase 5"},
+    {"label": "Release readiness and Test Completion Report", "available_from_phase": 6, "needs": "Phase 6"},
+    {"label": "What changed since the last scan", "available_from_phase": 6, "needs": "Phase 6"},
 ]
 
 
@@ -158,6 +254,7 @@ def capabilities(ctx: AppContext) -> dict[str, Any]:
                 "params_schema": i.params_schema,
                 "creates_proposal": i.creates_proposal,
                 "requires_ai": i.requires_ai,
+                "needs_ai": i.requires_ai,  # listed under "Needs AI"; `available` says whether it runs now
                 "available": i.available and (ai or not i.requires_ai),
                 "requires_role": i.requires_role,
             }
@@ -214,7 +311,13 @@ async def _current_run(s: AsyncSession, project_id: uuid.UUID, key: StageKey) ->
 
 async def data_versions(s: AsyncSession, project_id: uuid.UUID) -> dict[str, int]:
     outv: dict[str, int] = {}
-    for key in (StageKey.discovery, StageKey.requirements, StageKey.readiness_criteria, StageKey.test_strategy):
+    for key in (
+        StageKey.discovery,
+        StageKey.requirements,
+        StageKey.readiness_criteria,
+        StageKey.test_strategy,
+        StageKey.test_design,
+    ):
         run = await _current_run(s, project_id, key)
         if run is not None:
             outv[key.value] = run.version
@@ -305,6 +408,20 @@ async def resolve_keys(s: AsyncSession, project_id: uuid.UUID, keys: set[str]) -
             )
         ).scalars():
             found[p.key] = {"type": "proposal", "id": str(p.id), "key": p.key, "label": p.summary[:80], "path": None}
+    if {"TC", "TCOND", "TD"} & set(by_prefix):
+        from app.services import testdesign as tds
+
+        drun = await tds.current_run(s, project_id)
+        if drun is not None:
+            for tc in await tds.cases_of(s, drun.id):
+                if tc.key in keys:
+                    found[tc.key] = _ref(project_id, "test_case", tc.id, tc.key, tc.title)
+            for cond in await tds.conditions_of(s, drun.id):
+                if cond.key in keys:
+                    found[cond.key] = _ref(project_id, "test_condition", cond.id, cond.key, cond.title)
+            for item in await tds.data_of(s, drun.id):
+                if item.key in keys:
+                    found[item.key] = _ref(project_id, "test_data", item.id, item.key, item.name)
     for prefix in ("TS", "TP"):
         if prefix in by_prefix:
             if prefix == "TS":
@@ -317,6 +434,14 @@ async def resolve_keys(s: AsyncSession, project_id: uuid.UUID, keys: set[str]) -
                 plan = await current_plan(s, project_id)
                 if plan is not None and plan.key in keys:
                     found[plan.key] = _ref(project_id, "test_plan", plan.id, plan.key, "Test Plan")
+    if {"RUN", "DEF", "APR"} & set(by_prefix):
+        from app.services import assistant_p4
+
+        found.update(await assistant_p4.resolve(s, project_id, keys))
+    if {"A11Y", "SEC", "PERF", "PRF"} & set(by_prefix):
+        from app.services import assistant_p5
+
+        found.update(await assistant_p5.resolve(s, project_id, keys))
     return found
 
 
@@ -334,6 +459,17 @@ async def citation_guard(s: AsyncSession, project_id: uuid.UUID, ans: Answer) ->
         ans.notice("unresolved_citation", f"Removed {len(bad)} reference(s) that don't exist in this project.")
     keep = {m.group(0) for m in KEY_RE.finditer(ans.content)}
     ans.citations = [c for c in ans.citations if c["key"] in keep]
+
+
+def security_tail(ans: Answer, question: str) -> None:
+    """D19: every answer to a security question (built-in or AI) ends with the fixed security statement."""
+    from app.security.passive_rules import STATEMENT
+
+    routed = route(question) if question else None
+    about_security = ans.intent == "security_summary" or (routed is not None and routed[0] == "security_summary")
+    about_security |= ans.intent == "explain_finding" and "SEC-" in ans.content
+    if about_security and not ans.content.rstrip().endswith(STATEMENT):
+        ans.content = f"{ans.content.rstrip()}\n{STATEMENT}"
 
 
 # ---------------------------------------------------------------- deterministic intents
@@ -453,7 +589,9 @@ async def _coverage(t: Turn, _p: dict[str, Any]) -> Answer:
     if untested:
         shown = ", ".join(a.cite(_ref(t.project_id, "risk", r.id, r.key, r.title)) for r in untested[:10])
         lines.append(f"Risks without a test type: {shown}.")
-    lines.append("Test case coverage arrives with test design in Phase 3.")
+    from app.services import assistant_p3
+
+    lines += await assistant_p3.coverage_v2(t, a)
     a.content = "\n".join(lines)
     target = without[0] if without else reqs[0]
     a.follow_ups = [_follow("propose_negative_criteria", requirement_key=target.key)]
@@ -540,10 +678,8 @@ async def _explain_gate(t: Turn, p: dict[str, Any]) -> Answer:
         gate = GateKey(raw)
     except ValueError:
         return Answer(f"{raw} isn't a quality gate.", "explain_gate")
-    if gate not in (GateKey.G3, GateKey.G4):
-        return Answer(
-            f"In Phase 2 I can explain G3 and G4. {gate.value} is shown on the workflow page.", "explain_gate"
-        )
+    if gate not in (GateKey.G3, GateKey.G4, GateKey.G5):
+        return Answer(f"I can explain G3, G4 and G5. {gate.value} is shown on the workflow page.", "explain_gate")
     from app.db.models import Project
 
     project = (await t.s.execute(select(Project).where(Project.id == t.project_id))).scalar_one()
@@ -601,7 +737,7 @@ async def _risk_summary(t: Turn, _p: dict[str, Any]) -> Answer:
 
 async def _execution(t: Turn, _p: dict[str, Any]) -> Answer:
     a = Answer("No tests have been run for this project, so there are no results to report.", "execution_results")
-    a.notice("no_execution_data", "Test execution arrives in Phase 4; I never report results that don't exist.")
+    a.notice("no_execution_data", "I never report results that don't exist.")
     return a
 
 
@@ -788,6 +924,47 @@ HANDLERS = {
 }
 
 
+def _register_p3() -> None:
+    from app.services import assistant_p3 as p3
+
+    HANDLERS.update(
+        {
+            "list_test_cases": p3.list_test_cases,
+            "explain_test_case": p3.explain_test_case,
+            "traceability_for": p3.traceability_for,
+            "propose_negative_cases": p3.propose_negative_cases,
+            "propose_regression_suite": p3.propose_regression_suite,
+        }
+    )
+    from app.services import assistant_p4 as p4
+
+    HANDLERS.update(
+        {
+            "execution_results": p4.execution_results,
+            "explain_failed_test": p4.explain_failed_test,
+            "analyse_defect": p4.analyse_defect,
+            "list_defects": p4.list_defects,
+            "automation_status": p4.automation_status,
+            "propose_rerun": p4.propose_rerun,
+        }
+    )
+    from app.services import assistant_p5 as p5
+
+    HANDLERS.update(
+        {
+            "performance_summary": p5.performance_summary,
+            "accessibility_summary": p5.accessibility_summary,
+            "security_summary": p5.security_summary,
+            "explain_finding": p5.explain_finding,
+            "propose_scan": p5.propose_scan,
+            "propose_performance_run": p5.propose_performance_run,
+        }
+    )
+
+
+_register_p3()
+
+
 def route(text: str) -> tuple[str, dict[str, Any]] | None:
     """Keyword routing for free text when AI is off (or as fallback)."""
     t = text.lower()
@@ -796,12 +973,46 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
         return "refuse_gate", {"gate": _gate_in(text)}
     req = re.search(r"\bREQ-\d{2,6}\b", text, re.IGNORECASE)
     gate = re.search(r"\bG([1-9])\b", text, re.IGNORECASE)
+    any_key = re.search(r"\b(?:REQ|AC|TCOND|TC|RISK)-\d{2,6}\b", text, re.IGNORECASE)
+    tc = re.search(r"\bTC-\d{2,6}\b", text, re.IGNORECASE)
+    feat = re.search(r"\bFEAT-\d{2,6}\b", text, re.IGNORECASE)
+    run_key = re.search(r"\bRUN-\d{2,6}-\d{2,4}\b", text, re.IGNORECASE)
+    def_key = re.search(r"\bDEF-\d{2,6}\b", text, re.IGNORECASE)
+    nf = _route_nf(text, t)
+    if nf is not None:
+        return nf
+    if re.search(r"\bre-?run\b|\brun (?:the )?(?:failed|failing) tests?\b", t):
+        keys = [m.upper() for m in re.findall(r"\bTC-\d{2,6}\b", text, re.IGNORECASE)]
+        return "propose_rerun", ({"case_keys": keys} if keys else {"only_failed": True})
+    if run_key or (re.search(r"\bexplain\b|\bwhy\b", t) and re.search(r"\bfail", t)):
+        key = run_key.group(0).upper() if run_key else (tc.group(0).upper() if tc else None)
+        return "explain_failed_test", {"key": key} if key else {}
+    if def_key:
+        return "analyse_defect", {"key": def_key.group(0).upper()}
+    if re.search(r"\bdefects?\b|\bbugs?\b", t):
+        status = next((st for st in ("draft", "confirmed", "fixed", "verified", "rejected", "closed") if st in t), None)
+        return "list_defects", {"status": status} if status else {}
+    if re.search(r"\bscripts?\b|\bautomat", t) and not req:
+        return "automation_status", {}
+    if "negative" in t and ("test case" in t or "tests" in t or "cases" in t) and (req or feat):
+        param = {"requirement_key": req.group(0).upper()} if req else {"feature_key": feat.group(0).upper()}  # type: ignore[union-attr]
+        return "propose_negative_cases", param
+    if "regression" in t:
+        scope = "changed_since_g5" if "changed" in t else ("all" if re.search(r"\ball\b", t) else "high_risk")
+        return "propose_regression_suite", {"scope": scope}
+    if any_key and re.search(r"\btrac|\bcover(s|ed)?\b|tested by", t):
+        return "traceability_for", {"key": any_key.group(0).upper()}
+    if tc:
+        return "explain_test_case", {"key": tc.group(0).upper()}
     if "negative" in t and req:
         return "propose_negative_criteria", {"requirement_key": req.group(0).upper()}
     if "reassess" in t and "risk" in t:
         return "propose_risk_reassessment", {}
     if "regenerate" in t:
-        stage = next((sx for sx in REGENERABLE if sx.replace("_", " ") in t or sx.split("_")[-1] in t), "requirements")
+        stage = next(
+            (sx for sx in REGENERABLE if sx.replace("_", " ") in t or sx.split("_")[-1] in t),
+            "test_design" if "test case" in t else "requirements",
+        )
         return "propose_regenerate", {"stage": stage}
     if req:
         return "explain_requirement", {"key": req.group(0).upper()}
@@ -818,8 +1029,11 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
         return "risk_summary", {}
     if "access" in t or "couldn't reach" in t or "sign in" in t or "login" in t:
         return "list_access_gaps", {}
-    if "coverage" in t or "criteria" in t:
+    if "coverage" in t or "criteria" in t or "uncovered" in t:
         return "coverage_summary", {}
+    if "test case" in t:
+        status = "draft" if "draft" in t else ("approved" if "approved" in t else None)
+        return "list_test_cases", {"status": status} if status else {}
     if "draft" in t:
         return "list_requirements", {"status": "draft"}
     if "unverified" in t:
@@ -830,6 +1044,33 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
         return "workflow_status", {}
     if "help" in t or "what can you" in t:
         return "help", {}
+    return None
+
+
+def _route_nf(text: str, t: str) -> tuple[str, dict[str, Any]] | None:
+    """Non-functional questions (P5-07): finding keys, load tests, accessibility and security."""
+    finding = re.search(r"\b(?:A11Y|SEC)-\d{2,6}-\d{2,4}\b", text, re.IGNORECASE)
+    if finding:
+        return "explain_finding", {"key": finding.group(0).upper()}
+    prf = re.search(r"\bPRF-\d{2,6}\b", text, re.IGNORECASE)
+    if re.search(r"\b(plan|run|start|request)\b.*\bload test\b", t) or prf:
+        return "propose_performance_run", {"profile": prf.group(0).upper()} if prf else {}
+    if re.search(r"\b(check|scan|run)\b.*\b(accessibility|a11y)\b", t) and not re.search(r"\?\s*$", t):
+        return "propose_scan", {"kind": "accessibility"}
+    if re.search(r"\b(run|start)\b.*\bsecurity (check|scan)\b", t):
+        return "propose_scan", {"kind": "security"}
+    if re.search(r"\bPERF-\d{2,6}\b", text, re.IGNORECASE) or re.search(
+        r"\bfast enough\b|\bperformance\b|\bload test|\bslow\b|\bresponse time", t
+    ):
+        return "performance_summary", {}
+    if re.search(r"\bA11Y-\d{2,6}\b", text, re.IGNORECASE) or re.search(
+        r"\baccessib|\bwcag\b|can everyone use|screen reader", t
+    ):
+        return "accessibility_summary", {}
+    if re.search(r"\bSEC-\d{2,6}\b", text, re.IGNORECASE) or re.search(
+        r"\bsecur|\bprotections?\b|\bheaders?\b|\bhttps\b|\bcookies?\b", t
+    ):
+        return "security_summary", {}
     return None
 
 

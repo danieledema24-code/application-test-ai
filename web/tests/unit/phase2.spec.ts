@@ -266,7 +266,7 @@ test.describe("lifecycle and navigation (design P2 §3.2, §12)", () => {
 
   test("sidebar badge priority: Review, then Out of date, then proposals", () => {
     const st = [{ key: "requirements", status: "awaiting_approval", gate: { key: "G3", status: "pending" } }];
-    expect(sectionBadge("requirements", st)).toEqual({ text: "Review", srText: "Gate 3 waiting for your review" });
+    expect(sectionBadge("requirements", st)).toEqual({ text: "Review", srText: "Gate 3 waiting for approval" });
     expect(sectionBadge("requirements", [{ key: "requirements", status: "stale", gate: null }])).toEqual({ text: "Out of date", srText: "out of date" });
     expect(sectionBadge("assistant", [], 2)).toEqual({ text: "2", srText: "2 proposals to review" });
     expect(sectionBadge("assistant", [], 0)).toBeNull();

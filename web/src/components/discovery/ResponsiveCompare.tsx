@@ -1,5 +1,6 @@
 "use client";
 
+import { RemovedEvidence, removedText } from "@/components/domain/RemovedEvidence";
 import { useCallback, useEffect, useState } from "react";
 import type { PageSummary, ResponsiveView } from "@/lib/contract";
 import { pathOf } from "@/lib/url";
@@ -28,6 +29,7 @@ function PageCompare({ page, onlyDiffs, onResult }: { page: PageSummary; onlyDif
   const views = orderViews(Object.values(data?.responsive ?? {}));
   const obs = observations(views);
   const hasDiff = obs.length > 0;
+  const removed = views.some((v) => removedText(v.screenshot));
   useEffect(() => {
     if (data) onResult(page.id, hasDiff);
   }, [data, hasDiff, page.id, onResult]);
@@ -43,7 +45,9 @@ function PageCompare({ page, onlyDiffs, onResult }: { page: PageSummary; onlyDif
       <div className="mt-3 grid gap-4 md:grid-cols-2">
         {views.map((v) => (
           <figure key={v.viewport} className="overflow-hidden rounded-md border border-line bg-elevated">
-            {v.screenshot ? (
+            {removedText(v.screenshot) ? (
+              <RemovedEvidence text={removedText(v.screenshot)!} className="h-40 rounded-none" />
+            ) : v.screenshot ? (
               // eslint-disable-next-line @next/next/no-img-element -- signed, short-lived evidence URL
               <img src={v.screenshot.content_url} alt={`Screenshot of ${title} (${pathOf(data.url)}), ${v.viewport}`} className="max-h-96 w-full bg-white object-contain object-top" />
             ) : (
@@ -54,13 +58,15 @@ function PageCompare({ page, onlyDiffs, onResult }: { page: PageSummary; onlyDif
         ))}
       </div>
       <ul className="mt-3 space-y-1">
-        {views.length === 0 ? null : obs.length === 0 ? (
+        {views.length === 0 ? null : obs.length === 0 && removed ? (
+          <li className="text-small text-fg-muted">No layout differences were recorded, but the screenshots were removed by the retention policy, so they can&apos;t be compared here.</li>
+        ) : obs.length === 0 ? (
           <li className="text-small text-fg-muted">No layout differences observed.</li>
         ) : (
           obs.map((o) => (
             <li key={o} className="flex flex-wrap items-center gap-2 text-body text-fg">
               {o} <ObservationLabel provenance="observed" />
-              <EvidenceLinks items={linksToItems(views.map((v) => v.screenshot))} subject={`${o} on ${pathOf(data.url)}`} />
+              <EvidenceLinks items={linksToItems(views.map((v) => (removedText(v.screenshot) ? null : v.screenshot)))} subject={`${o} on ${pathOf(data.url)}`} />
             </li>
           ))
         )}

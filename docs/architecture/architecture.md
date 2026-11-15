@@ -95,7 +95,7 @@ Shared error handling for every agent:
 | **D. Test Design** | 3 | Approved strategy, requirements + AC, discovered forms/constraints | `TestConditions[]`, `TestCases[§7 fields]`, `TestDataSets[]` | `artefact.read`, `kb.read`, `evidence.read` | Each case links ≥1 requirement (else flagged orphan); BVA/EP values derived in code from discovered `min/max/maxlength/pattern/required`; duplicate detection; every step has an expected result; Gate 5 lint. |
 | **E. Test Automation Engineer** | 4 | Approved, automatable test cases; page model (discovered elements + locator candidates); conventions | `AutomationBundle{page_objects[], fixtures, factories, specs[{test_case_id, path, code}], config, ci_templates}` | `ts.validate` (tsc, eslint, spec-guard, secret scan), `locator.verify` (read-only, policy-checked), `artefact.read` | Static validation must pass; spec titles carry test case ID; no `waitForTimeout`, no hardcoded secrets, locator preference order (getByRole > Label > Placeholder > Text > TestId > CSS); up to 3 repair loops, then rule-based translator (ported `scriptgen`). |
 | **F. Test Execution** | 4 | Gate-7-approved `RunRequest{script_versions[], environment, browsers[], viewports[], workers, retries, destructive_allowed}` | `ExecutionRun`, `ExecutionResults[]` with evidence (trace, video, screenshots, console, network) | `runner.execute` (sandboxed subprocess), `evidence.write` | No LLM. Results only from Playwright JSON reporter; never synthesised; script version pinned per result. |
-| **G. Performance Testing** | 5 | Approved `PerfProfile{type, vus, ramp, duration, thresholds, max_rps, target}` + authorisation | `k6 script`, `PerformanceRun{p50/p90/p95/p99, rps, error_rate, thresholds[]}` | `k6.generate`, `k6.run` | Profile ≤ org hard ceilings (code-enforced); target must be an authorised project URL; auto-abort on error-rate/latency kill switch. |
+| **G. Performance Testing** | 5 | Discovered public pages, approved requirements (numeric thresholds), org load ceiling; for runs: a `PerfProfile{type, stages, vus, max_rps, think_time, targets[], thresholds[]}` snapshot + a `load_test` approval for that run (decision D18) | Draft profiles; `PerformanceRun{p50/p90/p95/p99, rps, error_rate, status codes, thresholds[]}`; downloadable k6 script (not run) | `loadgen.run` (built-in Node generator `qa perf` in `automation/`, decision D17), `loadgen.export_k6`, `artefact.read` | GET-only, never signed in, discovered same-host targets only; profile ≤ approved profile ≤ org ceiling (default 20 VUs / 20 RPS / 5 min) ≤ platform hard cap (default 50 / 50 / 10 min), checked at save, request, approval and in the generator; token-bucket `max_rps`; resolve once, connect to the validated IP; kill switch on error rate / latency / unreachable; stop ≤ 2 s. |
 | **H. Defect Analysis** | 4 | Failed/errored results, evidence, history, script, test case | `FailureAnalysis{classification(application_defect, script_defect, selector_failure, test_data_issue, environment_failure, network_failure, flaky, unknown), confidence, evidence_refs, reasoning, heal_suggestions[], defect_draft?}` | `evidence.read`, `artefact.read`, `runner.rerun_once` (flake check) | Defect draft only for `application_defect` and status `draft` until Gate 8; heal suggestion diff rejected if it changes any assertion expected value (AST compare). |
 | **I. QA Reporting & Release Assessment** | 5–6 | All approved artefacts + metrics computed in code | Reports (§17 list), `ReleaseReadiness{recommendation(go/conditional/no_go), exit_criteria_eval[], open_risks[], residual_risk}` | `artefact.read`, `metrics.compute`, `report.render` | All numbers come from `metrics.compute`; LLM writes narrative only, with placeholders for figures; recommendation is advisory and needs Gate 9. |
 
@@ -121,7 +121,9 @@ The **AI QA Assistant** (spec §16, from Phase 2; test-design intents in Phase 3
 | 12 | `failure_analysis` | 19 | H | – | 4 |
 | 13 | `defects_summary` | 20 | H + I | **G8** Defect review | 4 |
 | 14 | `release_readiness` | 21 | I | **G9** Release readiness | 6 |
-| – | `performance` (optional branch after G4) | §9 | G | approval before run | 5 |
+| – | `performance` (optional branch after G4) | §9 | G | `load_test` approval per run (D18) | 5 |
+| – | `accessibility` (optional branch after G2, on demand) | §10 | code (axe + keyboard pass) | – | 5 |
+| – | `security_assessment` (optional branch after G2, on demand; passive only, D19) | §10 | code (passive rule table) | – | 5 |
 
 ### Stage status machine
 
@@ -172,8 +174,8 @@ Rules:
 | G2 Discovery completeness | recommended | yes | Requirements (if set to required) |
 | G3 Requirements review | required | yes | Strategy |
 | G4 Strategy approval | required | yes | Test design; performance branch |
-| G5 Test case quality | recommended (automated lint always runs) | yes | Automation |
-| G6 Script validation | required (static validation always runs) | yes (human part only) | Execution |
+| G5 Test case quality | required (user decision D1, Phase 3; `can_approve`, same as G3/G4; automated lint always runs) | yes | Automation |
+| G6 Script validation | hybrid (user decision D10, Phase 4): static validation (spec-guard, tsc, eslint, secret scan, tags, locator check) always blocks; rule-written scripts that pass need no human sign-off; AI-written scripts need a `can_approve` review | yes (human part only; static validation can never be relaxed) | Execution |
 | G7 Execution authorisation | required | **No** | Any execution against the target |
 | G8 Defect review | required | **No** (spec §11: human confirms application defects) | Defect status `verified` |
 | G9 Release readiness | required | **No** | Release recommendation becoming `final` |
@@ -182,10 +184,10 @@ Additional per-action approvals from spec §19 (destructive actions, external tr
 
 ## 5. Evidence model
 
-- `evidence` row = one immutable captured artefact: `kind ∈ {screenshot, dom_snapshot, aria_snapshot, console_log, network_log, http_response, page_text, trace, video, k6_summary, axe_result, lighthouse_result, report_render}`, `storage_key`, `sha256`, `mime`, `size`, `source_url`, `viewport`, `captured_at`, owning `scan_session_id` / `execution_result_id` / `performance_run_id`.
+- `evidence` row = one immutable captured artefact: `kind ∈ {screenshot, dom_snapshot, aria_snapshot, console_log, network_log, http_response, page_text, trace, video, k6_summary, axe_result, lighthouse_result, report_render, perf_summary, perf_timeseries, security_headers}` (Phase 5 writes `perf_*`, `security_headers` and `axe_result`; `k6_summary` and `lighthouse_result` are reserved and unused: k6 is export-only (D17) and Lighthouse is deferred), `storage_key`, `sha256`, `mime`, `size`, `source_url`, `viewport`, `captured_at`, owning `scan_session_id` / `execution_result_id` / `performance_run_id` / `quality_scan_id`.
 - `EvidenceRef{evidence_id, selector?, excerpt? (≤300 chars), note?}` is embedded (JSON) in every claim-bearing artefact item (feature, journey, requirement, AC, case, defect).
 - Validation rule enforced in code: references must resolve to evidence in the same project; `observed` claims without a resolvable ref are downgraded to `unverified` and the downgrade is logged as a validation issue.
-- Evidence is never deleted by workflow operations (spec §13). Project deletion is a soft archive; hard purge is an admin action (Phase 5) with an audit record.
+- Evidence is never deleted by workflow operations (spec §13). Project deletion is a soft archive; hard purge (P5-05c) is an owner action on archived projects only, with a typed name, a cancellable 24 h delay and an audit record. Organisation retention settings (P5-05c) may delete expired evidence files (videos/traces, screenshots, performance time series), keeping the row's metadata and sha256; reports and audit logs are never purged by retention.
 - Sensitive capture rules: password fields masked in screenshots; DOM snapshots strip `value` attributes of password/hidden inputs; console/network text passes through `redact`.
 
 ## 6. Project knowledge base and memory
@@ -219,13 +221,13 @@ Website content (text, attributes, titles, console messages, uploaded docs) is *
 
 ## 9. Execution, reporting, storage, queue
 
-- **Execution (Phase 4)**: the Python worker writes a Playwright Test project into a per-run temp dir and runs `automation/` (Node) as a subprocess with timeouts, CPU/memory limits (`resource.setrlimit`), restricted env, network policy fixtures (ported from `playwright-project.ts`), JSON reporter. Docker-based sandbox when Docker exists.
-- **Reporting**: report = versioned `qa_reports` row with structured JSON content (source of truth) + rendered files in storage (HTML, PDF via Chromium; DOCX/XLSX/CSV in Phase 5). AI narrative sections are labelled.
+- **Execution (Phase 4)**: the Python worker writes a Playwright Test project into a per-run temp dir and runs `automation/` (Node) as a subprocess with timeouts, CPU/memory limits (`resource.setrlimit`), restricted env, network policy fixtures (ported from `playwright-project.ts`), JSON reporter. The Docker-based sandbox is out of Phase 5 (decision D23) and belongs to the Hosted deployment phase; until then this is a trusted, single-organisation deployment (macOS does not enforce memory rlimits).
+- **Reporting**: report = versioned `qa_reports` row with structured JSON content (source of truth) + rendered files in storage (HTML, PDF via Chromium, JSON, CSV; Phase 5 adds XLSX for tabular reports via `openpyxl` and DOCX for all reports via one generic HTML-subset renderer with `python-docx`, decision D21). AI narrative sections are labelled.
 - **Storage**: `ObjectStorage` protocol (`put`, `get`, `open_stream`, `delete`, `exists`). Keys: `{org_id}/{project_id}/{kind}/{owner_id}/{name}`; path traversal rejected. Files are served only by the API after a tenant check, through short-lived HMAC-signed URLs (`/api/v1/evidence/{id}/content?exp=&sig=`) so `<img>` tags work without putting the session token in URLs.
-- **Queue**: `JobQueue` protocol (`enqueue(kind, payload, *, org_id, project_id, dedupe_key, run_after)`, `cancel(job_id)`, `heartbeat`, `claim`). `SqlJobQueue` stores jobs in the `jobs` table and claims them with an atomic conditional `UPDATE`. The worker runs **inline** (inside the API process, default for local dev, one command) or **separate** (`python -m app.worker`), with the same code. Later: `CeleryJobQueue`/`ArqJobQueue` with Redis, same interface. The job payload carries only ids.
+- **Queue**: `JobQueue` protocol (`enqueue(kind, payload, *, org_id, project_id, dedupe_key, run_after)`, `cancel(job_id)`, `heartbeat`, `claim`). `SqlJobQueue` stores jobs in the `jobs` table and claims them with an atomic conditional `UPDATE`. The worker runs **inline** (inside the API process, default for local dev, one command) or **separate** (`python -m app.worker`), with the same code. Later (Hosted deployment phase, decision D23): `ArqJobQueue`/`CeleryJobQueue` with Redis, same interface. The job payload carries only ids.
 - **Event bus**: `agent_events` rows (monotonic id) are the source of truth; SSE tails them by cursor. That works across processes on SQLite; Redis pub/sub is used as a wake-up signal later.
 
-### docker-compose design (for when Docker is installed)
+### docker-compose design (Hosted deployment phase, decision D23; for when Docker is installed)
 
 ```yaml
 services:

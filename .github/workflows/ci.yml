@@ -1,0 +1,80 @@
+# P5-05d: every push and pull request runs the same checks as `scripts/check.sh`, plus the mocked UI suite.
+# No secrets are needed: AI is off, the database is SQLite in a temp directory, and no external site is contacted
+# (tests use local fixture sites; the demo-shop tests skip when the shop isn't running).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, types, tests and dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.8"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            automation/package-lock.json
+      - name: Install backend
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run playwright install --with-deps chromium
+      - name: Install automation toolkit
+        working-directory: automation
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Install web
+        working-directory: web
+        run: npm ci
+      - name: scripts/check.sh
+        run: scripts/check.sh
+
+  ui-mocked:
+    name: Mocked UI suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Mocked UI tests
+        working-directory: web
+        run: npx playwright test --project=ui-mocked --workers=2
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ui-mocked-report
+          path: |
+            web/test-results
+            web/playwright-report
+          retention-days: 7

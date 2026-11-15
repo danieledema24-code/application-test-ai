@@ -12,6 +12,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, CreatedMixin, IdMixin, TenantMixin, TimestampMixin
 from app.db.types import json_default_dict, str_enum
 from app.domain.enums import ActorType, Role
+from app.domain.performance.limits import default_org_settings
+
+# Server default of `organisations.settings` (migration 0017): the D18 load ceiling, so existing rows get it too.
+ORG_SETTINGS_SERVER_DEFAULT = '{"load_ceiling": {"vus": 20, "rps": 20, "duration_s": 300}}'
 
 
 class Organisation(IdMixin, TimestampMixin, Base):
@@ -21,6 +25,11 @@ class Organisation(IdMixin, TimestampMixin, Base):
     slug: Mapped[str] = mapped_column(String(140), unique=True)
     plan: Mapped[str] = mapped_column(String(32), default="free")
     limits: Mapped[dict[str, Any]] = mapped_column(default=json_default_dict)
+    # Phase 5 (P5-00): owner/admin settings. `load_ceiling {vus, rps, duration_s}` (decision D18); retention arrives
+    # with P5-05c.
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        default=default_org_settings, server_default=ORG_SETTINGS_SERVER_DEFAULT
+    )
 
 
 class User(IdMixin, TimestampMixin, Base):
@@ -40,6 +49,9 @@ class Membership(IdMixin, TenantMixin, TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
     role: Mapped[Role] = mapped_column(str_enum(Role, "membership_role"))
     can_approve: Mapped[bool] = mapped_column(default=False)
+    # P3-07: null for Phase 1/2 rows (owners who registered, or members inserted before invitations existed).
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
+    joined_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class UserSession(IdMixin, TimestampMixin, Base):
@@ -83,3 +95,26 @@ class AuditLog(IdMixin, TenantMixin, CreatedMixin, Base):
     ip: Mapped[str | None] = mapped_column(String(64), default=None)
     request_id: Mapped[str | None] = mapped_column(String(64), default=None)
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", default=json_default_dict)
+
+
+class Invitation(IdMixin, TenantMixin, TimestampMixin, Base):
+    """A one-time workspace invitation link (P3-07, decision D5). Only the token's SHA-256 is stored."""
+
+    __tablename__ = "invitations"
+    __table_args__ = (
+        Index("ix_invitations_org_email", "organisation_id", "email"),
+        Index("ix_invitations_org_expires", "organisation_id", "expires_at"),
+    )
+
+    email: Mapped[str] = mapped_column(String(320))
+    role: Mapped[str] = mapped_column(String(16))
+    can_approve: Mapped[bool] = mapped_column(default=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    expires_at: Mapped[datetime]
+    accepted_at: Mapped[datetime | None] = mapped_column(default=None)
+    accepted_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), default=None
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(default=None)
+    revoked_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)

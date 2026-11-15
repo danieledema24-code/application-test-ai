@@ -119,10 +119,13 @@ async def test_unhandled_error_returns_500_envelope_without_internals(api_ctx: A
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        r = await c.get("/api/v1/_boom")
+        r = await c.get("/api/v1/_boom", headers={"Origin": "http://localhost:3002"})
     assert r.status_code == 500
     assert r.json()["error"]["code"] == "internal" and "hunter2" not in r.text
     assert r.json()["error"]["request_id"] == r.headers["x-request-id"]
+    # QA P4-BUG-09: the browser can read the 500 (not "net::ERR_FAILED" / "Can't reach QA Analyst").
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3002"
+    assert "x-request-id" in r.headers["access-control-expose-headers"].lower()
 
 
 async def test_sse_preflight_from_web_origin_succeeds(client: httpx.AsyncClient) -> None:

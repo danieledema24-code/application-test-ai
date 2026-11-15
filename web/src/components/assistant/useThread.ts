@@ -29,8 +29,12 @@ export function useAssistantThread(projectId: string, threadId: string | null, o
   const [announce, setAnnounce] = useState("");
   const [lastInput, setLastInput] = useState<SendInput | null>(null);
   const ctrl = useRef<AbortController | null>(null);
+  // The thread this hook just created: when the caller's id catches up with it (the URL updates asynchronously,
+  // possibly after the answer arrived), the answer already shown must stay.
+  const created = useRef<string | null>(null);
 
   useEffect(() => {
+    if (threadId && threadId === created.current) return;
     setExtra([]);
     setStopped(null);
     setError(null);
@@ -71,6 +75,7 @@ export function useAssistantThread(projectId: string, threadId: string | null, o
         if (!id) {
           const t = await api<Thread>(`/projects/${projectId}/assistant/threads`, { body: { title: input.display.slice(0, 120) } });
           id = t.id;
+          created.current = t.id;
           onThreadId(t.id);
         }
         const turn = await sendAssistantMessage(id, input.body, {

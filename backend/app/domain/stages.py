@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.enums import GateKey, GatePolicy, StageKey, StageStatus
+from app.domain.enums import (
+    GateKey,
+    GatePolicy,
+    PerfRunStatus,
+    QualityScanStatus,
+    RunStatus,
+    StageKey,
+    StageStatus,
+)
 
-CURRENT_PHASE = 2
+CURRENT_PHASE = 5
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,8 @@ STAGES: tuple[StageDef, ...] = (
         "reporting",
     ),
     StageDef(StageKey.performance, "Performance testing", 5, None, (StageKey.test_strategy,), "performance"),
+    StageDef(StageKey.accessibility, "Accessibility testing", 5, None, (StageKey.discovery,), "accessibility"),
+    StageDef(StageKey.security_assessment, "Passive security assessment", 5, None, (StageKey.discovery,), "security"),
 )
 STAGE_BY_KEY: dict[StageKey, StageDef] = {s.key: s for s in STAGES}
 STAGE_ORDER: dict[StageKey, int] = {s.key: i for i, s in enumerate(STAGES)}
@@ -83,8 +93,10 @@ DEFAULT_APPROVAL_POLICY: dict[GateKey, GatePolicy] = {
     GateKey.G2: GatePolicy.recommended,
     GateKey.G3: GatePolicy.required,
     GateKey.G4: GatePolicy.required,
-    GateKey.G5: GatePolicy.recommended,
-    GateKey.G6: GatePolicy.required,
+    GateKey.G5: GatePolicy.required,
+    # Decision D10 (hybrid): static validation always blocks (P4-04 preconditions) and AI-written scripts need a
+    # `can_approve` review before they can run; a bundle of rule-written valid scripts needs no human sign-off.
+    GateKey.G6: GatePolicy.recommended,
     GateKey.G7: GatePolicy.required,
     GateKey.G8: GatePolicy.required,
     GateKey.G9: GatePolicy.required,
@@ -98,8 +110,73 @@ OUTPUT_STATUSES = frozenset(
 )
 ACTIVE_STATUSES = frozenset({StageStatus.queued, StageStatus.running})
 
-# Phase 2 stages whose re-runs produce a candidate version that is reviewed before it is applied (P2-00).
-REGENERABLE_STAGES = frozenset({StageKey.requirements, StageKey.readiness_criteria, StageKey.test_strategy})
+# Stages whose re-runs produce a candidate version that is reviewed before it is applied (P2-00, P3-01b).
+REGENERABLE_STAGES = frozenset(
+    {StageKey.requirements, StageKey.readiness_criteria, StageKey.test_strategy, StageKey.test_design}
+)
+# P4-00: the `execution` stage mirrors its latest execution run. Runs waiting for (or refused) G7 don't move it.
+EXECUTION_STAGE_STATUS: dict[RunStatus, StageStatus] = {
+    RunStatus.queued: StageStatus.queued,
+    RunStatus.running: StageStatus.running,
+    RunStatus.passed: StageStatus.completed,
+    RunStatus.failed: StageStatus.completed,  # the run finished; failing tests are results, not a stage failure
+    RunStatus.error: StageStatus.failed,  # the run errored as a whole
+    RunStatus.cancelled: StageStatus.cancelled,
+}
+
+# Stages whose status is derived on read from another stage; never queued, no agent (P3-00, P4-00).
+DERIVED_STAGES: dict[StageKey, StageKey] = {
+    StageKey.traceability: StageKey.test_design,
+    # P4-00: awaiting_approval while a defect draft is undecided (G8 per defect), completed when none are left.
+    StageKey.defects_summary: StageKey.failure_analysis,
+}
+# Gates decided per subject (G7 per execution run, G8 per defect), never through POST /gates/{gate}/decision.
+SUBJECT_GATES: dict[GateKey, str] = {
+    GateKey.G7: "Authorise each test run from Test Execution",
+    GateKey.G8: "Confirm or reject each defect from Defects",
+}
+# Stages driven by execution runs: never queued by advance() or POST /stages/{stage}/run (P4-00).
+RUN_DRIVEN_STAGES: dict[StageKey, str] = {
+    StageKey.execution: "Start a test run from Test Execution",
+    StageKey.failure_analysis: "Failure analysis runs automatically after a test run with failures",
+    # P5-00: load needs a `load_test` approval per run (decision D18), so it never starts as a stage task.
+    StageKey.performance: "Start a performance run from Performance",
+    # P5-02/P5-03: each check is a quality scan started from Non-functional (POST /accessibility-scans,
+    # POST /security-assessments) that mirrors this stage, like execution runs.
+    StageKey.accessibility: "Start an accessibility check from Non-functional",
+    StageKey.security_assessment: "Start a security check from Non-functional",
+}
+# P5-00: optional branches. advance() never queues them; a person starts them from their workspace or the
+# assistant, and each scan or run is its own stage run. Accessibility and security start from their own endpoints
+# once discovery is gate-satisfied (G2); performance once G4 is approved.
+OPTIONAL_STAGES = frozenset({StageKey.accessibility, StageKey.security_assessment, StageKey.performance})
+# P5-00: the message when an optional stage's discovery input is not ready (409 gate_blocked).
+OPTIONAL_STAGE_BLOCK = "Discovery completeness (G2) must be satisfied first"
+# P5-00: why a check is out of date after its upstream was re-run.
+RERUN_STALE_REASONS: dict[StageKey, str] = {
+    StageKey.accessibility: "Pages changed after this check",
+    StageKey.security_assessment: "Pages changed after this check",
+}
+# P5-00: the `accessibility` and `security_assessment` stages mirror their latest quality scan (P5-02, P5-03), and
+# `performance` mirrors its latest started run (P5-01b). Runs waiting for (or refused) a `load_test` approval
+# don't move the stage, like execution runs waiting for G7.
+QUALITY_SCAN_STAGE_STATUS: dict[QualityScanStatus, StageStatus] = {
+    QualityScanStatus.queued: StageStatus.queued,
+    QualityScanStatus.running: StageStatus.running,
+    QualityScanStatus.completed: StageStatus.completed,
+    QualityScanStatus.partial: StageStatus.completed,  # pages not checked are listed; the scan itself finished
+    QualityScanStatus.failed: StageStatus.failed,
+    QualityScanStatus.cancelled: StageStatus.cancelled,
+}
+PERF_RUN_STAGE_STATUS: dict[PerfRunStatus, StageStatus] = {
+    PerfRunStatus.queued: StageStatus.queued,
+    PerfRunStatus.running: StageStatus.running,
+    PerfRunStatus.passed: StageStatus.completed,
+    PerfRunStatus.failed: StageStatus.completed,  # missed thresholds are results, not a stage failure
+    PerfRunStatus.aborted: StageStatus.completed,  # the kill switch stopped it; the reason is on the run
+    PerfRunStatus.stopped: StageStatus.cancelled,
+    PerfRunStatus.error: StageStatus.failed,
+}
 # Stages queued again automatically when their upstream produces a new version ("auto_rerun").
 AUTO_RERUN_STAGES = frozenset({StageKey.discovery_report})
 # Stages a user can start with POST /stages/{stage}/run in the current phase.
@@ -110,6 +187,9 @@ RUNNABLE_IN_PHASE = frozenset(
         StageKey.requirements,
         StageKey.readiness_criteria,
         StageKey.test_strategy,
+        StageKey.test_design,
+        StageKey.automation_assessment,
+        StageKey.automation,
     }
 )
 

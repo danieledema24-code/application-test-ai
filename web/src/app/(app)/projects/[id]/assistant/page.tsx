@@ -13,9 +13,10 @@ function AssistantPage() {
   const params = useSearchParams();
   const threadId = params.get("thread");
   const [context, setContext] = useState<ArtefactRef | null>(null);
+  // Re-set on every thread change: Next restores the default title when `?thread=` is replaced.
   useEffect(() => {
     document.title = `AI QA Analyst · ${p.project?.name ?? "Project"} · QA Analyst`;
-  }, [p.project?.name]);
+  }, [p.project?.name, threadId]);
   return (
     <AssistantWorkspace
       variant="page"

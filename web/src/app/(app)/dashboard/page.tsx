@@ -7,6 +7,7 @@ import { useApi } from "@/lib/hooks";
 import { firstName, useAuth } from "@/lib/auth";
 import { fmtDateTime, timeAgo } from "@/lib/format";
 import type { ActivityItem, Dashboard } from "@/lib/contract";
+import { lastRunShort } from "@/lib/execution";
 import { projectStatusLabel } from "@/lib/projectStatus";
 import { shortUrl } from "@/lib/url";
 import { useOnline } from "@/lib/useOnline";
@@ -138,8 +139,17 @@ function TestingActivity({ data, error }: { data: Dashboard | undefined; error: 
   );
 }
 
+/** "13 Nov" for the Last run column. */
+function shortDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 function Health({ data }: { data: Dashboard }) {
   const h = data.health;
+  // Role-aware (design P3 §4.3): only people who can approve are waited on.
+  const { canApprove } = useAuth();
   return (
     <Card>
       <CardHeader title="QA project health" description={`${h.pages_discovered_30d} page${h.pages_discovered_30d === 1 ? "" : "s"} discovered in the last 30 days.`} />
@@ -147,7 +157,7 @@ function Health({ data }: { data: Dashboard }) {
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <StatTile label="Active projects" value={h.projects_total} icon={<FolderKanban className="h-4 w-4" />} href="/projects" />
           <StatTile label="Analyses running" value={h.scans_running} icon={<Loader2 className="h-4 w-4" />} href="/projects?view=running" />
-          <StatTile label="Awaiting your approval" value={h.awaiting_approval} icon={<UserRoundCheck className="h-4 w-4" />} href="/projects?view=awaiting" />
+          <StatTile label={canApprove ? "Awaiting your approval" : "Awaiting approval"} value={h.awaiting_approval} icon={<UserRoundCheck className="h-4 w-4" />} href="/projects?view=awaiting" />
           <StatTile label="Failed stages" value={h.failed_stages} icon={<CircleX className="h-4 w-4" />} href="/projects?view=failed" />
         </div>
         {data.recent_projects.length > 0 && (
@@ -158,6 +168,7 @@ function Health({ data }: { data: Dashboard }) {
                 <Th>Lifecycle</Th>
                 <Th className="text-right">Pages found</Th>
                 <Th>Gate status</Th>
+                <Th>Last run</Th>
               </tr>
             </THead>
             <TBody>
@@ -173,6 +184,7 @@ function Health({ data }: { data: Dashboard }) {
                   </Td>
                   <Td className="text-right tabular-nums">{p.pages_discovered}</Td>
                   <Td>{p.awaiting_approval ? <StatusPill status="awaiting_approval" label="Gate waiting" /> : <span className="text-fg-muted">—</span>}</Td>
+                  <Td className="whitespace-nowrap">{p.last_run ? lastRunShort(p.last_run, shortDate) : <span className="text-fg-muted">Not run yet</span>}</Td>
                 </Tr>
               ))}
             </TBody>

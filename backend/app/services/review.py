@@ -43,6 +43,10 @@ class RowAdapter:
                 setattr(row, attr, _coerce(row, attr, content[name]))
 
     def is_user_created(self, row: Any) -> bool:
+        # Rows made through the API (by a person, or by accepting an assistant proposal) get a "user:" match key;
+        # a regenerated design never matches them, so they are kept rather than rejected as no longer found.
+        if str(getattr(row, "match_key", "") or "").startswith("user:"):
+            return True
         if self.user_source_attr is None:
             return str(jsonable(getattr(row, "generated_by", ""))) == "human"
         return str(jsonable(getattr(row, self.user_source_attr, ""))) == "user"

@@ -94,7 +94,8 @@ export function toApiError(status: number, data: unknown, headers?: Headers): Ap
   });
 }
 
-const PUBLIC_PATHS = ["/login", "/register", "/forgot-password", "/reset-password"];
+// `/invite/<token>` is public (design P3 §17.3): a 401 there must never redirect to sign-in.
+const PUBLIC_PATHS = ["/login", "/register", "/forgot-password", "/reset-password", "/invite/"];
 
 /** A same-origin path to return to after sign-in, or null. Rejects protocol-relative and absolute URLs. */
 export function safeNextPath(next: string | null | undefined): string | null {
@@ -221,11 +222,6 @@ export function fileUrl(path: string): string {
   if (/^https?:\/\//.test(path)) return path;
   if (path.startsWith("/api/")) return `${API_ORIGIN}${path}`;
   return `${API_URL}${path.startsWith("/") ? "" : "/"}${path}`;
-}
-
-/** Legacy screens only (removed in P1-16). */
-export function evidenceUrl(e: { id: string; url?: string }): string {
-  return fileUrl(e.url || `/evidence/${e.id}/content`);
 }
 
 export function errorMessage(err: unknown): string {

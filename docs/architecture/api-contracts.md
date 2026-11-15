@@ -1017,12 +1017,536 @@ AI tool set (P2-10, server-side only; not an HTTP API): read-only `get_workflow`
 | sign-in tests per project | 5 / 10 min |
 | stage runs per project | 10 / hour (Phase 1 limit; also covers plan regenerate) |
 
+## Phase 3 endpoints (full detail)
+
+All Phase 1/2 conventions apply: bearer auth, the session's organisation as tenant (other organisations get 404), the error envelope, `?limit&cursor` pagination, `version` on mutable resources (a mismatch is 409 `conflict`; a superseded stage run is 409 `conflict` "The test design was regenerated; reload to continue"), `extra="forbid"` on bodies, and an audit entry on every write.
+
+Role rules:
+- `viewer`: read only.
+- `member`: runs test design, creates and edits cases, conditions and data, approves, rejects or deprecates individual cases (decision D2), and accepts proposals.
+- `can_approve`: G5 decisions, with the same check as G3/G4 (decision D1).
+- owner/admin: member management (owner-only for the `owner` role).
+
+Code-owned fields are rejected with 422 when sent: `classification`, `confidence`, `execution_status`, `risk_level`, `risk_score`, `derived_priority`, `lint`.
+
+### Shared Phase 3 schemas
+
+```python
+Technique = Literal["equivalence_partitioning", "boundary_value_analysis", "decision_table", "state_transition",
+                    "use_case", "error_guessing", "exploratory", "checklist"]
+    # from P2-06; "exploratory" is not designed in Phase 3. "checklist" is the technique of non-functional
+    # (accessibility, compatibility, usability) cases.
+CaseStatus = Literal["draft", "approved", "rejected", "deprecated"]
+Priority = Literal["critical", "high", "medium", "low"]
+Suite = Literal["smoke", "regression"]
+SideEffect = Literal["submits_form", "signs_in", "creates_data", "external_transaction"]
+ExecutionStatus = Literal["not_run", "passed", "failed", "blocked", "error"]   # always "not_run" in Phase 3
+
+ArtefactRef.type  # gains "test_condition", "test_case", "test_data"; keys TCOND-0001, TC-0001, TD-0001
+ChangeReviewItem.type  # gains "test_condition", "test_case", "test_data"; ChangeReview.artefact gains "test_design"
+ValidationIssue.code   # gains boundary_not_found, case_cap_reached, not_designed_type, open_question
+
+class LintItem(BaseModel):
+    code: Literal["missing_steps", "missing_expected_result", "orphan_case", "unresolved_placeholder",
+                  "technique_data_mismatch", "literal_secret", "non_synthetic_data", "open_question",
+                  "vague_wording", "too_many_steps", "duplicate_case", "type_not_in_strategy",
+                  "linked_requirement_rejected", "priority_below_risk"]
+    severity: Literal["error", "warning", "info"]
+    blocks_approval: bool                 # all errors + open_question
+    message: str                          # e.g. "Step 3 has no expected result"
+    path: str | None                      # "steps[2].expected"
+    hint: str | None                      # e.g. "Describe what the user sees, e.g. 'Name is marked as required'"
+
+class Unavailable(BaseModel):              # used wherever Phase 4+ data would appear
+    available: Literal[False] = False
+    available_from_phase: int             # 4
+    message: str                          # "Available after test execution (Phase 4)"
+```
+
+### Workflow additions (P3-00)
+
+- `POST /projects/{id}/stages/test_design/run` with the Phase 2 `StageRunRequest` body: `{reason?, parameters?: {guidance?: str (≤ 1000)}}`. Test design also starts automatically when G4 is approved and the stage has never run.
+  - 409 `gate_blocked` "Test strategy approval (G4) must be approved first".
+  - 409 `conflict` if a test design candidate is pending review.
+  - `traceability` cannot be run: 422 "Traceability is computed automatically".
+- The change review endpoints (`/stages/test_design/runs/{version}/review`, `/apply`, `/discard`) work as in Phase 2. Items are typed `test_condition`/`test_case`/`test_data`.
+- `GET /projects/{id}/stages/test_design/runs/{version}` `output` = `{counts: {conditions, cases, data, by_technique, by_type, by_status}, not_designed: list[{test_type, reason}], lint: {errors, warnings}, diff: RegenerationDiff}`.
+- **G5 is a required sign-off (decision D1).**
+  - `DEFAULT_APPROVAL_POLICY.G5 = "required"`. New projects store it, and existing projects are switched by a startup data step (see roadmap P3-00).
+  - When design output is produced, `test_design` goes to `awaiting_approval` with gate `pending`.
+  - Phase 4 stages treat `test_design` as gate-satisfied only when it is `approved`.
+  - `PATCH /projects/{id}` may still set G5 to `recommended`/`auto` (G5 is not a locked gate).
+- `POST /projects/{id}/gates/G5/decision`: same body as G3/G4. **Permission:** `can_approve`, the same check as G3/G4. Without it you get the existing 403 "You don't have permission to approve quality gates. Ask an owner or admin."
+  - **Blockers**:
+    1. G4 approved, and the design's `approved_input` matches it
+    2. ≥1 approved case
+    3. no approved case with a blocking lint item
+    4. every approved requirement linked to an open high/very-high risk has ≥1 approved case
+    5. no open-question case among draft **or** approved cases (`code: "open_questions"`; decision D6, settled by the P3 design)
+  - **Warnings**: drafts remain; approved requirements without an approved case; approved ACs without a case; lint warnings on approved cases; accepted high risks without an approved case.
+  - Precondition codes: `g4_approved`, `approved_case`, `approved_lint_errors`, `open_questions`, `high_risk_covered` (blocking); `drafts_remaining`, `requirements_without_case`, `acs_without_case`, `drafts_with_errors`, `approved_lint_warnings`, `accepted_risks` (warnings).
+  - `StageState.approved_input` for `test_design` = `{stage_key: "test_strategy", snapshot_hash, version, requirements_snapshot_hash, requirements_version}`.
+  - The `gate.awaiting_approval` event reads "… is waiting for approval" (no role is implied; the UI words it from `can_approve`).
+  - On approval, the TCS and RTM frozen reports are queued.
+- `StageState.gate.preconditions` and `changes_since_approval` are computed for G5 as for G3/G4.
+
+### Test conditions (P3-01a, P3-02)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-conditions` | `?technique=&status=&requirement_key=&feature_id=&stage_run_version=&limit&cursor` | `Page[TestCondition]` | Default: current design run. |
+| GET | `/test-conditions/{id}` | – | `TestCondition` (with its cases) | |
+| PATCH | `/test-conditions/{id}` | `{version, title?, description?, notes?, change_reason?}` | `TestCondition` | member+. `design_basis` values are not editable (edit the requirement/AC or the case). Reopens G5 if it holds approved cases. Audit `test_condition.updated`. |
+| POST | `/test-conditions/{id}/status` | `{version, status: "draft"\|"approved"\|"rejected", comment?}` | `{condition: TestCondition, rejected_cases: list[ArtefactRef]}` | member+. Rejecting needs `comment` (422) and rejects its **draft** cases in the same transaction (approved cases must be deprecated explicitly). |
+| POST | `/test-conditions/{id}/lock` | `{version, locked}` | `TestCondition` | |
+| GET | `/test-conditions/{id}/revisions` | – | `list[Revision]` | |
+
+```python
+class TestCondition(Provenanced, Editable):
+    id: UUID; key: str; lineage_id: UUID
+    title: str; description: str
+    technique: Technique; test_type: str
+    feature: ArtefactRef | None
+    requirements: list[ArtefactRef]; acceptance_criteria: list[ArtefactRef]
+    design_basis: dict                    # technique-specific (database-schema.md); values computed in code. The API adds:
+        # constraint: str | None          declared constraint, e.g. "required, type=email" (EP) or "required, maxlength=80" (BVA)
+        # evidence_refs: list[EvidenceRef] the condition's evidence (same as the top-level field)
+        # values: list[{coverage_item, value: str | None, length: int | None, tests: str, expected: str | None,
+        #               case_keys: list[str]}]   one row per coverage item, from the active cases covering it
+        # boundary_values: list[...]       BVA only: the stored boundary list (what `values` held before)
+    coverage_items: list[{"id": str, "label": str, "covered_by": list[str]}]   # e.g. "Name: 0 characters" -> ["TC-0007"]
+    notes: list[str]                      # e.g. "No maximum length was discovered for Message; no upper boundary case is designed"
+    status: Literal["draft", "approved", "rejected"]
+    rule_id: str | None; stage_run_version: int
+```
+
+### Test cases (P3-01a read; P3-02 write; P3-05 priority)
+
+| Method | Path | Request | Response | Errors / notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-cases` | `?status=&technique=&test_type=&test_level=&priority=&risk_level=&suite=&requirement_key=&feature_id=&lint=error\|warning\|clean&open_question=bool&q=&sort=priority\|key\|updated&stage_run_version=&limit&cursor` | `Page[TestCaseSummary]` | Default sort: effective priority, then risk score. `q` matches (case-insensitive) the key, title, objective, overall expected result, step actions and step expected results. |
+| GET | `/projects/{id}/test-cases/stats` | `?stage_run_version=` | `TestCaseStats` | Used by reports and the assistant. |
+| GET | `/projects/{id}/test-cases/by-key/{key}` | – | `TestCaseDetail` | Current design run. |
+| GET | `/test-cases/{id}` | – | `TestCaseDetail` | |
+| POST | `/projects/{id}/test-cases` | `TestCaseCreate` | `201 TestCaseDetail` | member+. `generated_by="human"`, `source="user"`, `classification="assumed"`. Added to the current design version. Reopens G5 if approved. Audit `test_case.created`. |
+| PATCH | `/test-cases/{id}` | `TestCasePatch` | `TestCaseDetail` | member+. Lock/version rules. Approved → `draft`, G5 reopens. Changing only `suites` or the priority override keeps an approved case approved but still reopens G5. Writing the expected result or steps sets `classification="assumed"`. Lint re-run. Audit `test_case.updated`. |
+| POST | `/test-cases/{id}/status` | `{version, status: CaseStatus, comment?, reason?: "incorrect"\|"duplicate"\|"not_applicable"\|"out_of_scope"\|"other", duplicate_of?: UUID}` | `TestCaseDetail` | member+. `approved` → 422 `validation_error` with `details` = blocking `LintItem`s. `rejected` needs comment or reason (writes a knowledge decision). `deprecated` only from `approved`, needs comment. Audit `test_case.status_changed`. |
+| POST | `/projects/{id}/test-cases/bulk-status` | `{ids: list[UUID] (1..200), status, comment?}` | `{updated: list[TestCaseSummary], skipped: list[{id, key, reason}]}` | member+. Skipped with a reason: blocking lint ("Checks you must fix: …"), open questions ("Open question"), locked cases (except approve), cases of a superseded run, unknown ids. |
+| POST | `/test-cases/{id}/lock` | `{version, locked}` | `TestCaseDetail` | |
+| POST | `/test-cases/{id}/duplicate` | `{title?}` | `201 TestCaseDetail` | member+. Human draft copy with the same links and data. |
+| GET | `/test-cases/{id}/revisions` | – | `list[Revision]` | By lineage. |
+| DELETE | `/test-cases/{id}` | – | 405 | Deprecate or reject instead (traceability). |
+| GET | `/projects/{id}/test-design/lint` | – | `{rules_version, errors, warnings, by_code: dict[str, int], cases: list[{key, items: list[LintItem]}]}` | |
+
+```python
+class TestStep(BaseModel):
+    n: int
+    action: str = Field(min_length=3, max_length=500)
+    data: list[ArtefactRef]               # TD items (resolved for display: label "TD-0004 · Name · 0 characters")
+    expected: str = Field(max_length=500) # may be "": lint only needs one step with an expected result (plus the overall one)
+
+class TestCaseSummary(Provenanced):
+    id: UUID; key: str; lineage_id: UUID
+    title: str; technique: Technique; test_type: str; test_level: str
+    status: CaseStatus
+    priority: Priority                    # effective (override or derived)
+    derived_priority: Priority; priority_overridden: bool
+    risk_level: Literal["low", "medium", "high", "very_high"] | None; risk_score: int | None
+    suites: list[Suite]
+    requirement_keys: list[str]
+    lint_summary: {"errors": int, "warnings": int, "blocks_approval": bool}
+    expected_result_status: Literal["defined", "open_question"]
+    execution_status: ExecutionStatus     # "not_run"
+    last_result: None                     # always null in Phase 3 (UI: "—", "Execution arrives in Phase 4")
+    stage_run_version: int; version: int; locked: bool; human_edited: bool; updated_at: datetime
+    source: Literal["design", "user", "assistant"]
+    # Additive (QA round 1):
+    classification: Classification        # same value as `provenance`
+    objective: str
+    risk_key: str | None                  # the risk the derived priority comes from
+    feature: ArtefactRef | None           # feature of the first linked requirement that has one
+    condition_key: str | None
+    changed_in_latest: bool               # new or different vs the design run this one replaced; false for v1
+    open_question: {"requirement": ArtefactRef, "message": str} | None   # also on the summary
+
+class TestCaseDetail(TestCaseSummary):    # every spec §7 field
+    objective: str
+    preconditions: list[str]
+    steps: list[TestStep]
+    expected_result: str                  # an open question reads "REQ-0007 asks whether Message is optional";
+                                          # the UI and reports add the "Not decided:" prefix
+    open_question: {"requirement": ArtefactRef, "message": str} | None
+    condition: ArtefactRef | None
+    design_basis: {"technique": Technique, "coverage_item": str, "explanation": str}
+        # e.g. "Boundary: Name requires at least 1 character (required attribute); this case uses 0 characters"
+    requirements: list[ArtefactRef]; acceptance_criteria: list[ArtefactRef]; risks: list[ArtefactRef]
+    test_data: list[TestDataItem]
+    side_effects: list[SideEffect]
+    automation_suitability: {"value": Literal["suitable", "partial", "manual_only"], "reason": str,
+                             "assessed": Literal["preliminary", "assessed"]}   # "preliminary" in Phase 3
+    priority_source: {"kind": Literal["risk", "override", "default"], "risk": ArtefactRef | None,
+                      "override_reason": str | None, "overridden_by": UserRef | None,
+                      "overridden_at": datetime | None}
+    lint: list[LintItem]
+    evidence: list[EvidenceLink]
+    source: Literal["design", "user", "assistant"]; rule_id: str | None
+    status_comment: str | None; status_changed_by: UserRef | None; status_changed_at: datetime | None
+    created_at: datetime; updated_by: UserRef | None
+
+class TestCaseCreate(BaseModel, extra="forbid"):
+    title: str = Field(min_length=5, max_length=160); objective: str = Field(max_length=1000)
+    preconditions: list[str] = Field(default_factory=list, max_length=20)
+    steps: list[{"action": str, "data_ids": list[UUID], "expected": str}] = Field(min_length=1, max_length=30)
+    expected_result: str = Field(max_length=1000)
+    test_type: str; test_level: str; technique: Technique
+    requirement_ids: list[UUID] = []; acceptance_criterion_ids: list[UUID] = []   # empty -> lint orphan_case
+    condition_id: UUID | None = None
+    suites: list[Suite] = []; side_effects: list[SideEffect] = []
+
+class TestCasePatch(BaseModel, extra="forbid"):
+    version: int
+    title: str | None = None; objective: str | None = None; preconditions: list[str] | None = None
+    steps: list[{"action": str, "data_ids": list[UUID], "expected": str}] | None = None
+    expected_result: str | None = None      # writing one clears an open question (human_edited)
+    test_type: str | None = None; test_level: str | None = None
+    suites: list[Suite] | None = None; side_effects: list[SideEffect] | None = None
+    requirement_ids: list[UUID] | None = None; acceptance_criterion_ids: list[UUID] | None = None
+    priority_override: Priority | None = None; priority_override_reason: str | None = Field(None, max_length=500)
+    clear_priority_override: bool = False   # override without reason -> 422
+    change_reason: str | None = Field(None, max_length=500)
+
+class TestCaseStats(BaseModel):
+    stage_run_version: int | None; generated_by: str | None
+    total: int
+    by_status: dict[CaseStatus, int]; by_technique: dict[str, int]; by_type: dict[str, int]
+    by_level: dict[str, int]; by_priority: dict[Priority, int]; by_suite: dict[Suite, int]
+    lint: {"errors": int, "warnings": int, "cases_blocked": int}
+    open_questions: int                   # draft + approved cases only
+    not_designed: list[{"test_type": str, "reason": str}]
+    execution: Unavailable
+    pending_review_version: int | None
+```
+
+`RequirementDetail.linked_test_cases` is now populated: the non-rejected cases of the current design run linked to the requirement's lineage, as `ArtefactRef` with the label `"TC-0004 · Approved · BVA"`.
+
+### Test data (P3-01a read; P3-03 write)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/test-data` | `?field=&feature_id=&kind=&used=bool&status=&stage_run_version=&limit&cursor` | `Page[TestDataItem]` | |
+| GET | `/test-data/{id}` | – | `TestDataItem` (+ `used_by: list[ArtefactRef & {status: CaseStatus}]`) | |
+| POST | `/projects/{id}/test-data` | `{name, field_label, form_ref?, kind, value?: str, secret_ref?: str}` | `201 TestDataItem` | member+. Synthetic guard → 422 with a field message. Audit `test_data.created`. |
+| PATCH | `/test-data/{id}` | `{version, name?, value?, secret_ref?, change_reason?}` | `{item: TestDataItem, affected_cases: list[ArtefactRef]}` | member+. The guard re-runs. A boundary item must keep its length (422 "This item tests the 81-character boundary; change the case instead"). Used by approved cases → G5 reopens. Audit `test_data.updated`. |
+| POST | `/test-data/{id}/status` | `{version, status: "active"\|"retired"}` | `TestDataItem` | Retiring an item used by draft or approved cases → 409 `conflict`, `details: {"used_by": ["TC-0012", "TC-0042"]}` (an object, not a list). |
+| POST | `/test-data/{id}/lock` | `{version, locked}` | `TestDataItem` | |
+| GET | `/test-data/{id}/revisions` | – | `list[Revision]` | |
+
+```python
+class TestDataItem(Editable):
+    id: UUID; key: str; lineage_id: UUID      # TD-0001
+    name: str; field_label: str; feature: ArtefactRef | None
+    form_ref: {"form_anchor": str, "path": str, "field_type": str} (keys optional)
+    kind: Literal["valid", "invalid", "boundary", "secret_ref"]
+    value_type: Literal["text", "email", "number", "empty", "whitespace", "secret_ref"]
+    value: str | None                     # never a secret; long values are returned in full, the UI truncates
+    secret_ref: str | None                # secret NAME only, e.g. "login_credentials"; UI: "Uses the saved test credentials"
+    length: int | None
+    boundary: {"condition": ArtefactRef, "coverage_item": str} | None
+    synthetic: bool; generator: str | None
+    status: Literal["active", "retired"]
+    used_by_count: int
+    generated_by: Literal["ai", "rules", "human"]
+    # Additive (QA round 1):
+    form: {"label": str, "path": str | None} | None   # e.g. {"label": "Contact us form", "path": "/contact"}; the UI shows the path
+    used_by_approved: list[str]           # keys of approved cases using it: editing it moves them back to draft
+                                          # (the UI says "Save and reopen review")
+```
+
+Synthetic guard errors are 422 `validation_error` with `field: "value"`:
+- "Use a reserved domain such as example.com; real-looking data isn't allowed"
+- "Use a fictional phone number from the reserved ranges"
+- "This looks like a real card number; use a published test card"
+- "Passwords must reference saved test credentials"
+- "No saved test credentials are called '<name>'"
+
+### Risks (P3-05 additions)
+
+- `Risk` gains `coverage: {"requirements": int, "test_cases": int, "approved_test_cases": int, "uncovered_requirement_keys": list[str]}` (computed).
+- `GET /projects/{id}/risks` gains `?uncovered=bool`.
+- Risk writes (PATCH, status, accepted reassessment, regeneration apply, G4 approval) recompute `risk_level`, `risk_score` and `derived_priority` on current cases in the same transaction. There is no case version bump and no gate reopen. Project event `test_cases.priorities_updated {count}`.
+
+### Traceability (P3-04)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/projects/{id}/traceability` | `?view=forward\|backward&basis=current\|approved&status=&risk_level=&feature_id=&uncovered=bool&limit(≤50)&cursor` | `Page[ForwardRow]` or `Page[BackwardRow]` | Computed on read. `basis=approved` uses the last G5 snapshot (404 if G5 was never approved). |
+| GET | `/projects/{id}/traceability/coverage` | `?basis=` | `Coverage` | |
+| GET | `/projects/{id}/traceability/gaps` | `?basis=` | `Gaps` | |
+| GET | `/projects/{id}/traceability/chain` | `?key=REQ-0003\|AC-…\|TCOND-…\|TC-…\|RISK-…` | `Chain` | 404 for unknown keys. |
+
+```python
+class ForwardRow(BaseModel):
+    requirement: ArtefactRef; requirement_status: str; risk: {"level": str, "risks": list[ArtefactRef]} | None
+    acceptance_criteria: list[{"ac": ArtefactRef, "covered": bool}]
+    conditions: list[ArtefactRef]
+    test_cases: list[{"case": ArtefactRef, "status": CaseStatus, "priority": Priority}]
+    automation: Unavailable; results: Unavailable; defects: Unavailable   # Phase 4 columns
+
+class BackwardRow(BaseModel):
+    test_case: ArtefactRef; status: CaseStatus
+    conditions: list[ArtefactRef]; acceptance_criteria: list[ArtefactRef]
+    requirements: list[ArtefactRef]; risks: list[ArtefactRef]
+
+class Coverage(BaseModel):
+    basis: Literal["current", "approved"]; design_version: int | None; snapshot_hash: str | None
+    requirements: {"approved": int, "with_case": int, "with_approved_case": int, "percent_approved_covered": float}
+    acceptance_criteria: {"approved": int, "covered": int, "percent": float}
+    high_risk_requirements: {"total": int, "with_approved_case": int}
+    techniques: list[{"condition": ArtefactRef, "technique": Technique, "items": int, "covered": int}]
+    test_cases: {"by_status": dict[CaseStatus, int], "orphans": int}
+    execution: Unavailable
+
+class Gaps(BaseModel):                      # spec §12
+    requirements_without_test_cases: {"none": list[ArtefactRef], "none_approved": list[ArtefactRef]}
+    test_cases_without_requirements: list[ArtefactRef]
+    acceptance_criteria_without_test_cases: list[ArtefactRef]
+    untested_high_risk: {"open": list[{"risk": ArtefactRef, "requirements": list[ArtefactRef]}],
+                         "accepted": list[{"risk": ArtefactRef, "comment": str}]}
+    features_without_requirements: list[ArtefactRef]
+    requirements_without_execution_evidence: Unavailable
+    failed_tests: Unavailable
+    outdated_automation_scripts: Unavailable
+    defects_without_regression_coverage: Unavailable
+
+class Chain(BaseModel):
+    root: ArtefactRef
+    upstream: list[{"type": str, "items": list[ArtefactRef]}]     # e.g. TC -> conditions -> ACs -> requirements -> risks
+    downstream: list[{"type": str, "items": list[ArtefactRef]}]   # e.g. REQ -> ACs -> conditions -> cases
+    later_phase: list[{"type": Literal["automation_script", "execution_result", "defect"], "status": Unavailable}]
+```
+
+Readiness: `dod.ac_covered` and `dod.traceability_updated` now evaluate to `met`/`not_met` from `Coverage`. `dor.test_data_identified` uses TD items (P3-03).
+
+### Reports (P3-08)
+
+- `POST /projects/{id}/reports` accepts `report_type ∈ {"test_case_spec", "rtm"}`. 409 `gate_blocked` "Design test cases first" when test design has no output.
+- Frozen versions are created on each G5 approval (both types).
+- `ReportFile.format` gains `"csv"`; `ReportSummary.formats` is `["json", "html", "pdf", "csv"]` for these two types.
+- `GET /reports/{id}/download?format=pdf|html|json|csv`. CSV is available for these two types only (422 for others):
+  - UTF-8 with BOM
+  - formula-injection guard: a leading `= + - @ \t \r` is prefixed with `'`
+  - `Content-Disposition: attachment`
+- `ReportSummary.approval.gate = "G5"`.
+
+```python
+class TestCaseSpecContent(BaseModel):
+    project: dict; generated_at: datetime; approval: dict
+    scope_and_method: list[str]; techniques: list[{"technique": Technique, "definition": str, "conditions": int}]
+    counts: TestCaseStats                              # identical to /test-cases/stats
+    cases_by_feature: dict[str, list[{"requirement": ArtefactRef, "cases": list[TestCaseDetail]}]]
+    conditions: list[TestCondition]; test_data: list[TestDataItem]   # secret refs by name only
+    not_designed: list[{"test_type": str, "reason": str}]
+    execution_note: str                                # "Execution status: Not run. Execution arrives in Phase 4."
+    summary: str; summary_generated_by: Literal["ai", "rules"]; disclaimer: str
+
+class RtmContent(BaseModel):
+    project: dict; generated_at: datetime; approval: dict
+    based_on: {"G3": str | None, "G4": str | None, "G5": str | None}   # snapshot hashes + approver/date
+    forward: list[ForwardRow]; backward: list[BackwardRow]
+    coverage: Coverage; gaps: Gaps
+```
+
+### AI QA Analyst v2 (P3-06)
+
+```python
+AssistantIntent  # adds, deterministic (AI off):
+    "list_test_cases", "explain_test_case", "traceability_for",
+    "propose_negative_cases", "propose_regression_suite"
+    # and AI-only: "propose_test_case_update", "propose_missing_test_cases"
+    # coverage_summary v2 includes test-case coverage + Gaps; explain_gate supports G5;
+    # propose_regenerate accepts stage "test_design"
+params:
+    list_test_cases: {status?, technique?, test_type?, priority?, requirement_key?, suite?, lint?}
+    explain_test_case: {key}; traceability_for: {key}
+    propose_negative_cases: {requirement_key? | feature_key?}       # one of
+    propose_regression_suite: {scope: "high_risk" | "changed_since_g5" | "all"}
+    propose_test_case_update (AI): {test_case_keys: list[str] (1..20), instruction: str (≤ 1000)}
+    propose_missing_test_cases (AI): {requirement_keys: list[str] (1..10), focus?: str}
+
+Proposal.kind  # adds "add_test_cases", "update_test_case", "set_suite"
+Proposal.preview  # add_test_cases: list[TestCaseCreate + computed data]; set_suite: list[{key, from, to}]
+```
+
+- Citation guard tokens add `TC-`, `TCOND-` and `TD-`.
+- `AssistantCapabilities.later_phase_tasks` no longer lists "Generate more negative test cases", "Review test coverage" or "Generate regression scenarios".
+- Accepting goes through the REST service functions with the accepting user's permissions (`source="assistant_proposal"`). Accepting into approved content reopens G5.
+- AI tools add read-only `list_test_cases`, `get_test_case`, `get_traceability` and `get_coverage`, and proposal tools `propose_test_cases`, `propose_test_case_update` and `propose_suite_change`. There are still no tools for gates, secrets, deletion, runs or members.
+- **Backend status (this build):** the deterministic intents and rule-based proposals above are implemented. `propose_test_case_update` and `propose_missing_test_cases` are listed in capabilities with `requires_ai: true, available: false` (not implemented yet, like `propose_missing_requirements` in Phase 2), and the AI tool set above is not wired yet.
+- `add_test_cases` payload: `{cases: list[{title, objective, preconditions, steps: [{action, data: [match keys], expected}], expected_result, technique, test_type, test_level, requirement_lineages, ac_lineages, provenance, data: [{match_key, name, field_label, kind, value, form_ref}]}], design_version}`; `base_versions = {"test_design": <run version>}` (a newer design → 409 and the proposal goes `stale`). Accepted cases are drafts with `source="assistant"`; their data items reuse an active item with the same field and value, otherwise a new item is created through the guard.
+- `set_suite` payload: `{changes: list[{case_id, key, from, to}], scope}`; `base_versions` per case.
+
+### Workspace members and invitations (P3-07)
+
+| Method | Path | Request | Response | Notes |
+|---|---|---|---|---|
+| GET | `/organisation/members` | `?limit&cursor` | `Page[Member]` | Any role. `email` (and `user.email`) only for owner/admin; others get `null` and see the name. `can_approve` is the server's value. |
+| PATCH | `/organisation/members/{membership_id}` | `{version?, role?: "owner"\|"admin"\|"member"\|"viewer", can_approve?: bool}` | `Member` | owner/admin. `version` is accepted and ignored (memberships are not versioned). Promoting to `admin` defaults `can_approve` to true unless sent. Admins can't change their own role (403). `owner` grant or change: owner only (else 403). The last owner can't be demoted (409). A viewer with `can_approve` → 422. Owners always have `can_approve`. Audit `member.role_changed`. |
+| DELETE | `/organisation/members/{membership_id}` | – | `204` | owner/admin. The last owner → 409. Revokes the user's sessions for this organisation. Audit `member.removed`. |
+| GET | `/organisation/invitations` | `?status=pending\|expired\|accepted\|revoked` | `list[Invitation]` | owner/admin. |
+| POST | `/organisation/invitations` | `{email, role: "admin"\|"member"\|"viewer", can_approve: bool = False}` | `201 {invitation: Invitation, link: str}` | owner/admin. `link` (`/invite/<token>`) is returned **only here, once**. An existing account for this email → 409 "This email already has an account. Multi-workspace accounts aren't supported yet". A pending invitation for this email → 409. 20/hour/org. Audit `member.invited`. |
+| POST | `/organisation/invitations/{id}/revoke` | – | `Invitation` | owner/admin. Audit `invitation.revoked`. |
+| GET | `/invitations/{token}` | – (public) | `{organisation_name, invited_by_name, role, email_hint, expires_at}` (`email_hint` = first character + `***@` + domain, e.g. `j***@example.com`) | Invalid, used, revoked or expired → 404 "This invitation is no longer valid" (one message for all). 10/hour/IP. |
+| POST | `/invitations/{token}/accept` | `{full_name, password}` (public; registration password rules) | `201 AuthResponse` | Creates the user and membership, and signs in. Same 404 rules. Audit `member.joined`. |
+
+```python
+`GET /auth/me` returns `can_approve` for the session's organisation, read from the membership on every request (changes apply on the next request).
+
+class Member(BaseModel):
+    membership_id: UUID; user: {"id": UUID, "full_name": str, "email": str | None}; email: str | None
+    role: Literal["owner", "admin", "member", "viewer"]; can_approve: bool
+    joined_at: datetime | None; invited_by: UserRef | None; is_you: bool
+
+class Invitation(BaseModel):
+    id: UUID; email: str; role: str; can_approve: bool
+    status: Literal["pending", "accepted", "revoked", "expired"]
+    invited_by: UserRef; created_at: datetime; expires_at: datetime; accepted_at: datetime | None
+```
+
+### Phase 3 project events (added to the SSE stream)
+
+`test_design.generated {stage_run_version, conditions, cases, data, generated_by}`, `test_design.review_ready {candidate_version, summary}`, `test_cases.priorities_updated {count}`, and `artefact.updated` with types `test_case`/`test_condition`/`test_data`. `gate.*` and `gate.reopened` cover G5. `data` never contains test data values or secret values.
+
+### Phase 3 rate limits
+
+| Scope | Limit |
+|---|---|
+| invitations per organisation | 20 / hour |
+| invitation lookups and accepts per IP | 10 / hour |
+| stage runs per project | 10 / hour (unchanged; covers test design) |
+| assistant | unchanged (20 messages/min/user; 200 AI turns/day/org) |
+
+### Phase 3 backend notes (as built)
+
+- `Risk` carries `coverage` on the list **and** on `GET /risks/{id}`, PATCH and create responses. `?uncovered=true` returns risks with an approved linked requirement that has no approved case (the same rule as `Gaps.untested_high_risk`, for every level).
+- Risk create/PATCH (and accepted reassessments, strategy regeneration apply, G4 approval) recompute derived case priority in the same transaction and emit `test_cases.priorities_updated {count}` when anything changed. A risk write still reopens G4 (Phase 2 rule); it never reopens G5.
+- `basis=approved` on traceability reads the cases frozen in the last G5 approval at their approved versions (content from their revisions); requirements, ACs and risks are the current versions.
+- `RtmContent.based_on[gate]` is `"<first 12 hex of the snapshot hash> · approved by <name> on <YYYY-MM-DD>"` or `null`. Both P3 reports are built from the current design (counts equal `/test-cases/stats`); the approval stamp is `approved` only when the current G5 snapshot hash equals the last G5 approval.
+- Readiness facts: `dor.test_data_identified` (form requirements in scope) reports per field label whether an active TD item is used by a draft/approved case, or the field has an open question (`not_met`, "Open question: Message (REQ-0007 has an open question)"); with no design yet it falls back to the Phase 2 AC test values. `dod.ac_covered` counts approved ACs of approved requirements covered by a draft/approved case. `dod.traceability_updated` is `not_met` when the design is stale, an approved requirement has no case, or a case has no requirement.
+- `DELETE /test-cases/{id}` answers 405 with `Allow: GET, PATCH` and error code `method_not_allowed`.
+- `Coverage.approved_at`: when the last G5 approval was made (the snapshot `basis=approved` reads), on both bases; `null` before any G5. The UI can offer "Last approved" whenever it is set, even while G5 is reopened.
+- `GET /projects/{id}/stages/{stage}/runs` (exists): each `StageRunSummary` gains `superseded: bool`. An older run replaced by the current version (its stored status `awaiting_approval`, `approved` or `completed`) is listed with `status: "superseded"` and `superseded: true`.
+- `GET /projects/{id}/test-cases/by-key/{key}` exists (current design run).
+- Every approved requirement gets at least one designed case. Where no technique applies (a security, performance or backend requirement, or one without a form), the rules design a `checklist` case from its acceptance criteria. A test type that needs separate approval or is out of scope gets a passive `functional` check with that reason in the explanation and condition notes. Active security/performance testing is still listed under `not_designed`. Sign-in over HTTPS has its own three-step check.
+- A boundary value whose length is inside the limit but whose value can't pass the field's format (for example a 1-character value in a `type=email` field) is expected to be rejected as an invalid email/web address/number/format, never accepted.
+- Lint `missing_expected_result` on steps: one error (path `steps[last].expected`) only when no step has an expected result. Steps without one are fine otherwise; the overall expected result is still required. `rules_version` is now 2 (stored lint is re-run on read).
+- The TCS CSV has exactly one row per case (a case linked to several requirements is listed once). Open-question expected results are written as "Not decided: …" in CSV and HTML.
+- Assistant capabilities: every intent carries `needs_ai` (= `requires_ai`). `propose_test_case_update` ("Update test cases") and `propose_missing_test_cases` ("Suggest missing test cases") are `needs_ai: true, available: false`.
+- `propose_negative_cases` draws on the baseline design's negatives plus the catalogue: spaces before and after a value, paste over `maxlength`, an email address with a space inside or two "@", and the email EP invalid classes. It drops existing cases by match key, normalised title and the same distinguishing data. Preview items: `{title, steps: [{action, expected}] (values written in), expected_result, technique, classification, constraint, data: [{field_label, value, new}]}`. When nothing is missing, the answer is "No further negative test cases can be derived from the discovered constraints." followed by the existing negative cases, cited.
+- `propose_regression_suite` changes and preview items: `{case_id, key, action: "add"|"remove", from, to, reason}`. Reasons are "Covers RISK-003 (high risk)", "Changed or added since Gate 5 was last approved", "Main positive case for its feature, so every feature keeps one check", "Approved test case (scope: every approved case)" or "Not selected by this scope". The summary names the scope in words ("high-risk cases", "changed since Gate 5", "every approved case").
+- `TestDataItem.boundary` and `TestCaseDetail.design_basis` gain `coverage_item_label` ("len:0" → "empty", "len:81" → "81 characters", "num:11" → "11", "email:missing_at" → "missing at"). `automation_suitability.reason` no longer starts with "Preliminary: assessed in Phase 4." (that is what `assessed: "preliminary"` means).
+- Cases accepted from an `add_test_cases` proposal are stored as previewed: the step text with values written in (no `{dN}`), the data, the expected results, `classification` from the preview, `generated_by: "rules"`, `human_edited: false`, `source: "assistant"`, and `design_basis.explanation` = the preview's `constraint`. New data items are `generated_by: "rules"`, `classification: "inferred"`. Rows created through the API (by people or from proposals, match key `user:…`) are kept by regeneration reviews, never rejected as no longer found.
+- Accepting an `add_test_cases` or `set_suite` proposal is one transaction: the cases, their new test data items, revisions (`source: "assistant"`), the G5 reopen and the `assistant.proposal_accepted` audit row commit together. A changed target gives 409 and marks the proposal `stale`. A validation failure gives 422 and marks it `failed`. Any other error rolls everything back and leaves it `pending`. Nothing is half-applied. New test data items are also listed in `result.applied`.
+
+### Phase 4 backend notes (as built, P4-00/P4-01)
+
+- `automation_assessment`, `automation`, `execution` and `failure_analysis` are listed with `phase: 4`. Until their story registers a real handler the stage is never auto-queued, and `POST /stages/{stage}/run` answers 422 "<Stage title> is not available yet" (after the upstream gate check, so a missing G5 still answers 409 `gate_blocked` "Test design approval (G5) must be approved first").
+- `POST /stages/execution/run` answers 422 "Start a test run from Test Execution"; `failure_analysis` answers 422 "Failure analysis runs automatically after a test run with failures"; `defects_summary` (derived) answers 422 "Defect reports and QA summary is computed automatically".
+- `PATCH /gates/G7` and `/gates/G8` (and their decisions) answer 422 "G7 is decided per test run" / "G8 is decided per defect".
+- The `defects_summary` stage status is derived: `awaiting_approval` while any draft defect exists, `completed` once a defect exists or failure analysis has run, otherwise `not_started`.
+- The `execution` stage mirrors the latest execution run (queued → queued, running → running, passed/failed → completed, error → failed, cancelled → cancelled).
+- A G5 re-approval with a changed snapshot marks `automation_assessment` and `automation` stale ("Test cases changed after this assessment" / "Test cases changed after these scripts were written") and re-queues the assessment; existing scripts stay readable.
+- `GET /health` gains `automation: {node, toolkit, playwright, browsers: [...]}` (all null/empty when the toolkit is not installed). It does not change the overall health status.
+
+### Phase 4 backend notes (as built, P4-02..P4-05)
+
+- `automation_assessment` and `automation` have real handlers. The assessment runs after G5, then queues script writing; scripts are written by rules (AI scripts only when an AI provider is configured) and then validated by a background job `automation_validate`.
+- `GET /projects/{id}/automation/assessment` — counts and per-case suitability with reasons (member+viewer).
+- `GET /projects/{id}/automation?version=` — stage, G5, `toolkit_problem`, `credentials_saved`, `bundle` (scripts with `status`, `checks`, `locators`, `first_problem`; assets with locator status), `versions`, `g6` (`state`, `preconditions`, `decided_at`) and `permissions{can_edit, can_approve}`.
+- `GET /automation-scripts/{id}` (code, validation, assertion map with step text, review, case, `can_review`); `GET /automation-scripts/{id}/versions` (cause: "First version", "Test case changed", …); `GET /automation-assets/{id}` (locator table, `how` is the Playwright expression).
+- `POST /projects/{id}/automation/validate` (202, member; 409 when the toolkit is not installed) and `POST /automation-scripts/{id}/validate`. Validation runs the toolkit's `init`/`validate` in a throwaway workspace, a secret scan against the project's saved secrets, the test-case tag check, and a live locator check (GET only, signing in only when the page needs it and credentials exist). Nothing is clicked, typed or submitted.
+- `POST /automation-scripts/{id}/review` (`can_approve`): `{decision: approve|reject, comment}`. Rules scripts answer 409; reject without a comment answers 422 "Say what's wrong with this script.". Response `message` is "Script approved.", "Script rejected. {key} will use its rules script." or "Script rejected. {key} is not automated: script rejected in review.".
+- **G6 (decision D10)**: no manual approve. When every script is valid and every AI script has been reviewed, the gate is recorded automatically and the event `gate.passed_automatically` ("Gate 6: Script validation passed automatically") is emitted. `PATCH /gates/G6` is not used by the web.
+- `POST /projects/{id}/execution-runs/preview` (member; viewer 403): `{selection: {suite, case_keys}, browsers, viewports}` → cases in scope with side effects, cases left out with reason (`needs a person`, `no script yet`, `script is outdated`, `script needs review (Gate 6)`, `script rejected in review`, `script can't run`, `script not checked yet`), test count, `over_limit` (300), estimated time, `risky_line` and `approvals_needed`.
+- `GET /approvals/{id}` and `POST /approvals/{id}/decision` (`can_approve`; another organisation's approval answers 404): `{decision, comment, confirm_text}`. Approving either kind needs the target host typed (trimmed, case-insensitive), else 422 "Type {host} exactly to confirm.". An expired approval answers 409 "APR-… expired after 24 hours. Request the run again."; an approver may decide their own request. Audit: `approval.requested`, `approval.approved`, `approval.rejected`, `approval.used`. The run endpoints themselves are P4-06; they must call `services.approvals.ensure_decided` (409 `gate_blocked` "Approve or reject: …") before authorising.
+
+### Phase 4 backend notes (as built, P4-06..P4-09)
+
+Reads are open to viewers; requests, cancels, re-runs, reclassifying, raising/editing defects, marking fixed and closing need a member; authorising runs (G7), deciding approvals, confirming/rejecting defects (G8) and marking verified need `can_approve`. Another organisation's run, result or defect answers 404.
+
+- `GET /projects/{id}/execution-runs?status=&mode=&limit=` → `{items: [run summary], waiting: [keys], running: key|null, permissions{can_request, can_authorise}}`. A run summary has `key`, `mode`, `status`, `selection`, `selection_label`, `browsers`, `viewports`, `tests`, `totals`, `notes`, `requested_by`, `authorisation{decision, by, at, comment, self_authorised}`, `created_at`, `started_at`, `finished_at`, `duration_ms`, `error`, `bundle_version`. When the approver who authorised is also the requester, `self_authorised` is true and events read "{key} requested and authorised by {name}".
+- `GET /execution-runs/{id}` and `GET /projects/{id}/execution-runs/by-key/{key}` (404 "We couldn't find {key} in this project.") add `scope` (frozen preview), `config{workers, retries, test_timeout_s}`, `approvals`, `tests_rows` (every planned test with its result, or `running`/`waiting` while the run goes), `progress`, `request_problem` (expired after 7 days / 24 h with an approval / scripts changed), `waiting_for` (the run ahead), `cancelled_by`, `analysis{status, output{analysed, by_classification, groups[{classification, label, items}], drafted}, error, generated_by}` and `permissions{can_authorise, can_cancel, can_rerun, is_requester}`. `GET /execution-runs/{id}/results` returns `tests_rows`.
+- `POST /projects/{id}/execution-runs` (member, 201): `{selection{suite|case_keys}, browsers, viewports, notes, workers, authorise, approvals[{kind, decision, confirm_text, comment}]}`. `authorise: true` needs `can_approve` (403) and authorises in the same request (decision D8); approvals must all be decided in that request (409 `gate_blocked` otherwise). 409 "Tests can't run on this server: …" when the toolkit is missing; 409 "No script can run yet…" when nothing is runnable; 409 when explicit `case_keys` are all left out; 422 over the 300-test limit. Nothing contacts the site until the run is authorised.
+- `POST /execution-runs/{id}/authorise` (`can_approve`): `{decision: approve|reject, comment, approvals}`. Reject needs a comment (422 "Say why this run shouldn't go ahead."). Approve records a `gate_decisions` row (gate G7, `subject_type='execution_run'`, `snapshot_hash` = scope hash) and queues the run; a stale request answers 409 with the `request_problem` text.
+- `POST /execution-runs/{id}/cancel` (member: own runs; approver: any) → `{message, run}`: "Request withdrawn. Nothing ran." before it starts, else "{key} cancelled."; a running run is stopped within a few seconds and its unfinished tests read "Error: Run cancelled".
+- `POST /execution-runs/{id}/rerun` (member, 201) `{only: failed|all}` → a **new** run request (G7 again).
+- `GET /execution-runs/{id}/live` → `{slots[{slot, title, state, frame_url, at}]}` while running, 404 afterwards. `frame_url` is a short-lived signed URL to `GET /execution-runs/{id}/live/{slot}/frame?exp=&sig=` (JPEG, `no-store`; frames are never stored).
+- `GET /execution-results/{id}` and `GET /projects/{id}/execution-results/by-key/{key}`: row fields plus `run`, `case{key, version, expected_result, provenance, steps}`, `script`, `attempt_details[{attempt, status, duration_ms, steps[{n, title, status, duration_ms, error}], error}]`, `actual_result`, `page_state{url, title, heading, messages, browser}`, `checks_by_step`, `evidence[{…EvidenceLink, attempt, masked}]`, `signs_in`, `retried`, `analysis`, `defect` and `permissions{can_reclassify, can_raise_defect}`. Statuses: passed / failed (assertion or timeout) / error (script, setup, cancel, time limit, worker stopped) / flaky (passed on retry; never a defect) / skipped (approval not given) / blocked (needs saved test credentials).
+- `analysis` (P4-08, rules): `{classification, label, confidence, signals[{code, detail, observed, evidence}], summary, possible_causes, next_steps, hypothesis: true, generated_by: "rules", case_key, evidence_refs, defect? | no_defect (flaky|low_confidence|not_application), overridden?{by, by_user, at, reason, previous, original}}`. Order: flaky → network → environment → script → selector → test data → application → unknown. A failed `expect()` after every action passed is `application_defect`, not a script problem. Results with "Run cancelled" or a stopped worker are not analysed; manual results (P4-14) are not classified.
+- `POST /execution-results/{id}/classification` (member) `{classification, reason}`: reason required (422 "Say why you think the cause is different."); the result status never changes; to `application_defect` drafts a defect when none is linked.
+- Defects: `GET /projects/{id}/defects?status=open|all|draft,…&severity=&priority=&source=&case=&requirement=&run=&q=` → `{items[{…, reproducibility, cases, requirements, run_key, result_key, last_seen, actions{confirm, reject, fixed, verified, closed}}], counts, finished_runs, permissions{can_raise, can_decide}}`; each action is `null` when allowed, `"permission"`, or the reason it doesn't apply. `GET /defects/{id}`, `GET /projects/{id}/defects/by-key/{key}` add every §11 field, `evidence`, `result`, `analysis`, `script`, `occurrences`, `g8`, `verify{ready, message}` (Fixed only) and `permissions{can_edit, can_decide}`. `GET /defects/{id}/revisions`, `GET /defects/{id}/occurrences`.
+- `POST /projects/{id}/defects` (member, 201) `{from_result_id? | test_case_key?, summary, description, preconditions, steps, expected, actual, severity, priority, related_to}`; errors "Add a summary." / "Describe the actual result.". Saved as a `draft`, source `user`.
+- `PATCH /defects/{id}` (member; drafts and confirmed only; `version` required, 409 on conflict): changing severity or priority needs `severity_reason`/`priority_reason` (422 "Explain why you changed the {field}.").
+- `POST /defects/{id}/status` `{action: confirm|reject|fixed|verified|closed, reason, comment, duplicate_of}` → `{message, defect}`. Confirm/reject record a G8 `gate_decisions` row (`subject_type='defect'`); reject needs a reason and a comment. `verified` answers 409 "No passing re-run yet…" until a later passed result of a linked case with the same or newer script exists. `POST /projects/{id}/defects/bulk-status` `{ids (1–100), action, …}` → `{done, skipped[{key, reason}], message}` ("3 defects confirmed. 2 skipped.").
+- `DELETE /defects/{id}` answers 405 "Defects can't be deleted. Reject or close it instead; the history stays.".
+- Evidence: `video/webm` is served inline (for `<video controls>`). Network logs record every response as `HTTP {status} {method} {url}`, failures as `FAILED …` and policy blocks as `BLOCKED by policy …`.
+- Toolkit: `run --progress <file>` writes JSON lines (`begin`/`end` with file, project, attempt, status, retries). Env `ATA_NO_RETRY` (comma-separated spec paths run once: external-transaction/destructive tests) and `ATA_NO_TRACE` (sign-in specs; no trace) are on the call allow-list.
+
+### Phase 4 backend notes (as built, P4-03b, P4-08 heal, P4-10..P4-13)
+
+- Heal (P4-08, §9.3): `GET /execution-results/{id}` adds `heal_suggestions[{…, asset_version}]` and `permissions.can_accept_fix` (member). `POST /execution-results/{id}/heal-suggestions/{n}/accept` (member; viewer 403; 409 when already accepted or the page object changed) → `{message, asset{id, path, version}, scripts_to_validate, result}`. Only the locator line changes; expected values and checks never do; the affected scripts must pass checks again (`POST /projects/{id}/automation/validate`).
+- `GET /projects/{id}` / dashboard project summaries add `last_run{key, status, tests, totals, finished_at}`; the dashboard "awaiting" count includes runs waiting for authorisation and draft defects. G7/G8 are per subject and never appear in `awaiting` gate lists.
+- `GET /projects/{id}/test-cases` items add `last_result{status, run_key, result_key, at, manual, classification, label, results[{browser, viewport, status, result_key}]}` (latest run per lineage, worst status first) and `execution_status`.
+- Traceability (P4-12): forward rows' `test_cases[]` carry `script`, `result`, `defects`; `automation`, `results`, `defects` are lists; backward rows add `script`, `result`, `defects`. `GET …/traceability/coverage` adds `execution{executed, requirements{approved, with_result}, results{tests, passed, failed, flaky, error, blocked, skipped}, automation{approved_cases, with_valid_script}}`. `GET …/traceability/gaps` adds `requirements_without_execution_evidence{executed, automated_not_run, manual_only}`, `failed_tests`, `flaky_tests` (separate, never counted as passed), `outdated_automation_scripts`, `defects_without_regression_coverage`. Chains accept `DEF-` keys and include script/result/defect levels; `later_phase` is `[]`. DoD `dod.tests_executed` and `dod.no_open_high_defects` read real results.
+- Reports (P4-11): `POST /projects/{id}/reports {report_type: execution|defect, run_key?}`. Execution: per run (`run_key`, 404 unknown, 409 not finished) or latest result per test case; always "approved" with G7 as its gate; causes carry the hypothesis note. Defect: `approval.status` is `draft` while drafts exist (G8). Summaries add `run_key`. `GET /reports/{id}/download?format=csv` works for both. File names `{host}-test-execution-RUN-0003-{date}.{fmt}` and `{host}-defects-v{n}-{date}.{fmt}`. 409 "Not available yet: needs a test run" before any run.
+- Export (P4-10): `GET /projects/{id}/automation/export?version=` (member; viewer 403; other org 404) → `application/zip` `{host}-playwright-v{n}.zip`: runnable scripts (valid, AI ones approved; rejected AI → rules fallback), page objects/data, platform files except `live.ts`/`progress.ts`, `package.json` (Playwright 1.65.0), README (settings via env, left-out list), `.github/workflows/playwright.yml`, `.gitlab-ci.yml` (YAML-validated in tests, not run on CI). 409 when no script can run. `GET /projects/{id}/automation` `bundle.export{scripts, left_out[{case_key, reason}]}` and `bundle.ai_checks[]`. Audit `automation.exported`.
+- AI scripts (P4-03b): with AI configured the automation stage asks the model per case (rule rewrites; `manual_only` cases blocked only by unresolved fields/controls/forms/pages). Offline checks + up to 3 repairs; then the rules script (or no script) and `ai_fallback`/`ai_invalid`; `assertion_changed` (rewrite changed the assertion set) and `assertion_unmapped` (AI-only assertion without `// expects: step n|overall`) drop the AI version. Accepted AI scripts are `generated_by: "ai"` and need G6 review. Events `automation.ai_check`.
+- Assistant v3 (P4-13): intents `explain_failed_test{key}`, `analyse_defect{key}`, `list_defects{status, severity}`, `automation_status`, `propose_rerun{only_failed|case_keys}` (proposal kind `request_run`; accepting creates a run in `awaiting_authorisation`; 409 `gate_blocked` with the reason when the cases can't run), `propose_script_improvement` (needs AI; not available yet). `execution_results` reports the latest finished run. The citation guard resolves `RUN-`, `RUN-n-n`, `DEF-` and `APR-` keys. `later_phase_tasks` lists Phase 5 only.
+
+### Phase 5 backend notes (as built, P5-00/P5-01a)
+
+The Phase 5 endpoints are specified per story in the roadmap; this section records what P5-00 and P5-01a changed.
+
+- `CURRENT_PHASE = 5`. `GET /projects/{id}/workflow` lists three `phase: 5` stages, all `available`: `performance` (upstream `test_strategy`), `accessibility` and `security_assessment` (upstream `discovery`, no gate). They are optional branches: `advance()` never queues them, so their status stays `not_started` until someone starts one.
+- `POST /projects/{id}/stages/accessibility/run` and `/stages/security_assessment/run`: 409 `gate_blocked` "Discovery completeness (G2) must be satisfied first" until discovery has output and G2 is satisfied under the project's policy; after that 422 "Accessibility testing is not available yet" / "Passive security assessment is not available yet" until P5-02 / P5-03 register their handlers. `POST /stages/performance/run` always answers 422 "Start a performance run from Performance".
+- A discovery re-run marks a finished `accessibility` or `security_assessment` stage `stale` with `stale_reason` "Pages changed after this check"; earlier scans stay readable. `performance` is never marked stale by a re-run (it mirrors its runs). A G4 re-approval with a changed strategy marks `draft`/`ready` performance profiles `stale` ("The test strategy changed after this profile was written").
+- Stage mirroring for P5-02/P5-03/P5-01b (`domain/stages.py`): `QUALITY_SCAN_STAGE_STATUS` (queued → queued, running → running, completed/partial → completed, failed → failed, cancelled → cancelled) and `PERF_RUN_STAGE_STATUS` (queued → queued, running → running, passed/failed/aborted → completed, stopped → cancelled, error → failed; runs awaiting, rejected or expired don't move the stage).
+- `GET /health` gains `tools: {loadgen, axe, k6, docker}`: `loadgen` is the toolkit's load generator version (`qa version` field `loadgen`, toolkit 0.5.0), `axe` is `null` until P5-02, and `k6`/`docker` come from `shutil.which` + `--version` (5 s timeout, cached 5 minutes, read only). On this machine `k6` and `docker` are `null`. The overall `status` does not depend on them.
+- `organisations.settings.load_ceiling` defaults to `{vus: 20, rps: 20, duration_s: 300}` (D18). The platform hard cap comes from `LOAD_HARD_CAP_VUS/RPS/DURATION_S` (default 50 / 50 / 600); startup is refused above the compiled maximum 200 / 200 / 1800. `PATCH /organisations/{id}/settings` is P5-01b.
+- Load generator (P5-01a; called only by `app/automation/loadgen.py`, never over HTTP): `qa perf --config <file> --max-vus N --max-rps N --max-duration S [--summary <file>] [--control <file>] [--export-k6 <file>]`. One JSON line a second on stdout `{type: "progress", t, users, requests, rps, errors, p95_ms, requests_total, errors_total}`; the last line is the summary (without the time series when `--summary` is given). Exit 0 completed, 1 stopped or aborted, 2 refused (e.g. `{"error": "Profile exceeds the platform limit: 51 users (limit 50)"}`) before any request. Summary: `engine{name: "ata-loadgen", version}`, `status` (completed/stopped/aborted), `reason` ("Stopped automatically: 100 % errors over 10 s", "… p95 response time 12.3 s over 10 s", "… no successful response for 5 s", "Stopped by a person"), `generator_location`, `started_at`, `finished_at`, `duration_s`, `planned_duration_s`, `profile`, `limits`, `overall` and `targets[]` (`count, ok, redirects, client_errors, errors, error_rate, cancelled, rps, latency_ms{min, mean, p50, p90, p95, p99, max}, status_codes`), `timeseries[{t, users, requests, rps, errors, p95_ms}]`. Errors are 5xx, timeouts (10 s) and network errors; 4xx are `client_errors`; 3xx are `redirects` and never followed. The k6 export is labelled "Not run by the platform".
+
+### Phase 5 backend notes (as built, P5-01b/P5-02/P5-03)
+
+- Run-driven stages: `accessibility` and `security_assessment` now behave like `performance`. `POST /stages/{key}/run` answers 422 "Start an accessibility check from Non-functional" / "Start a security check from Non-functional" / "Start a performance run from Performance"; the stage mirrors its latest scan or run (`QUALITY_SCAN_STAGE_STATUS`, `PERF_RUN_STAGE_STATUS`). Before G2 the check endpoints answer 409 `gate_blocked`; before G4 drafting a profile answers 409 "Load profiles use the approved Test Strategy. Approve Gate 4 first."
+- `GET /projects/{id}/non-functional`: overview of the three tabs (latest check per kind, profiles, runs, permissions, statements).
+- Checks: `POST /projects/{id}/accessibility-scans` `{pages?, viewports?, keyboard?, signed_in?}` and `POST /projects/{id}/security-assessments` `{pages?, signed_in?}` → 201 with the scan (member; viewers 403; one running check per kind and project, else 409 "An accessibility check is already running (A11Y-0002)."). `GET` lists of both; `GET /quality-scans/{id}`, `GET /projects/{id}/quality-scans/by-key/{key}`, `POST /quality-scans/{id}/cancel`, `GET /quality-scans/{id}/findings?severity=&page=&rule=&status=`, `GET /quality-findings/{id}`, `POST /quality-findings/{id}/triage {status: open|accepted_risk|false_positive, reason}` (422 "Choose an option." / "Say why. The reason is shown in reports."), `POST /quality-findings/{id}/raise-defect {}` → 201 `{defect}`; a security rule is raised as one grouped draft across its pages (open question 3). Scan status `partial` with `not_checked[{url, reason}]` when a page timed out or failed; its label is "Partial: N page(s) not checked".
+- Accessibility: axe-core 4.14.0 (vendored in `automation/node_modules`, version checked against the lock file, sha256 recorded in `tool_versions`) injected over CDP, so a target CSP doesn't block it; tags `wcag2a, wcag2aa, wcag21a, wcag21aa, wcag22aa, best-practice`. Keyboard pass: Tab and Shift+Tab only (≤ 60 presses); heuristic findings `keyboard-trap`, `focus-not-visible`, `not-reachable` are never drafted. D20 drafts: one per critical/serious axe rule per project, grouped across pages; a later check adds occurrences to the open draft (`defect.environment.occurrences`) instead of a new draft.
+- Passive security: 22 rules in `app/security/passive_rules.py`; one row per rule (or per cookie/header when it failed) with `result` failed/passed/not_applicable/not_checked, `page_count`, `observed`. Plain-http loopback targets get `not_applicable` "The target is plain http on this computer (loopback)" for the transport rules. Cookie values are never read or stored. Nothing is drafted automatically (D19/D20). Response headers come from the network policy's fetched response (`NetworkPolicy.nav_headers`), because Chromium drops `Set-Cookie` from a fulfilled response.
+- Profiles: `GET/POST /projects/{id}/performance-profiles` (`{type: load|stress|spike|soak}`; key `PRF-01`), `GET .../eligible-pages`, `GET .../by-key/{key}?v=`, `GET/PATCH /performance-profiles/{id}` (optimistic `version`; every save is a new version kept as a revision; 422 names the exceeded limit; requirement thresholds can only be tightened: "This threshold comes from REQ-0012. Change the requirement to change it."; per-page thresholds follow the targets), `POST /performance-profiles/{id}/ready|retire`, `GET /performance-profiles/{id}/k6-script` (header `X-Not-Run-By-Platform: true`).
+- Load tests: `POST /projects/{id}/performance-runs {profile_id, note?, approve?, confirm_text?}` → 201 `awaiting_approval` with a `load_test` approval (24 h, single use); an approver may approve in the same call (open question 1). `POST /approvals/{id}/decision` for a `load_test` approval returns the run: approve needs `confirm_text` equal to the host (422 "Type {host} exactly to approve."), reject needs a comment (422 "Say why this load test shouldn't run."); a changed profile or lowered ceiling blocks approval (409 with the reason). `GET /projects/{id}/performance-runs`, `GET /performance-runs/{id}`, `GET .../by-key/{key}`, `POST /performance-runs/{id}/stop` (requester or approver; ends within ~2 s), `POST /performance-runs/{id}/withdraw` (requester, while waiting), `GET /performance-runs/{id}/k6-script`. Statuses: awaiting_approval, rejected, expired, queued, running, passed, failed, stopped, aborted, error. Thresholds are judged in code; stopped/aborted/error runs report `not_measured` (values still shown, open question 7). D20: a `failed` run drafts one defect per missed threshold or adds an occurrence to the open one; aborted runs draft nothing. One load test per organisation at a time (job group `performance`), never beside a test run on the same project.
+- `GET/PATCH /organisations/{id}/settings {load_ceiling: {vus, rps, duration_s}}` (owner/admin; 422 "This server allows up to N.").
+- G8: `POST /defects/{id}/status` and bulk accept `reason: "accepted_risk"` for accessibility, security and performance drafts only (422 otherwise) and `mark_findings: true` to mark the draft's findings Accepted risk with the comment (open question 2). Defect list rows carry `why` (string or null): for non-functional sources, the observed actual without its `[Observed]`/`[Measured]` prefix plus the check or run key ("axe rule image-alt failed on /products/1, /products/2 (2 elements). · A11Y-0001"); null for functional defects.
+- `GET /health` reports `tools.axe` (the vendored version) and `egress_proxy: "on"|"off"` (always `off`: there is no egress proxy).
+
+### Phase 5 backend notes (as built, P5-04a/P5-04b/P5-05/P5-07)
+
+- Reports (P5-04a): report types `performance`, `accessibility` and `security` (the last two need migration `0018`). `POST /projects/{id}/reports {report_type}` answers 409 before any finished load test or check; a report is also frozen automatically when a check or load test finishes. Formats: `pdf`, `html`, `json` (API only), `csv`, and for `performance` also `csv_timeseries`. The Security Report starts with the fixed passive-check statement; the Performance Report names the approver and "host typed: yes" (never the typed text). Files carry names only, never email addresses. The Defect Report names the latest Gate 8 decider and splits counts by `source`. Phase 2 reports (`requirements_spec`, `test_strategy`, `test_plan`) now name people without their email too, in every format and in the stored content (`approval.decided_by` has `full_name` only).
+- XLSX (P5-04b, D21): `GET /reports/{id}/download?format=xlsx` for the table reports (`test_case_spec`, `rtm`, `execution`, `defect`, `performance`, `accessibility`, `security`); other types answer 422 "XLSX is available for table reports". The workbook is built from the report's CSV files, so each sheet has the same rows as its CSV: a `Summary` sheet (band text, report, project, generated, source, sheet list, "Values only: this workbook contains no formulas."), then one sheet per table (`Test cases`, `Traceability`, `Results`, `Defects`, `Pages` + `Time series`, `Findings`, `Rules`) with a bold, filtered, frozen header row. Every string cell is stored as text, so no cell can become a formula. Library: `openpyxl` (new dependency). DOCX (P5-04c) was not built.
+- Traceability (P5-07): matrix rows gain `accessibility`, `security` and `performance` cells (`null` when never checked); `coverage.non_functional` counts the three gap lists; `gaps` gains `requirements_with_open_accessibility_findings`, `pages_not_checked_for_accessibility` and `non_functional_requirements_without_evidence`. `GET /projects/{id}/traceability/chain?key=` accepts `PERF-`, `PRF-`, `A11Y-` and `SEC-` keys (scans and findings) and returns their chain (page, finding, requirement, defect, approval). Readiness checks read the same facts (latest accessibility and security checks, latest judged load test, accepted-risk findings with who and why).
+- Defects: `GET /projects/{id}/defects?source=` accepts a comma-separated list (`analysis,user` is the "Functional" filter).
+- Assistant v4 (P5-07): intents `performance_summary`, `accessibility_summary`, `security_summary`, `explain_finding`, `propose_scan` and `propose_performance_run`. The two proposals have kinds `start_check` (accepting it starts an accessibility or security check; viewers get the read-only text) and `request_load_test` (accepting it requests a load test, which still waits for its own approval with the typed host). Citations resolve `PERF-`, `PRF-`, `A11Y-` and `SEC-` keys (scan and finding keys). Every answer to a security question, built-in or AI, ends with the fixed passive-check statement. "Later phases" now lists only Phase 6 items.
+- Audit log (P5-05b, owner/admin; others 403 "Only owners and admins can see the audit log."): `GET /organisations/{id}/audit-log?actor=&group=&action=&project=&from=&to=&cursor=&limit=` → `{items[{id, at, who{name, email}, actor_type, action, label, project{id, name}, details, target_type}], total, next_cursor, groups, export_limit}`. `group` is one of the plain groups (Gates, Approvals and load tests, Checks, Defects, Reports, Settings and members, Projects). `details` never contains a typed host, secret or token ("host typed: yes"). `GET .../audit-log/export?format=csv|json` with the same filters returns the file (header `X-Entries`), 422 above 100,000 entries, and records `audit_log.exported`. `details` shows before and after for settings changes ("users 20 → 30", "screenshots 90 days → 30 days"); saving unchanged load limits or retention records nothing. The audit-log screen and its export are the one place that shows email addresses: owners and admins only, by design (P5-05b), so an export is personal data and should be handled as such.
+- Retention (P5-05c, owner/admin): `GET/PUT /organisations/{id}/retention {videos_traces_days, screenshots_days, timeseries_days}` (whole numbers ≥ 0; 0 keeps forever; defaults 30/90/90; response has `saved` and `can_edit`; records `retention.changed`). `POST .../retention/apply` runs the clean-up now; the worker runs it daily. Nothing is removed until a policy has been saved. Removal deletes the stored file of evidence older than the policy (by `captured_at`), sets `evidence.purged_at` and keeps the record; report files and the audit log are never touched. Evidence records gain `removed` ("Removed by the retention policy on 14 Dec 2026."), and the signed content URL of a removed file answers **410** `gone` with the same text. A manual `apply` is recorded as the person who ran it; the daily job as the system. Removing a load test's time-series file also clears the series kept in the run (`performance_runs.metrics.timeseries` → `[]`, `timeseries_removed_at`), and the run then has `timeseries_removed` ("Removed by the retention policy on …"); the Performance Report's `csv_timeseries` download of that run answers 410 with the same text. The report's other files keep their copy (reports are never removed by retention).
+- Archive and delete (P5-05c, open question 4): `POST /projects/{id}/archive|unarchive` now need owner or admin (403 "Only owners and admins can archive or unarchive a project."); unarchiving clears a scheduled deletion. `POST /projects/{id}/purge {confirm_name}` (owner only, 403 "Only the organisation owner can delete a project permanently."; 409 "Archive the project first."; 422 "Type the project name exactly to confirm.") schedules the deletion 24 hours ahead and answers `{purge_scheduled_at, archived, message: "Demo Shop will be deleted on 14 Nov at 16:02 UTC."}`; `DELETE /projects/{id}/purge` cancels it ("Deletion cancelled. Nothing was removed."). Project summaries and details carry `purge_scheduled_at`. The worker checks every minute and deletes a project whose time has passed and that is still archived: every row of the project in every table and every stored file under it. Only the audit log stays (its `project_id` has no foreign key), with a `project.purged` entry (name, rows and files removed). A project with a queued or running job is retried on the next pass. Afterwards every URL of the project answers 404. The UI words the time in the viewer's local time.
+- Load tests (P5-BUG-02, design check 25): a requirement whose provenance is `assumed` or `unverified` (the rule-made "Pages load within 3 seconds" is a placeholder) never sets a page threshold; the 800 ms default stays. Requirements someone stated (document, user, observed) still lock theirs. Missed-threshold drafts are named after the page ("Desk lamp page slows down under load …"), using discovery's title when the profile's target has none. A run that adds an occurrence to an open performance defect lists it in `defects[]` with `link: "occurrence_added"` (a drafting run has `link: "drafted"`), and the defect's summary and measured line follow the latest measurement.
+- CI (P5-05d): `.github/workflows/ci.yml` runs `scripts/check.sh` (backend ruff, format, mypy, pytest; web tsc, eslint, unit; automation tests, typecheck, eslint; `pip-audit` on the locked backend set through uv, and `npm audit` of production dependencies for web and automation, where high and critical advisories fail unless listed with a reason in `scripts/audit-allowlist.json`) and the mocked UI suite.
+- Not built in Phase 5: DOCX reports (P5-04c); API testing (P5-06); the egress proxy (P5-05a), so `/health` keeps reporting `egress_proxy: "off"` and target checks remain the per-request network policy (allow-list plus DNS check before each request, which doesn't stop DNS rebinding between the check and the connection); and the Docker sandbox for the browser and load generator. These are separate cuts.
+
 ## Later phases (outline)
 
 | Phase | Endpoints |
 |---|---|
 | 2 | Specified in full above ("Phase 2 endpoints"). |
-| 3 | `GET /projects/{id}/test-conditions`, `GET/POST /projects/{id}/test-cases`, `GET/PATCH/DELETE /test-cases/{id}`, `POST /test-cases/bulk-status`, `GET /projects/{id}/traceability` (matrix + coverage stats + gap lists), `GET /projects/{id}/test-data`; risk propagation fields on `/projects/{id}/risks` (register itself ships in Phase 2); assistant v2 adds test-design intents/proposals to the Phase 2 assistant endpoints |
+| 3 | Specified in full above ("Phase 3 endpoints"). |
 | 4 | `GET /projects/{id}/automation` (bundle tree), `GET/PUT /automation-scripts/{id}`, `POST /automation-scripts/{id}/validate`, `GET /projects/{id}/automation/export.zip`, `POST /projects/{id}/approvals`, `POST /approvals/{id}/decision`, `POST /projects/{id}/execution-runs` (requires G7 decision id), `GET /execution-runs/{id}`, `POST /execution-runs/{id}/cancel`, `GET /execution-results/{id}` (+analysis), `POST /execution-results/{id}/heal-suggestions/{n}/accept`, `GET/POST /projects/{id}/defects`, `PATCH /defects/{id}` (confirm needs G8 permission) |
-| 5 | `POST /projects/{id}/performance-profiles`, `POST /projects/{id}/performance-runs` (requires approval id), `GET /performance-runs/{id}`, `POST /projects/{id}/accessibility-scans`, `POST /projects/{id}/security-assessments` (passive, approved), report types extended + `format=docx|xlsx|csv`, `GET /audit-logs` (admin), `POST /admin/projects/{id}/purge` |
+| 5 | `POST /projects/{id}/performance-profiles`, `POST /projects/{id}/performance-runs` (requires approval id), `GET /performance-runs/{id}`, `POST /projects/{id}/accessibility-scans`, `POST /projects/{id}/security-assessments` (passive; no approval, D19), report types extended + `format=docx|xlsx|csv`, `GET /audit-logs` (admin), `POST /admin/projects/{id}/purge` |
 | 6 | `POST /projects/{id}/rescans`, `GET /projects/{id}/changes?from=&to=` (diff), `GET /projects/{id}/impact` (affected cases/scripts, rerun recommendation), `POST /projects/{id}/exploratory-sessions` (approved budget), `GET /projects/{id}/release-readiness` |

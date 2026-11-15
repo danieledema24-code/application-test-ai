@@ -52,6 +52,9 @@ class StageKey(StrEnum):
     defects_summary = "defects_summary"
     release_readiness = "release_readiness"
     performance = "performance"
+    # Phase 5 (P5-00): optional branches after G2, never queued by advance().
+    accessibility = "accessibility"
+    security_assessment = "security_assessment"
 
 
 class StageStatus(StrEnum):
@@ -168,6 +171,10 @@ class EvidenceKind(StrEnum):
     report_render = "report_render"
     document_file = "document_file"
     document_text = "document_text"
+    # Phase 5 (P5-00): load-test summary and one-second time series, observed response headers of a page.
+    perf_summary = "perf_summary"
+    perf_timeseries = "perf_timeseries"
+    security_headers = "security_headers"
 
 
 class KnowledgeKind(StrEnum):
@@ -198,6 +205,8 @@ class ReportType(StrEnum):
     performance = "performance"
     completion = "completion"
     release_readiness = "release_readiness"
+    accessibility = "accessibility"
+    security = "security"
 
 
 class ReportStatus(StrEnum):
@@ -355,3 +364,251 @@ class SignInResult(StrEnum):
 class AuthContext(StrEnum):
     anonymous = "anonymous"
     authenticated = "authenticated"
+
+
+# ---------------------------------------------------------------- Phase 3: test design and traceability
+
+
+class Technique(StrEnum):
+    equivalence_partitioning = "equivalence_partitioning"
+    boundary_value_analysis = "boundary_value_analysis"
+    decision_table = "decision_table"
+    state_transition = "state_transition"
+    use_case = "use_case"
+    error_guessing = "error_guessing"
+    exploratory = "exploratory"
+    # Fixed quality checklists for non-functional cases (labels, overflow, console errors; design P3 open question 4).
+    checklist = "checklist"
+
+
+class CaseStatus(StrEnum):
+    draft = "draft"
+    approved = "approved"
+    rejected = "rejected"
+    deprecated = "deprecated"
+
+
+class Priority(StrEnum):
+    critical = "critical"
+    high = "high"
+    medium = "medium"
+    low = "low"
+
+
+class ExecutionStatus(StrEnum):
+    not_run = "not_run"
+    passed = "passed"
+    failed = "failed"
+    blocked = "blocked"
+    error = "error"
+
+
+class CaseSource(StrEnum):
+    design = "design"
+    user = "user"
+    assistant = "assistant"
+
+
+class ExpectedResultStatus(StrEnum):
+    defined = "defined"
+    open_question = "open_question"
+
+
+class AutomationSuitability(StrEnum):
+    suitable = "suitable"
+    partial = "partial"
+    manual_only = "manual_only"
+
+
+class TestDataKind(StrEnum):
+    valid = "valid"
+    invalid = "invalid"
+    boundary = "boundary"
+    secret_ref = "secret_ref"  # noqa: S105 - a reference kind, not a password
+
+
+class TestDataValueType(StrEnum):
+    text = "text"
+    email = "email"
+    number = "number"
+    empty = "empty"
+    whitespace = "whitespace"
+    secret_ref = "secret_ref"  # noqa: S105 - a reference kind, not a password
+
+
+class TestDataStatus(StrEnum):
+    active = "active"
+    retired = "retired"
+
+
+# ---------------------------------------------------------------- Phase 4: automation, execution, defects
+
+
+class GateSubjectType(StrEnum):
+    """What a per-subject gate decision is about (G7 per run, G8 per defect, G6 per AI-written script)."""
+
+    execution_run = "execution_run"
+    defect = "defect"
+    automation_script = "automation_script"
+
+
+class ScriptStatus(StrEnum):
+    draft = "draft"
+    valid = "valid"
+    invalid = "invalid"
+    outdated = "outdated"
+
+
+class AssetKind(StrEnum):
+    page_object = "page_object"
+    factory = "factory"
+    platform = "platform"
+    config = "config"
+
+
+class ScriptGeneratedBy(StrEnum):
+    rules = "rules"
+    ai = "ai"
+    heal = "heal"
+    platform = "platform"
+
+
+class RunMode(StrEnum):
+    automated = "automated"
+    manual = "manual"
+
+
+class RunStatus(StrEnum):
+    awaiting_authorisation = "awaiting_authorisation"
+    rejected = "rejected"
+    queued = "queued"
+    running = "running"
+    passed = "passed"
+    failed = "failed"
+    error = "error"
+    cancelled = "cancelled"
+
+
+class ResultStatus(StrEnum):
+    passed = "passed"
+    failed = "failed"
+    error = "error"
+    skipped = "skipped"
+    blocked = "blocked"
+    flaky = "flaky"
+
+
+class FailureClass(StrEnum):
+    application_defect = "application_defect"
+    script_defect = "script_defect"
+    selector_failure = "selector_failure"
+    test_data_issue = "test_data_issue"
+    environment_failure = "environment_failure"
+    network_failure = "network_failure"
+    flaky = "flaky"
+    unknown = "unknown"
+
+
+class ApprovalKind(StrEnum):
+    destructive = "destructive"
+    external_transaction = "external_transaction"
+    real_user_data = "real_user_data"
+    load_test = "load_test"
+    security_test = "security_test"
+
+
+class ApprovalStatus(StrEnum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    expired = "expired"
+    used = "used"
+
+
+class DefectSeverity(StrEnum):
+    critical = "critical"
+    major = "major"
+    minor = "minor"
+    trivial = "trivial"
+
+
+class DefectStatus(StrEnum):
+    draft = "draft"
+    confirmed = "confirmed"
+    rejected = "rejected"
+    fixed = "fixed"
+    verified = "verified"
+    closed = "closed"
+
+
+class DefectSource(StrEnum):
+    analysis = "analysis"
+    user = "user"
+    # Phase 5 (P5-00): drafts from non-functional findings (decision D20).
+    accessibility = "accessibility"
+    security = "security"
+    performance = "performance"
+
+
+# ---------------------------------------------------------------- Phase 5: non-functional testing
+
+
+class QualityScanKind(StrEnum):
+    accessibility = "accessibility"
+    security = "security"
+
+
+class QualityScanStatus(StrEnum):
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    partial = "partial"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class FindingSeverity(StrEnum):
+    """Accessibility uses critical/serious/moderate/minor (axe impact); security uses high/medium/low/info."""
+
+    critical = "critical"
+    serious = "serious"
+    moderate = "moderate"
+    minor = "minor"
+    high = "high"
+    medium = "medium"
+    low = "low"
+    info = "info"
+
+
+class FindingStatus(StrEnum):
+    open = "open"
+    accepted_risk = "accepted_risk"
+    false_positive = "false_positive"
+    fixed = "fixed"
+
+
+class PerfProfileType(StrEnum):
+    load = "load"
+    stress = "stress"
+    spike = "spike"
+    soak = "soak"
+
+
+class PerfProfileStatus(StrEnum):
+    draft = "draft"
+    ready = "ready"
+    stale = "stale"
+    retired = "retired"
+
+
+class PerfRunStatus(StrEnum):
+    awaiting_approval = "awaiting_approval"
+    rejected = "rejected"
+    expired = "expired"
+    queued = "queued"
+    running = "running"
+    passed = "passed"
+    failed = "failed"
+    stopped = "stopped"
+    aborted = "aborted"
+    error = "error"

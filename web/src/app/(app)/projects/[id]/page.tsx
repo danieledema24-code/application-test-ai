@@ -8,15 +8,39 @@ import { ApiError } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { Page, Proposal, Risk, ScanDetail, SecretMeta } from "@/lib/contract";
 import { fmtDateTime } from "@/lib/format";
-import { activeStage, gateReview } from "@/lib/lifecycle";
+import { activeStage, gateReview, waitingLabel } from "@/lib/lifecycle";
 import { LEVEL_TEXT } from "@/lib/strategy";
 import { attentionRows } from "@/lib/attention";
+import { useAuth } from "@/lib/auth";
+import { useCaseStats, useCoverage, useGaps } from "@/components/testcases/hooks";
 import { Card, CardBody, CardHeader, Skeleton } from "@/components/ui";
 import { gateApproved, requirementsStages, useAllRequirements, useAllRisks } from "@/components/requirements/hooks";
 import { lastSignInText } from "@/components/domain/Credentials";
 import { LifecycleProgress } from "@/components/domain/LifecycleProgress";
+import { NonFunctionalGlance, OptionalChecks, useNfOverview } from "@/components/nonfunctional/Summary";
+import { nfAttentionRows } from "@/lib/nonfunctional";
 import { AgentActivityFeed } from "@/components/domain/AgentActivityFeed";
 import { useProject } from "@/components/workspace/ProjectContext";
+import { useExecSummary } from "@/components/execution/hooks";
+import { lastRunLine, type ExecSummary } from "@/lib/execution";
+import { g6StatusText, type AutomationOverview } from "@/lib/automation";
+
+/** The Automation overview, only once scripts exist (same SWR key as the Automation page). */
+function useAutomation(projectId: string, wf: ReturnType<typeof useProject>["workflow"]) {
+  const has = !!wf?.stages.find((x) => x.key === "automation")?.current_version;
+  return useApi<AutomationOverview>(has ? `/projects/${projectId}/automation` : null, undefined, { shouldRetryOnError: false });
+}
+
+function scriptCounts(o: AutomationOverview | undefined) {
+  const scripts = o?.bundle?.scripts ?? [];
+  return {
+    total: scripts.length,
+    valid: scripts.filter((x) => x.status === "valid").length,
+    aiReview: scripts.filter((x) => x.status === "needs_review").length,
+    invalid: scripts.filter((x) => x.status === "invalid").length,
+    outdated: scripts.filter((x) => x.status === "outdated").length,
+  };
+}
 
 function Glance({ projectId, running }: { projectId: string; running: boolean }) {
   const { data, error } = useApi<ScanDetail>(`/projects/${projectId}/discovery`, undefined, { refreshInterval: running ? 5000 : 0 });
@@ -108,12 +132,17 @@ function Scope() {
 
 function Attention() {
   const p = useProject();
+  const { canApprove, role } = useAuth();
   const [all, setAll] = useState(false);
+  const exec = useExecSummary(p.id, p.workflow);
+  const automation = useAutomation(p.id, p.workflow);
   const stages = requirementsStages(p.workflow);
   const reqs = useAllRequirements(p.id, null, !!stages.req?.current_version);
+  const caseStats = useCaseStats(p.id, !!stages.design?.current_version);
   const proposals = useApi<Page<Proposal>>(`/projects/${p.id}/assistant/proposals`, { status: "pending", limit: 100 }, { shouldRetryOnError: false });
   const secrets = useApi<SecretMeta[]>(`/projects/${p.id}/secrets`, undefined, { shouldRetryOnError: false });
   const cred = secrets.data?.find((x) => x.name === "scan_credentials" || x.kind === "login_credentials");
+  const nf = useNfOverview(p.id, p.workflow);
   const rows = attentionRows({
     projectId: p.id,
     wf: p.workflow,
@@ -121,6 +150,13 @@ function Attention() {
     conflicts: (reqs.data ?? []).filter((r) => r.conflict && r.status !== "rejected").length,
     proposals: proposals.data?.items.length ?? 0,
     drafts: (reqs.data ?? []).filter((r) => r.status === "draft").length,
+    openQuestions: caseStats.data?.open_questions ?? 0,
+    canApprove,
+    exec,
+    scripts: automation.data?.bundle ? scriptCounts(automation.data) : null,
+    viewer: role === "viewer" || role === null,
+    // Phase 5 (design P5 §4.5): load tests waiting or missed, severe accessibility findings, out-of-date checks.
+    nonFunctional: nfAttentionRows(nf.overview, p.id, canApprove, role === "viewer" || role === null),
   });
   const shown = all ? rows : rows.slice(0, 5);
   return (
@@ -134,9 +170,11 @@ function Attention() {
             {shown.map((r) => (
               <li key={r.text} className="flex flex-wrap items-baseline justify-between gap-2 text-body text-fg">
                 <span>{r.text}</span>
-                <Link href={r.href} className="shrink-0 font-medium text-navy-700 underline underline-offset-2">
-                  {r.action}
-                </Link>
+                {r.href && r.action && (
+                  <Link href={r.href} className="shrink-0 font-medium text-navy-700 underline underline-offset-2">
+                    {r.action}
+                  </Link>
+                )}
               </li>
             ))}
           </ul>
@@ -151,10 +189,10 @@ function Attention() {
   );
 }
 
-function gateLine(st: ReturnType<typeof requirementsStages>["g3"], n: number): string | null {
+function gateLine(st: ReturnType<typeof requirementsStages>["g3"], n: number, canApprove = true): string | null {
   if (!st?.gate) return null;
   const review = gateReview(st);
-  if (review) return `Gate ${n} ${review === "required" ? "waiting for your approval" : "ready for review"}`;
+  if (review) return `Gate ${n} ${review === "required" ? waitingLabel(canApprove).toLowerCase() : "ready for review"}`;
   if (gateApproved(st)) return `Gate ${n} approved`;
   if (st.status === "changes_requested") return `Gate ${n}: changes requested`;
   return null;
@@ -162,6 +200,7 @@ function gateLine(st: ReturnType<typeof requirementsStages>["g3"], n: number): s
 
 function RequirementsGlance() {
   const p = useProject();
+  const { canApprove } = useAuth();
   const stages = requirementsStages(p.workflow);
   const reqs = useAllRequirements(p.id, null, !!stages.req?.current_version);
   const live = (reqs.data ?? []).filter((r) => r.status !== "rejected");
@@ -178,7 +217,7 @@ function RequirementsGlance() {
             <p>
               {live.length} requirements · {live.filter((r) => r.status === "approved").length} approved · {live.filter((r) => r.classification === "assumed" || r.classification === "unverified").length} Assumed or Unverified
             </p>
-            {gateLine(stages.g3, 3) && <p className="text-small text-fg-muted">{gateLine(stages.g3, 3)}</p>}
+            {gateLine(stages.g3, 3, canApprove) && <p className="text-small text-fg-muted">{gateLine(stages.g3, 3, canApprove)}</p>}
           </>
         )}
         <Link href={`/projects/${p.id}/requirements`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
@@ -191,6 +230,7 @@ function RequirementsGlance() {
 
 function StrategyGlance() {
   const p = useProject();
+  const { canApprove } = useAuth();
   const stages = requirementsStages(p.workflow);
   const has = !!stages.strategy?.current_version;
   const risks = useAllRisks(p.id, has);
@@ -210,11 +250,165 @@ function StrategyGlance() {
               {risks.data.length} risks · {count("very_high")} {LEVEL_TEXT.very_high} · {count("high")} {LEVEL_TEXT.high}
             </p>
             {strategy.data && <p>{strategy.data.sections.test_types.filter((t) => t.in_scope).length} test types in scope</p>}
-            {gateLine(stages.g4, 4) && <p className="text-small text-fg-muted">{gateLine(stages.g4, 4)}</p>}
+            {gateLine(stages.g4, 4, canApprove) && <p className="text-small text-fg-muted">{gateLine(stages.g4, 4, canApprove)}</p>}
           </>
         )}
         <Link href={`/projects/${p.id}/test-strategy`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
           Open Test Strategy <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
+function TestCasesGlance() {
+  const p = useProject();
+  const { canApprove } = useAuth();
+  const stages = requirementsStages(p.workflow);
+  const has = !!stages.design?.current_version;
+  const stats = useCaseStats(p.id, has);
+  const d = stats.data;
+  const oq = d?.open_questions ?? 0;
+  return (
+    <Card>
+      <CardHeader title="Test cases at a glance" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!has ? (
+          <p className="text-fg-muted">Starts after Gate 4.</p>
+        ) : !d ? (
+          stats.error ? <p className="text-fg-muted">Couldn’t load the test case counts.</p> : <Skeleton className="h-10" />
+        ) : (
+          <>
+            <p>
+              {d.total} case{d.total === 1 ? "" : "s"} · {d.by_status?.approved ?? 0} approved · {oq} open question{oq === 1 ? "" : "s"}
+            </p>
+            {gateLine(stages.g5, 5, canApprove) && <p className="text-small text-fg-muted">{gateLine(stages.g5, 5, canApprove)}</p>}
+          </>
+        )}
+        <Link href={`/projects/${p.id}/test-cases`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Test Cases <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
+function TraceabilityGlance() {
+  const p = useProject();
+  const stages = requirementsStages(p.workflow);
+  const has = !!stages.design?.current_version;
+  const coverage = useCoverage(p.id, "current", has);
+  const gaps = useGaps(p.id, "current", has);
+  const c = coverage.data;
+  const risks = gaps.data?.untested_high_risk?.open?.length;
+  return (
+    <Card>
+      <CardHeader title="Traceability at a glance" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!has ? (
+          <p className="text-fg-muted">Starts after Gate 4.</p>
+        ) : !c ? (
+          coverage.error ? <p className="text-fg-muted">Couldn’t load coverage.</p> : <Skeleton className="h-10" />
+        ) : (
+          <p>
+            {c.requirements.with_approved_case} of {c.requirements.approved} approved requirements covered
+            {risks !== undefined ? ` · ${risks} untested high risk${risks === 1 ? "" : "s"}` : ""}
+          </p>
+        )}
+        <Link href={`/projects/${p.id}/traceability`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Traceability <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
+function AutomationGlance() {
+  const p = useProject();
+  const { canApprove } = useAuth();
+  const stages = requirementsStages(p.workflow);
+  const g5 = gateApproved(stages.g5);
+  const o = useAutomation(p.id, p.workflow);
+  const stats = useCaseStats(p.id, !!stages.design?.current_version);
+  const c = scriptCounts(o.data);
+  const approved = stats.data?.by_status?.approved ?? 0;
+  return (
+    <Card>
+      <CardHeader title="Automation at a glance" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!g5 ? (
+          <p className="text-fg-muted">Starts after Gate 5.</p>
+        ) : !o.data ? (
+          o.error || !p.workflow?.stages.find((x) => x.key === "automation")?.current_version ? <p className="text-fg-muted">No scripts yet.</p> : <Skeleton className="h-10" />
+        ) : (
+          <>
+            <p>
+              {c.total} of {approved} approved case{approved === 1 ? "" : "s"} automated · {c.valid} valid{c.aiReview ? ` · ${c.aiReview} need${c.aiReview === 1 ? "s" : ""} review` : ""}
+            </p>
+            <p className="text-small text-fg-muted">Gate 6: {g6StatusText(o.data.g6.state, canApprove)}</p>
+          </>
+        )}
+        <Link href={`/projects/${p.id}/automation`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Automation <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
+function LastRunGlance({ exec }: { exec: ExecSummary | null }) {
+  const p = useProject();
+  const { role } = useAuth();
+  const g5 = gateApproved(requirementsStages(p.workflow).g5);
+  const r = exec?.latest;
+  return (
+    <Card>
+      <CardHeader title="Last run" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!g5 ? (
+          <p className="text-fg-muted">Starts after Gate 5.</p>
+        ) : !r ? (
+          <p className="flex flex-wrap items-center gap-2 text-fg-muted">
+            No tests have run yet.
+            {role !== "viewer" && role !== null && exec && (
+              <Link href={`/projects/${p.id}/execution?new=1`} className="font-medium text-navy-700 underline underline-offset-2">
+                Run tests…
+              </Link>
+            )}
+          </p>
+        ) : (
+          <p>
+            <Link href={`/projects/${p.id}/execution/${r.key}`} className="font-medium text-navy-700 underline underline-offset-2">
+              {lastRunLine(r, fmtDateTime)}
+            </Link>
+          </p>
+        )}
+        <Link href={`/projects/${p.id}/execution`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Test Execution <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
+function DefectsGlance({ exec }: { exec: ExecSummary | null }) {
+  const p = useProject();
+  const g5 = gateApproved(requirementsStages(p.workflow).g5);
+  return (
+    <Card>
+      <CardHeader title="Defects at a glance" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!g5 ? (
+          <p className="text-fg-muted">Starts after Gate 5.</p>
+        ) : !exec?.analysed ? (
+          <p className="text-fg-muted">Defects appear after a test run finds failures.</p>
+        ) : (
+          <p>
+            {exec.drafts} draft{exec.drafts === 1 ? "" : "s"} to review · {exec.confirmedOpen} confirmed open
+          </p>
+        )}
+        <Link href={`/projects/${p.id}/defects`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Defects <ArrowRight className="h-4 w-4" aria-hidden />
         </Link>
       </CardBody>
     </Card>
@@ -230,7 +424,14 @@ export default function ProjectOverviewPage() {
     discovery: reviewHref,
     requirements: `/projects/${p.id}/requirements?view=review`,
     strategy: `/projects/${p.id}/test-strategy?view=review`,
+    "test-design": `/projects/${p.id}/test-cases?view=review`,
+    automation: `/projects/${p.id}/automation?view=review`,
+    defects: `/projects/${p.id}/defects?view=review`,
   };
+  const exec = useExecSummary(p.id, p.workflow);
+  const nf = useNfOverview(p.id, p.workflow);
+  const { canApprove } = useAuth();
+  if (exec?.waiting[0]) stageHref.execution = `/projects/${p.id}/execution/${exec.waiting[0]}`;
   useEffect(() => {
     if (p.project) document.title = `${p.project.name} · QA Analyst`;
   }, [p.project]);
@@ -244,12 +445,18 @@ export default function ProjectOverviewPage() {
               variant="full"
               workflow={p.workflow}
               projectId={p.id}
-              onRerun={(id) => (id === "discovery" ? p.openRescan() : router.push(id === "requirements" ? `/projects/${p.id}/requirements` : `/projects/${p.id}/test-strategy`))}
+              subjects={exec}
+              onRerun={(id) =>
+                id === "discovery"
+                  ? p.openRescan()
+                  : router.push(id === "requirements" ? `/projects/${p.id}/requirements` : id === "test-design" ? `/projects/${p.id}/test-cases` : `/projects/${p.id}/test-strategy`)
+              }
               onReviewGate={(id) => router.push(stageHref[id] ?? reviewHref)}
             />
           ) : (
             <Skeleton className="h-16" />
           )}
+          {p.workflow && <OptionalChecks projectId={p.id} g2={nf.g2} overview={nf.overview} canApprove={canApprove} />}
         </CardBody>
       </Card>
       <div className="grid gap-6 lg:grid-cols-3">
@@ -269,6 +476,12 @@ export default function ProjectOverviewPage() {
           <Glance projectId={p.id} running={running} />
           <RequirementsGlance />
           <StrategyGlance />
+          <TestCasesGlance />
+          <TraceabilityGlance />
+          <AutomationGlance />
+          <LastRunGlance exec={exec} />
+          <DefectsGlance exec={exec} />
+          <NonFunctionalGlance projectId={p.id} g2={nf.g2} overview={nf.overview} />
           <Scope />
         </div>
       </div>

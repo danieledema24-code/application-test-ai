@@ -2,7 +2,8 @@ node_modules
 .env
 *.db
 *.db-journal
-storage
+/api/storage/
+/backend/data/storage/
 .next
 *.local.txt
 .runs

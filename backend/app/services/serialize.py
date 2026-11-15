@@ -35,8 +35,17 @@ from app.domain.enums import (
     StageStatus,
     UrlRole,
 )
-from app.domain.stages import GATE_TITLES, LOCKED_GATES, STAGE_BY_KEY, STAGE_ORDER, merged_policy
+from app.domain.stages import (
+    DERIVED_STAGES,
+    GATE_TITLES,
+    LOCKED_GATES,
+    STAGE_BY_KEY,
+    STAGE_ORDER,
+    SUBJECT_GATES,
+    merged_policy,
+)
 from app.schemas import api
+from app.services.hardening import removed_text
 
 
 def user_ref(u: User | None) -> api.UserRef | None:
@@ -63,6 +72,7 @@ def evidence_link(ctx: AppContext, ev: Evidence) -> api.EvidenceLink:
         viewport=ev.viewport,
         source_url=ev.source_url,
         page_id=ev.page_id,
+        removed=removed_text(ev.purged_at) if ev.purged_at else None,
     )
 
 
@@ -446,7 +456,7 @@ async def gate_state_for_run(
         status = "approved" if decision and decision.decision == "approve" else "rejected" if decision else "none"
     preconditions: list[dict[str, Any]] = []
     changes = 0
-    if stage.gate_key in (GateKey.G3, GateKey.G4) and (run is None or stage.current_stage_run_id == run.id):
+    if stage.gate_key in (GateKey.G3, GateKey.G4, GateKey.G5) and (run is None or stage.current_stage_run_id == run.id):
         from app.services import gates
 
         preconditions = [p.as_dict() for p in await gates.preconditions(session, project, stage.gate_key)]
@@ -496,8 +506,15 @@ async def stage_states(session: AsyncSession, project: Project) -> list[api.Stag
         else {}
     )
     out: list[api.StageState] = []
+    by_key = {st.stage_key: st for st in stages}
     for st in sorted(stages, key=lambda x: STAGE_ORDER[x.stage_key]):
         d = STAGE_BY_KEY[st.stage_key]
+        if st.stage_key == StageKey.defects_summary:
+            out.append(await _defects_summary_state(session, project, st, by_key.get(StageKey.failure_analysis)))
+            continue
+        if st.stage_key in DERIVED_STAGES:
+            out.append(_derived_state(st, by_key.get(DERIVED_STAGES[st.stage_key]), runs))
+            continue
         run = runs.get(st.current_stage_run_id) if st.current_stage_run_id else None
         progress = None
         if st.stage_key == StageKey.discovery and run is not None:
@@ -555,7 +572,89 @@ async def _pending_review(session: AsyncSession, st: WorkflowStage) -> dict[str,
     return {"version": cand.version, "created_at": cand.created_at, "summary": review.get("summary", {})}
 
 
+def derived_status(source: WorkflowStage | None) -> StageStatus:
+    """P3-00: traceability mirrors test design: completed with a current output, stale when design is stale."""
+    if source is None or source.current_stage_run_id is None:
+        return StageStatus.not_started
+    if source.status == StageStatus.stale:
+        return StageStatus.stale
+    if source.status in (StageStatus.not_started, StageStatus.queued) and source.current_stage_run_id is None:
+        return StageStatus.not_started
+    return StageStatus.completed
+
+
+def _derived_state(st: WorkflowStage, source: WorkflowStage | None, runs: dict[uuid.UUID, StageRun]) -> api.StageState:
+    d = STAGE_BY_KEY[st.stage_key]
+    status = derived_status(source)
+    src_run = runs.get(source.current_stage_run_id) if source and source.current_stage_run_id else None
+    if src_run is not None and src_run.finished_at is None:
+        status = StageStatus.not_started  # the first design run is still in progress
+    return api.StageState(
+        key=st.stage_key.value,
+        title=d.title,
+        phase=d.phase,
+        available=d.available,
+        status=status.value,
+        current_version=None,
+        gate=None,
+        started_at=None,
+        finished_at=src_run.finished_at if src_run and status != StageStatus.not_started else None,
+        stale_reason=(source.stale_reason if source else None) if status == StageStatus.stale else None,
+        progress=None,
+    )
+
+
+async def defects_summary_status(
+    session: AsyncSession, project: Project, analysis: WorkflowStage | None
+) -> StageStatus:
+    """P4-00: G8 is decided per defect, so the stage is `awaiting_approval` while any draft is undecided,
+    `completed` once there are none, and `not_started` before the first failure analysis or defect."""
+    from app.db.models import Defect
+    from app.domain.enums import DefectStatus
+
+    counts = dict(
+        (
+            await session.execute(
+                select(Defect.status, func.count()).where(Defect.project_id == project.id).group_by(Defect.status)
+            )
+        ).all()
+    )
+    if int(counts.get(DefectStatus.draft, 0)):
+        return StageStatus.awaiting_approval
+    if counts or (analysis is not None and analysis.current_stage_run_id is not None):
+        return StageStatus.completed
+    return StageStatus.not_started
+
+
+async def _defects_summary_state(
+    session: AsyncSession, project: Project, st: WorkflowStage, analysis: WorkflowStage | None
+) -> api.StageState:
+    d = STAGE_BY_KEY[st.stage_key]
+    return api.StageState(
+        key=st.stage_key.value,
+        title=d.title,
+        phase=d.phase,
+        available=d.available,
+        status=(await defects_summary_status(session, project, analysis)).value,
+        current_version=None,
+        gate=None,
+        started_at=None,
+        finished_at=None,
+        stale_reason=None,
+        progress=None,
+    )
+
+
 def _approved_input(run: StageRun | None) -> dict[str, Any] | None:
+    if run is not None and run.approved_input and run.approved_input.get("strategy_snapshot_hash"):
+        versions = run.approved_input.get("versions") or {}
+        return {
+            "stage_key": "test_strategy",
+            "snapshot_hash": run.approved_input["strategy_snapshot_hash"],
+            "version": int(versions.get("test_strategy", 0)),
+            "requirements_snapshot_hash": run.approved_input.get("requirements_snapshot_hash"),
+            "requirements_version": int(versions.get("requirements", 0)),
+        }
     if run is None or not run.approved_input or not run.approved_input.get("g3_hash"):
         return None
     return {
@@ -579,7 +678,7 @@ async def project_summary(session: AsyncSession, project: Project) -> api.Projec
     stages = list(
         (await session.execute(select(WorkflowStage).where(WorkflowStage.project_id == project.id))).scalars().all()
     )
-    available = [s for s in stages if STAGE_BY_KEY[s.stage_key].available]
+    available = [s for s in stages if STAGE_BY_KEY[s.stage_key].available and s.stage_key not in DERIVED_STAGES]
     current = None
     for status in _PRIORITY:
         current = next(
@@ -593,8 +692,12 @@ async def project_summary(session: AsyncSession, project: Project) -> api.Projec
     awaiting = any(
         s.status == StageStatus.awaiting_approval or s.gate_status in (GateStatus.pending, GateStatus.recommended)
         for s in stages
-        if s.gate_key is not None and s.status not in (StageStatus.queued, StageStatus.running)
+        if s.gate_key is not None
+        and s.gate_key not in SUBJECT_GATES
+        and s.status not in (StageStatus.queued, StageStatus.running)
     )
+    last_run, subject_waiting = await _run_state(session, project)
+    awaiting = awaiting or subject_waiting
     scan = (
         await session.execute(
             select(ScanSession)
@@ -644,7 +747,46 @@ async def project_summary(session: AsyncSession, project: Project) -> api.Projec
         scans=scans,
         current_activity=activity,
         requirements=requirements,
+        last_run=last_run,
+        purge_scheduled_at=project.purge_scheduled_at,
     )
+
+
+async def _run_state(session: AsyncSession, project: Project) -> tuple[dict[str, Any] | None, bool]:
+    """P4 (design §4.3): the latest finished run for "Last run", and whether a run (G7) or a defect draft (G8) waits."""
+    from app.db.models import Defect, ExecutionRun
+    from app.domain.enums import DefectStatus, RunStatus
+
+    run = (
+        await session.execute(
+            select(ExecutionRun)
+            .where(ExecutionRun.project_id == project.id, ExecutionRun.finished_at.is_not(None))
+            .where(ExecutionRun.started_at.is_not(None))
+            .order_by(ExecutionRun.finished_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    waiting = (
+        await session.execute(
+            select(ExecutionRun.id)
+            .where(ExecutionRun.project_id == project.id, ExecutionRun.status == RunStatus.awaiting_authorisation)
+            .limit(1)
+        )
+    ).first() is not None or (
+        await session.execute(
+            select(Defect.id).where(Defect.project_id == project.id, Defect.status == DefectStatus.draft).limit(1)
+        )
+    ).first() is not None
+    if run is None:
+        return None, waiting
+    totals = dict(run.totals or {})
+    return {
+        "key": run.key,
+        "status": run.status.value,
+        "tests": len((run.config or {}).get("plan") or []) or int(totals.get("tests") or 0),
+        "totals": totals,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+    }, waiting
 
 
 async def project_detail(session: AsyncSession, project: Project) -> api.ProjectDetail:

@@ -1,12 +1,12 @@
 # Application Test AI — web frontend
 
 Next.js 15 (App Router, TypeScript) + Tailwind CSS v4, SWR, recharts, lucide-react.
-Talks to the REST API described in `../docs/API.md`.
+Talks to the QA Analyst backend (`../backend`, port 8200) described in `../docs/architecture/api-contracts.md`.
 
 ```bash
-cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:4000/api
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8200
 npm install
-npm run dev                  # http://localhost:3000
+npx next dev -p 3002         # http://localhost:3002
 npm run build && npm start   # production
 npm run lint
 ```
