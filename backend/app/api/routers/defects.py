@@ -449,6 +449,11 @@ async def edit_defect(
         project_id=project.id,
         metadata={"key": d.key, "fields": sorted(changes)},
     )
+    if "severity" in changes:
+        # P6-05a: the severity decides whether a defect blocks release readiness.
+        from app.services.release import mark_stale
+
+        await mark_stale(s, project.id, f"{d.key} severity changed to {d.severity.value}")
     await s.commit()
     return await detail(ctx, s, p, d)
 

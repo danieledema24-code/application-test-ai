@@ -109,6 +109,10 @@ async def rescan(
         project_id=project_id,
         metadata={"scan": scan.key, "baseline": base.key, "limits": limits},
     )
+    # P6-05a: the site is being scanned again, so an assessment waiting for G9 may describe an older site.
+    from app.services.release import mark_stale
+
+    await mark_stale(s, project_id, f"Scan {scan.sequence} (a rescan) started")
     await s.commit()
     await s.refresh(scan)
     await s.refresh(base)
@@ -242,6 +246,10 @@ async def close_impact_item(
     project = await c.project_of(s, item.project_id)
     cs = await load_set(s, item.change_set_id)
     await impact_svc.close(s, project, item, p.user, body.status, body.reason)
+    # P6-05a: open impact items are a release readiness criterion ("impact reviewed").
+    from app.services.release import mark_stale
+
+    await mark_stale(s, project.id, f"An impact item of {cs.key} was closed")
     await s.commit()
     view = await impact_svc.impact_view(s, cs, level=None, target_kind=None, status=None,
                                         see_email=out.sees_email(p.membership.role), can_close=True)  # fmt: skip
@@ -264,6 +272,50 @@ async def close_impact_item(
 async def regression_recommendation(change_set_id: uuid.UUID, s: ScopedSession, p: CurrentPrincipal) -> dict[str, Any]:
     cs = await load_set(s, change_set_id)
     return await impact_svc.recommendation_view(s, cs, can_request=_member(p))
+
+
+@router.get("/change-sets/{change_set_id}/manual-retests")
+async def manual_retests(change_set_id: uuid.UUID, s: ScopedSession, p: CurrentPrincipal) -> dict[str, Any]:
+    """D37: the change set's impacted manual must-run tests with their recorded re-tests (viewers read)."""
+    from app.services import release as release_svc
+
+    cs = await load_set(s, change_set_id)
+    return await release_svc.manual_retests_view(s, cs, see_email=out.sees_email(p.membership.role),
+                                                 can_record=_member(p))  # fmt: skip
+
+
+class ManualRetestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    case_key: str = Field(max_length=32)
+    status: Literal["passed", "failed"] | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+
+@router.post("/change-sets/{change_set_id}/manual-retests", status_code=201)
+async def record_manual_retest(
+    change_set_id: uuid.UUID, body: ManualRetestInput, ctx: Ctx, s: ScopedSession, p: MemberPrincipal
+) -> dict[str, Any]:
+    """D37: a member records passed/failed with a note for one impacted manual must-run test. Audited; an assessment
+    waiting for G9 goes stale."""
+    from app.services import release as release_svc
+
+    cs = await load_set(s, change_set_id)
+    project = await c.project_of(s, cs.project_id)
+    await release_svc.record_manual_retest(s, project, cs, p.user, case_key=body.case_key, status=body.status,
+                                           note=body.note)  # fmt: skip
+    await s.commit()
+    name = p.user.full_name or p.user.email
+    await ctx.events.emit(
+        org_id=project.organisation_id,
+        project_id=project.id,
+        type="impact.manual_retest",
+        message=f"{cs.key}: {body.case_key} re-tested by hand by {name} ({body.status})",
+        stage_key=StageKey.change_analysis.value,
+        agent_key=impact_svc.AGENT,
+        data={"kind": "result", "change_set_key": cs.key, "case_key": body.case_key, "status": body.status},
+    )
+    view = await release_svc.manual_retests_view(s, cs, see_email=out.sees_email(p.membership.role), can_record=True)
+    return {**view, "message": f"Manual re-test of {body.case_key} recorded: {body.status}."}
 
 
 class RegressionRunInput(BaseModel):

@@ -305,6 +305,10 @@ async def create_defect(
         project_id=project.id,
         metadata={"key": key, "source": source.value},
     )
+    # P6-05a: a new draft waits at G8, so an assessment waiting for G9 no longer reflects the evidence.
+    from app.services.release import mark_stale
+
+    await mark_stale(s, project.id, f"{key} was raised")
     return d
 
 
@@ -542,6 +546,10 @@ async def set_status(
         project_id=project.id,
         metadata={"key": d.key, "status": d.status.value, "reason": d.status_reason if action == "reject" else None},
     )
+    # P6-05a: a defect status change is new evidence for release readiness.
+    from app.services.release import mark_stale
+
+    await mark_stale(s, project.id, f"{d.key} was {d.status.value}")
     return message
 
 

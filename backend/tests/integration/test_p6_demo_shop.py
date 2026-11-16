@@ -198,6 +198,13 @@ def test_v2_has_every_listed_change(shops: dict[str, Any]) -> None:
     assert '<button type="submit">Send</button>' in contact and "Send message" not in contact
     empty = httpx.post(f"{v2}/contact", data={"name": "Ann", "email": "ann@example.com", "message": ""})
     assert empty.status_code == 400 and "Name, email and message are required" in empty.text
+    # Release 2 fixes the whitespace-Name bug (DEF-0002 in the demo chain); release 1 still accepts it.
+    blank = {"name": "   ", "email": "ann@example.com", "message": "Hi"}
+    spaces = httpx.post(f"{v2}/contact", data=blank)
+    assert spaces.status_code == 400 and '<p class="error" role="alert">Name is required</p>' in spaces.text
+    assert '<input id="name" name="name" required aria-invalid="true">' in spaces.text and "<form" in spaces.text
+    assert httpx.get(f"{v2}/contact").text.count("aria-invalid") == 0
+    assert httpx.post(f"{shops['default']}/contact", data=blank).status_code == 200
     sent = httpx.post(f"{v2}/contact", data={"name": "Ann", "email": "ann@example.com", "message": "Hi", "order": ""})
     assert sent.status_code == 200 and '<h1>Thank you</h1><p class="ok">Message sent</p>' in sent.text
     # 5. Everything else as in v1, Phase 5 flaws included.

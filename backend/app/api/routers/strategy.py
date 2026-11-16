@@ -526,10 +526,18 @@ async def create_risk(
     )
     orch = await c.reopen_if_approved(ctx, s, project, GateKey.G4, f"{row.key} was added", p.user.id)
     updated = await _recompute(s, project_id)
+    await _release_stale(s, project_id, f"{row.key} was added")
     await s.commit()
     await c.after_commit(orch, p.scope, project_id)
     await _priorities_event(ctx, project, updated)
     return await _risk_detail(s, row)
+
+
+async def _release_stale(s: Any, project_id: uuid.UUID, reason: str) -> None:
+    """P6-05a: risks decide `rr.high_risk_tested` and residual risk, so an assessment waiting for G9 goes stale."""
+    from app.services.release import mark_stale
+
+    await mark_stale(s, project_id, reason)
 
 
 @router.get("/risks/{risk_id}")
@@ -601,6 +609,8 @@ async def patch_risk(
     )
     orch = await c.reopen_if_approved(ctx, s, project, GateKey.G4, f"{row.key} was changed", p.user.id)
     updated = await _recompute(s, row.project_id)
+    what = f"{row.key} was accepted" if body.status == "accepted" else f"{row.key} was changed"
+    await _release_stale(s, row.project_id, what)
     await s.commit()
     await c.after_commit(orch, p.scope, row.project_id)
     await _priorities_event(ctx, project, updated)

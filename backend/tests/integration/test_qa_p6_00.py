@@ -83,8 +83,8 @@ async def test_qa_cancelled_and_errored_runs_do_not_count_passed_does(setup: Any
     assert r.status_code == 409 and r.json()["error"]["message"] == RELEASE_409
     await _add_run(ctx, owner, pid, "RUN-0009", RunStatus.passed)
     r = await client.post(f"{API}/projects/{pid}/release-assessments", headers=owner.headers)
-    assert r.status_code == 422, r.text
-    assert (await _stage(ctx, pid, StageKey.release_readiness)).status == StageStatus.not_started
+    assert r.status_code == 202, r.text  # P6-05a: queued (the stub answered 422 before)
+    assert (await _stage(ctx, pid, StageKey.release_readiness)).status == StageStatus.queued
 
 
 async def test_qa_member_reaches_release_check_viewer_and_anonymous_do_not(setup: Any) -> None:

@@ -70,6 +70,13 @@ class AcceptInput(BaseModel):
     index: int = Field(ge=0, le=20)
 
 
+async def _release_stale(s: Any, project_id: uuid.UUID, reason: str) -> None:
+    """P6-05a: undecided repairs are a release readiness criterion, so an assessment waiting for G9 goes stale."""
+    from app.services.release import mark_stale
+
+    await mark_stale(s, project_id, reason)
+
+
 @router.post("/heal-suggestions/{suggestion_id}/accept")
 async def accept_suggestion(
     suggestion_id: uuid.UUID, body: AcceptInput, ctx: Ctx, s: ScopedSession, p: MemberPrincipal
@@ -81,6 +88,7 @@ async def accept_suggestion(
         await s.commit()  # end this request's read transaction, so the reads below see the other accept's commit
         await s.refresh(row)
         asset, scripts, replaced = await svc.accept(s, project, row, body.index, p.user)
+        await _release_stale(s, project.id, f"{row.key} was accepted")
         try:
             await s.commit()
         except IntegrityError as e:  # another API process saved a repair of this file at the same moment
@@ -124,6 +132,7 @@ async def reject_suggestion(
     row: HealSuggestion = await c.load(s, HealSuggestion, suggestion_id, "Repair suggestion")
     project = await c.project_of(s, row.project_id)
     await svc.reject(s, project, row, body.reason, p.user)
+    await _release_stale(s, project.id, f"{row.key} was rejected")
     await s.commit()
     who = p.user.full_name or p.user.email
     await ctx.events.emit(

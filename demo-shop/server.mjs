@@ -112,20 +112,26 @@ const routes = {
   "GET /openapi.json": () => [200, "application/json", JSON.stringify(openapi)],
 };
 
+/** Release 2's Contact form; with `nameError`, Name is flagged (`aria-invalid`) and the error is shown above it. */
+const contactV2 = (nameError) => `<h1>Contact us</h1>${nameError ? `<p class="error" role="alert">${nameError}</p>` : ""}<form method="post" action="/contact">
+    <label for="name">Name</label><input id="name" name="name" required${nameError ? ' aria-invalid="true"' : ""}>
+    <label for="email">Email</label><input id="email" name="email" type="email" required>
+    <label for="message">Your message</label><textarea id="message" name="message" required></textarea>
+    <label for="order">Order number</label><input id="order" name="order" maxlength="20">
+    <button type="submit">Send</button></form>`;
+
 /** Release 2 (README "Release 2 (Phase 6)"): routes that differ from release 1. Every other route is release 1's. */
 /** @type {Record<string, (req: http.IncomingMessage, body: string, url: URL) => [number, string, string]>} */
 const routesV2 = {
   // 3. The Travel mug is gone.
   "GET /products": () => [200, "text/html", page("Products", `<h1>Products</h1><ul>${products.filter((p) => p.id !== 1).map((p) => `<li><a href="/products/${p.id}">${p.name}</a> — £${p.price}</li>`).join("")}</ul>`)],
   // 4. "Your message" (same id and name) is required, an optional Order number is new, and the button says "Send".
-  "GET /contact": () => [200, "text/html", page("Contact", `<h1>Contact us</h1><form method="post" action="/contact">
-    <label for="name">Name</label><input id="name" name="name" required>
-    <label for="email">Email</label><input id="email" name="email" type="email" required>
-    <label for="message">Your message</label><textarea id="message" name="message" required></textarea>
-    <label for="order">Order number</label><input id="order" name="order" maxlength="20">
-    <button type="submit">Send</button></form>`)],
+  "GET /contact": () => [200, "text/html", page("Contact", contactV2())],
   "POST /contact": (_r, body) => {
     const f = new URLSearchParams(body);
+    // 4. A Name of only spaces counts as empty (release 1 accepts it: DEF-0002 in the demo chain, fixed here). The
+    // form is shown again with Name flagged and the error, so the submission is visibly blocked.
+    if (f.get("name") && !f.get("name").trim()) return [400, "text/html", page("Contact", contactV2("Name is required"))];
     if (!f.get("name") || !f.get("email") || !f.get("message")) return [400, "text/html", page("Contact", `<h1>Contact us</h1><p class="error">Name, email and message are required</p>`)];
     return [200, "text/html", page("Contact", `<h1>Thank you</h1><p class="ok">Message sent</p>`)];
   },

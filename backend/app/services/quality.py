@@ -527,6 +527,10 @@ async def triage(s: AsyncSession, f: QualityFinding, user: User, *, status: str,
         project_id=f.project_id,
         metadata={"key": f.key, "status": new.value},
     )
+    # P6-05a: triage changes the evidence an assessment waiting for G9 was based on.
+    from app.services.release import mark_stale
+
+    await mark_stale(s, f.project_id, f"{f.key} was {TRIAGE_WORDS[new]}")
     return f"{f.key} {TRIAGE_WORDS[new]}."
 
 

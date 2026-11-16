@@ -209,10 +209,10 @@ PHASE4_HANDLERS: dict[StageKey, Any] = {
     StageKey.accessibility: type("RunDriven_P5_02", (NotAvailableYet,), {"story": "P5-02", "implemented": True}),
     StageKey.security_assessment: type("RunDriven_P5_03", (NotAvailableYet,), {"story": "P5-03", "implemented": True}),
     StageKey.performance: type("RunDriven_P5_01b", (NotAvailableYet,), {"story": "P5-01b", "implemented": True}),
-    # Phase 6 (P6-00): P6-01 landed change analysis; P6-05a replaces the release readiness stub. Exploratory
+    # Phase 6 (P6-00): P6-01 landed change analysis, P6-05a the release readiness assessment. Exploratory
     # sessions (job `quality_scan`, P6-03a) start from Test Execution, never as a stage task (RUN_DRIVEN_STAGES).
     StageKey.change_analysis: _LazyHandler("app.agents.change.analysis", "ChangeAnalysisAgent"),
-    StageKey.release_readiness: _stub("P6-05a"),
+    StageKey.release_readiness: _LazyHandler("app.agents.release.agent", "ReleaseReadinessAgent"),
     StageKey.exploratory: type("RunDriven_P6_03a", (NotAvailableYet,), {"story": "P6-03a", "implemented": True}),
 }
 

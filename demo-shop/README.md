@@ -54,7 +54,9 @@ Release 1 is byte-for-byte the Phase 5 shop (checked route by route against a sn
      valid).
 3. `/products/1` (Travel mug) returns 404 and is gone from `/products`. The bearer-token API is unchanged.
 4. The Contact form: the label "Message" becomes "Your message" (same `id`/`name`) and the textarea is `required`;
-   `POST /contact` rejects an empty message with 400 "Name, email and message are required"; a new optional field
+   `POST /contact` rejects an empty message with 400 "Name, email and message are required"; a Name that is empty
+   after trimming gets 400 with the form shown again, Name flagged (`aria-invalid`) and "Name is required" (release 1
+   accepts a Name of only spaces: the demo chain's DEF-0002, fixed in release 2); a new optional field
    "Order number" (`maxlength=20`); the button "Send message" becomes "Send". The confirmation ("Thank you" /
    "Message sent") is unchanged.
 5. Everything else is as in release 1, Phase 5 flaws included.

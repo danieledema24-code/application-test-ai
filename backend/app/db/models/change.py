@@ -32,6 +32,7 @@ from app.domain.enums import (
     ImpactLevel,
     ImpactStatus,
     ImpactTargetKind,
+    ManualRetestStatus,
     StepOutcome,
     Verdict,
 )
@@ -216,3 +217,18 @@ class ReleaseAssessment(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Bas
         str_enum(GeneratedBy, "release_assessment_generated_by"), default=GeneratedBy.rules
     )
     ai_sections: Mapped[dict[str, Any]] = mapped_column(default=json_default_dict)
+
+
+class ManualRetest(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base):
+    """D37 (P6-05a): a person's result for an impacted manual must-run test of a change set, re-tested by hand.
+    Append-only: the latest row per (change set, case) counts for `rr.impacted_rerun`. Migration 0020."""
+
+    __tablename__ = "manual_retests"
+    __table_args__ = (Index("ix_manual_retests_set_case", "change_set_id", "case_lineage_id"),)
+
+    change_set_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("change_sets.id", ondelete="RESTRICT"))
+    case_lineage_id: Mapped[uuid.UUID] = mapped_column()
+    test_case_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("test_cases.id", ondelete="RESTRICT"))
+    status: Mapped[ManualRetestStatus] = mapped_column(str_enum(ManualRetestStatus, "manual_retest_status"))
+    note: Mapped[str] = mapped_column(Text)
+    recorded_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))

@@ -602,6 +602,10 @@ class Engine:
             from app.services.impact import resolve_reruns
 
             await resolve_reruns(s, run)
+            # P6-05a: new results make an assessment waiting for G9 stale ("RUN-0006 finished at 16:20").
+            from app.services.release import mark_stale
+
+            await mark_stale(s, run.project_id, f"{run.key} finished at {run.finished_at:%H:%M} UTC")
             await s.commit()
             message = finished_message(run) if status != RunStatus.cancelled else f"{run.key} cancelled"
             key = run.key

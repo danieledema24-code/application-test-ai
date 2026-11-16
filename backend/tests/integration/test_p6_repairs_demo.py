@@ -144,7 +144,7 @@ async def test_demo_chain_repairs_then_the_regression_run(tmp_path: Path, templa
             defect_id = res["defect"]["id"]
             yes = await c.post(f"{API}/defects/{defect_id}/status", headers=approver, json={"action": "confirm"})
             assert yes.status_code == 200, yes.text
-            # A genuine bug in both releases (QA P6-04 R2): the shop accepts a Name of only spaces. DEF-0002 on v1.
+            # A genuine bug on release 1 (QA P6-04 R2): the shop accepts a Name of only spaces. DEF-0002 on v1.
             spaces = next(x for x in cases if "Name" in x["title"] and "spaces" in x["title"].lower())
             req = await c.post(f"{API}/projects/{pid}/execution-runs", headers=member,
                                json={"selection": {"case_keys": [spaces["key"]]}})  # fmt: skip
@@ -263,15 +263,10 @@ async def test_demo_chain_repairs_then_the_regression_run(tmp_path: Path, templa
             items = (await c.get(f"{API}/change-sets/{chg['id']}/impact", headers=h)).json()["items"]
             tc = next(i for i in items if i["target_kind"] == "test_case" and i["target"]["key"] == empty["key"])
             assert tc["status"] == "resolved" and tc["resolved_by_run"]["id"] == reg.json()["id"]
-            # The whitespace-Name case still fails on v2: its failed check doesn't go through a repaired element and
-            # the page shows the confirmation, so it stays an application defect, linked again to DEF-0002, with the
-            # repair and the page change listed as context (QA P6-04 R2).
-            assert rows[spaces["key"]]["status"] == "failed", rows[spaces["key"]]
-            again = (await c.get(f"{API}/execution-results/{rows[spaces['key']]['id']}", headers=h)).json()
-            assert again["analysis"]["classification"] == "application_defect", again["analysis"]
-            assert again["defect"] and again["defect"]["key"] == "DEF-0002", again["defect"]
-            codes = [x["code"] for x in again["analysis"]["signals"]]
-            assert "repair_context" in codes and "page_changed" in codes, again["analysis"]["signals"]
+            # Release 2 fixes the whitespace-Name bug (lead decision, P6-05a): the case is must-run (it re-tests the
+            # open DEF-0002) and passes now. (The failure-analysis signals for an application defect on a repaired page,
+            # QA P6-04 R2, are covered by tests/unit/test_p6_repairs.py.)
+            assert rows[spaces["key"]]["status"] == "passed", rows[spaces["key"]]
             verified = await c.post(f"{API}/defects/{defect_id}/status", headers=approver, json={"action": "verified"})
             assert verified.status_code == 200, verified.text
             assert verified.json()["defect"]["status"] == "verified", verified.json()

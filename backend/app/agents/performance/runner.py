@@ -316,6 +316,11 @@ class LoadTestJob:
                 actor_type=ActorType.system,
                 metadata={"key": run.key, "status": status.value, "drafted": drafted},
             )
+            if status in (PerfRunStatus.passed, PerfRunStatus.failed):
+                # P6-05a: a judged load test is new evidence for an assessment waiting for G9.
+                from app.services.release import mark_stale
+
+                await mark_stale(s, run.project_id, f"{run.key} finished")
             await s.commit()
             message = self._message(run)
             key = run.key

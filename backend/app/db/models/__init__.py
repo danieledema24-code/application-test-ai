@@ -19,6 +19,7 @@ from app.db.models.change import (
     ExploratoryStep,
     HealSuggestion,
     ImpactItem,
+    ManualRetest,
     ReleaseAssessment,
 )
 from app.db.models.discovery import (
@@ -91,6 +92,7 @@ __all__ = [
     "Invitation",
     "Job",
     "KnowledgeItem",
+    "ManualRetest",
     "Membership",
     "Organisation",
     "PasswordResetToken",

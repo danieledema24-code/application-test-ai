@@ -254,12 +254,14 @@ async def test_release_readiness_needs_a_finished_run(setup: Any) -> None:
     async with ctx.session_factory() as s:
         s.add(ExecutionRun(**common, key="RUN-0003", status=RunStatus.failed, finished_at=utcnow()))
         await s.commit()
-    for path in paths:  # P6-05a lands the assessment; until then nothing is queued
-        r = await client.post(path, json={}, headers=owner.headers)
-        assert r.status_code == 422, r.text
-        assert r.json()["error"]["message"] == "Release readiness assessment is not available yet"
+    # P6-05a: a finished run lets a member ask for an assessment; it is queued once (the stage endpoint then 409s).
+    r = await client.post(paths[0], json={}, headers=owner.headers)
+    assert r.status_code == 202, r.text
+    assert r.json()["assessing"] is True and r.json()["available"] is True
+    r = await client.post(paths[1], json={}, headers=owner.headers)
+    assert r.status_code == 409 and "already queued" in r.json()["error"]["message"], r.text
     assert StageKey.release_readiness not in await Orchestrator(ctx).advance(system_scope(owner.org_id), pid)
-    assert (await _stage(ctx, pid, StageKey.release_readiness)).status == StageStatus.not_started
+    assert (await _stage(ctx, pid, StageKey.release_readiness)).status == StageStatus.queued
     # G9 is decided per release assessment (P6-05a), never through /gates.
     r = await client.post(
         f"{API}/projects/{pid}/gates/G9/decision",

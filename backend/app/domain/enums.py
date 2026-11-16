@@ -707,6 +707,13 @@ class HealStatus(StrEnum):
     superseded = "superseded"
 
 
+class ManualRetestStatus(StrEnum):
+    """D37: what a person saw when re-testing an impacted manual must-run test by hand."""
+
+    passed = "passed"
+    failed = "failed"
+
+
 class StepOutcome(StrEnum):
     ok = "ok"
     no_effect = "no_effect"
