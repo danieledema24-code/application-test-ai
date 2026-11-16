@@ -414,6 +414,10 @@ def _locate(page: Any, item: dict[str, Any], *, exact: bool = False) -> Any:
         return page.get_by_label(name, exact=True) if exact else page.get_by_label(name)
     if by == "placeholder":
         return page.get_by_placeholder(name, exact=True) if exact else page.get_by_placeholder(name)
+    if by == "text":  # P6-04 repair strategies
+        return page.get_by_text(name, exact=True) if exact or item.get("exact") else page.get_by_text(name)
+    if by == "testid":
+        return page.get_by_test_id(name)
     if by in ("role", "form_role"):
         role = "form" if by == "form_role" else str(item.get("role") or "button")
         scope = page.get_by_role("navigation") if item.get("within") == "navigation" else page

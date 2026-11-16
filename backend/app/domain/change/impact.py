@@ -264,6 +264,10 @@ def expression(loc: LocatorIn) -> str:
         return f"getByLabel({quote(loc.name)})"
     if loc.by == "placeholder":
         return f"getByPlaceholder({quote(loc.name)})"
+    if loc.by == "text":  # P6-04 repair strategies
+        return f"getByText({quote(loc.name)}{', { exact: true }' if loc.exact else ''})"
+    if loc.by == "testid":
+        return f"getByTestId({quote(loc.name)})"
     if loc.by in ("role", "form_role"):
         role = "form" if loc.by == "form_role" else (loc.role or "button")
         exact = ", exact: true" if loc.exact else ""

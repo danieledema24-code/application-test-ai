@@ -6,6 +6,7 @@
 import type { Page, Route } from "@playwright/test";
 import type { ScanDetail, ScanSummary } from "../../src/lib/contract";
 import { CHANGE_STATEMENT, type ChangeItem, type ChangeScanRef, type ChangeSet, type DisplayKind, type ImpactCounts, type ImpactItem, type Recommendation, type RegressionPick, type Significance } from "../../src/lib/change";
+import type { Repair } from "../../src/lib/repairs";
 import { API, type MockState } from "./fixtures";
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*", "Access-Control-Expose-Headers": "*" };
@@ -260,7 +261,7 @@ export function demoRecommendation(q: Pick<P6State, "outdated" | "runs" | "role"
     pick("TC-0001", "Home page loads", ["Smoke test"], valid("TC-0001", "tests/home/TC-0001.spec.ts")),
   ];
   const excluded = [
-    pick("TC-0012", "View the Travel mug page", ["Page removed: review or retire the case"], null, "Page removed: review or retire the case"),
+    { ...pick("TC-0012", "View the Travel mug page", ["Page removed: review or retire the case"], null, "Page removed: review or retire the case"), was_must: true },
     pick("TC-0031", "Sign in with the saved test account", ["Manual test: a person runs it"], null, "Manual test: a person runs it"),
   ];
   return {
@@ -388,5 +389,136 @@ export async function mockPhase6(page: Page, s: MockState, q: P6State) {
     const ev = path.match(/^\/evidence\/([^/]+)\/content$/);
     if (ev) return route.fulfill({ status: 200, headers: { ...CORS, "Content-Type": "image/png" }, body: PNG });
     return route.fallback();
+  });
+}
+
+// ---- P6-04 repair suggestions (design P6 §8; backend app/api/routers/repairs.py) ---------------------------------
+
+export type RepairState = {
+  role: "owner" | "admin" | "member" | "viewer";
+  items: Repair[];
+  /** POST accept answers 409 (decided elsewhere) for this key. */
+  decidedElsewhere: string | null;
+  /** GETs after an accept until its scripts read valid (0 = valid right away). */
+  checkDelay: number;
+  requests: { method: string; path: string; body: unknown }[];
+};
+
+const CHECKED = iso("15", "10:20:00");
+const evidence = (id: string) => ({ id, kind: "screenshot", mime: "image/jpeg", size: 2048, captured_at: CHECKED, content_url: `${API}/evidence/${id}/content`, removed: null });
+const sig = (...texts: [string, string][]) => texts.map(([code, text]) => ({ code, text }));
+const used = (key: string, state = "outdated", reason: string | null = OUT_MSG) => ({ case_key: key, test_case_id: `c${key.slice(-2)}`, case_title: `Case ${key}`, script_id: `sc-${key}`, path: `tests/contact/${key}.spec.ts`, state, first_error: null, outdated_reason: reason });
+
+function repair(id: string, key: string, over: Partial<Repair>): Repair {
+  return {
+    id, key, kind: "locator", source: "change", status: "open", file: "pages/ContactPage.ts", file_name: "ContactPage.ts", getter: null, element: null, page: "/contact",
+    old_expression: null, candidates: [], offered: 0, no_candidate_reason: null, checked_at: CHECKED, change_set: { id: "cs-CHG-0001", key: "CHG-0001" }, execution_result: null,
+    used_by: [], review: null, asset_version: 2, new_asset_version: null, accepted_index: null, decided_by: null, decided_at: null, reason: null, generated_by: "rules",
+    order: "rules", explanation: null, rule_order: [], checking: null, created_at: CHECKED, can_accept: true, can_reject: true, ...over,
+  };
+}
+
+/** CHG-0001's suggestions on the demo shop (design P6 §8.2, §8.4, §14 step 4). */
+export function demoRepairs(): Repair[] {
+  const message = [
+    { index: 0, expression: "getByLabel('Your message')", strategy: "label", score: 0.93, level: "high" as const, match_count: 1, offered: true, not_offered_reason: null, rule_rank: 0,
+      element: { role: "textbox", name: "Your message" }, checked_at: CHECKED, evidence: evidence("ev-h1"),
+      signals: sig(["diff", "Same field, renamed (CHG-0001)"], ["role", "Same role (text box)"], ["name", "Name 62 % similar ('Message' → 'Your message')"], ["place", "In the same form"], ["strategy", "Uses a label (the most robust kind of locator)"]) },
+    { index: 1, expression: "getByRole('textbox', { name: 'Your message' })", strategy: "role", score: 0.88, level: "high" as const, match_count: 1, offered: true, not_offered_reason: null, rule_rank: 1,
+      element: { role: "textbox", name: "Your message" }, checked_at: CHECKED, evidence: evidence("ev-h1"),
+      signals: sig(["diff", "Same field, renamed (CHG-0001)"], ["role", "Same role (text box)"], ["strategy", "Uses a role and name (the most robust kind of locator)"]) },
+    { index: 2, expression: "getByLabel('Order number')", strategy: "label", score: 0.3, level: "low" as const, match_count: 1, offered: true, not_offered_reason: null, rule_rank: 2,
+      element: { role: "textbox", name: "Order number" }, checked_at: CHECKED, evidence: evidence("ev-h1b"), signals: sig(["role", "Same role (text box)"], ["place", "In the same form"]) },
+  ];
+  const send = [
+    { index: 0, expression: "getByRole('button', { name: 'Send' })", strategy: "role", score: 0.95, level: "high" as const, match_count: 1, offered: true, not_offered_reason: null, rule_rank: 0,
+      element: { role: "button", name: "Send" }, checked_at: CHECKED, evidence: evidence("ev-h2"),
+      signals: sig(["diff", "Same field, renamed (CHG-0001)"], ["role", "Same role (button)"], ["strategy", "Uses a role and name (the most robust kind of locator)"]) },
+  ];
+  const hours = [
+    { index: 0, expression: "getByRole('link', { name: 'Opening hours' })", strategy: "role", score: 0.7, level: "medium" as const, match_count: 2, offered: false, not_offered_reason: "More than one element matches; not offered", rule_rank: 0,
+      element: { role: "link", name: "Opening hours" }, checked_at: CHECKED, evidence: null, signals: sig(["role", "Same role (link)"]) },
+  ];
+  return [
+    repair("h1", "HEAL-0001", { getter: "message", element: "the Message field", old_expression: "getByLabel('Message')", candidates: message, offered: 3, used_by: [used("TC-0019")], rule_order: message.map((c) => c.expression) }),
+    repair("h2", "HEAL-0002", { getter: "sendMessage", element: "the Send message button", old_expression: "getByRole('button', { name: 'Send message' })", candidates: send, offered: 1,
+      used_by: [used("TC-0020", "outdated", OUT_SEND), used("TC-0021", "outdated", OUT_SEND)], rule_order: send.map((c) => c.expression) }),
+    repair("h3", "HEAL-0003", { kind: "expected_result_review", file: null, file_name: null, old_expression: null, can_accept: false, can_reject: false, used_by: [used("TC-0021", "valid", null)],
+      review: { page: "/contact", before: "Thank you", after: "Thanks!", helper: "expectSubmissionAccepted", case_key: "TC-0021", source_key: "CHG-0001",
+        message: "The text changed from 'Thank you' to 'Thanks!' on /contact (CHG-0001). TC-0021 checks this text. Expected results are never changed automatically. Review TC-0021." } }),
+    repair("h5", "HEAL-0005", { source: "failure", change_set: null, execution_result: { id: "res7", key: "RUN-0003-07", run_key: "RUN-0003", run_id: "run3" }, getter: "message", element: "the Message field",
+      old_expression: "getByLabel('Message')", candidates: message.slice(0, 1), offered: 1, used_by: [used("TC-0019")], rule_order: [message[0].expression] }),
+    repair("h4", "HEAL-0004", { file: "pages/HomePage.ts", file_name: "HomePage.ts", page: "/", getter: "openingHours", element: "the Opening hours link", old_expression: "getByRole('link', { name: 'Hours' })",
+      candidates: hours, offered: 0, can_accept: false, no_candidate_reason: "No safe replacement found: nothing on / matches exactly once with the same role.", used_by: [used("TC-0040", "outdated", "getByRole('link', { name: 'Hours' }) not found after CHG-0001")] }),
+  ];
+}
+
+export function newRepairs(over: Partial<RepairState> = {}): RepairState {
+  return { role: "owner", items: demoRepairs(), decidedElsewhere: null, checkDelay: 1, requests: [], ...over };
+}
+
+function repairCounts(items: Repair[]) {
+  const n = (st: string) => items.filter((r) => r.status === st).length;
+  return { open: n("open"), open_locator: items.filter((r) => r.status === "open" && r.kind === "locator").length, accepted: n("accepted"), rejected: n("rejected"), superseded: n("superseded"), total: items.length };
+}
+
+/** Registered after the other mocks, so it answers the repair routes first. */
+export async function mockRepairs(page: Page, q: RepairState) {
+  const pending: Record<string, number> = {};
+  const view = (r: Repair): Repair => {
+    const member = q.role !== "viewer";
+    if (r.status === "accepted" && r.checking?.state === "checking" && (pending[r.id] = (pending[r.id] ?? q.checkDelay) - 1) < 0) {
+      r.checking = { state: "valid", scripts: r.used_by.map((u) => ({ ...u, state: "valid", outdated_reason: null })) };
+      r.used_by = r.checking.scripts;
+    }
+    return { ...r, can_accept: member && r.status === "open" && r.kind === "locator" && r.candidates.some((c) => c.offered), can_reject: member && r.status === "open" && r.kind === "locator" };
+  };
+  await page.route(`${API}/**`, async (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const path = url.pathname.replace("/api/v1", "");
+    const method = req.method();
+    if (method === "OPTIONS") return route.fallback();
+    let body: Record<string, unknown> = {};
+    try {
+      body = (req.postDataJSON() ?? {}) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    if (path === "/projects/p1/heal-suggestions" && method === "GET") {
+      q.requests.push({ method, path: `${path}${url.search}`, body: null });
+      const st = url.searchParams.get("status");
+      const src = url.searchParams.get("source");
+      const items = q.items.filter((r) => (!st || r.status === st) && (!src || r.source === src)).map(view);
+      return json(route, 200, { items, counts: repairCounts(q.items), permissions: { can_decide: q.role !== "viewer" } });
+    }
+    const one = path.match(/^\/heal-suggestions\/([^/]+)(?:\/(accept|reject))?$/);
+    if (!one) return route.fallback();
+    const r = q.items.find((x) => x.id === one[1]);
+    if (!r) return err(route, 404, "not_found", "We couldn't find this repair suggestion.");
+    if (!one[2]) return json(route, 200, view(r));
+    q.requests.push({ method, path, body });
+    if (q.role === "viewer") return err(route, 403, "forbidden", "Viewers have read-only access");
+    if (q.decidedElsewhere === r.key) return err(route, 409, "conflict", "This suggestion was already decided by A. Approver.");
+    if (one[2] === "reject") {
+      const reason = String(body.reason ?? "").trim();
+      if (!reason) return err(route, 422, "validation_error", "Say why. The reason is kept with the suggestion.", [{ field: "reason", message: "Say why. The reason is kept with the suggestion." }]);
+      Object.assign(r, { status: "rejected", reason, decided_by: MEMBER, decided_at: iso("15", "10:31:00") });
+      return json(route, 200, { message: `${r.key} rejected.`, suggestion: view(r) });
+    }
+    const index = Number(body.index);
+    if (!r.candidates.some((c) => c.index === index && c.offered)) return err(route, 422, "validation_error", "Choose one of the offered replacements.");
+    const version = (r.asset_version ?? 1) + 1;
+    Object.assign(r, { status: "accepted", accepted_index: index, new_asset_version: version, decided_by: MEMBER, decided_at: iso("15", "10:31:00"), checking: { state: "checking", scripts: r.used_by.map((u) => ({ ...u, state: "not_checked" })) } });
+    const replaced = q.items.filter((x) => x !== r && x.status === "open" && x.file === r.file && x.getter === r.getter);
+    for (const x of replaced) Object.assign(x, { status: "superseded", reason: `Another suggestion for this locator was accepted (${r.key})` });
+    return json(route, 200, {
+      message: `${r.key} accepted. ${r.file_name} version ${version} is being checked.`,
+      asset: { id: "a1", path: r.file, version },
+      scripts_to_validate: r.used_by.map((u) => u.case_key),
+      checking: true,
+      replaced: replaced.map((x) => x.key),
+      suggestion: view(r),
+    });
   });
 }

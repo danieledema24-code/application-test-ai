@@ -6,7 +6,7 @@
 // test whose script is outdated blocks the request until its repair is decided (OQ3).
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useId, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { api, ApiError, errorMessage } from "@/lib/api";
@@ -36,6 +36,7 @@ import {
   requirementTree,
   targetLabel,
   type ChangeSet,
+  type HealRef,
   type ImpactFilter,
   type ImpactGroup,
   type ImpactItem,
@@ -297,7 +298,7 @@ function ImpactRow({ item: i, heading, set, onClose, onRegenerate }: { item: Imp
       )}
       {i.target_kind === "automation_script" && i.target?.outdated_reason && <p className="break-all font-mono text-small text-fg">{i.target.outdated_reason}</p>}
       {i.target_kind === "automation_script" && i.status === "open" && (
-        <p className="text-fg">{heals.length ? `Repair suggestion${heals.length === 1 ? "" : "s"}: ${heals.map((h) => h.key).join(", ")}` : "Repair suggestion not ready yet."}</p>
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-fg">{heals.length ? <HealLinks heals={heals} /> : "Repair suggestion not ready yet."}</p>
       )}
       {script && (
         <p className="flex flex-wrap items-center gap-2 text-fg">
@@ -330,6 +331,20 @@ function ImpactRow({ item: i, heading, set, onClose, onRegenerate }: { item: Imp
         </div>
       )}
     </div>
+  );
+}
+
+/** [Review HEAL-0001]: the change set's Repairs tab with that card focused (design P6 §7.1, §8.1). */
+function HealLinks({ heals }: { heals: HealRef[] }) {
+  const pathname = usePathname();
+  return (
+    <>
+      {heals.map((h) => (
+        <Link key={h.key} href={`${pathname}?tab=repairs&heal=${h.key}`} className={`${link} inline-flex min-h-6 items-center`}>
+          Review {h.key}
+        </Link>
+      ))}
+    </>
   );
 }
 
@@ -534,7 +549,7 @@ function ScriptCell({ p }: { p: RegressionPick }) {
     <span className="inline-flex flex-col gap-1">
       <ScriptStateLabel state={p.script.state} />
       {p.script.state === "outdated" && p.script.outdated_reason && <span className="break-all font-mono text-caption text-fg">{p.script.outdated_reason}</span>}
-      {p.script.state === "outdated" && <span className="text-caption text-fg">{heals.length ? `Repair: ${heals.map((h) => h.key).join(", ")}` : "Repair suggestion not ready yet"}</span>}
+      {p.script.state === "outdated" && <span className="flex flex-wrap gap-x-3 text-caption text-fg">{heals.length ? <HealLinks heals={heals} /> : "Repair suggestion not ready yet"}</span>}
       {p.script.state !== "outdated" && !p.runnable && p.not_runnable_reason && <span className="text-caption text-fg">{p.not_runnable_reason}</span>}
     </span>
   );
@@ -548,6 +563,7 @@ function PickGroup({ title, note, picks, kind, generatedBy, explanation }: { tit
     </Link>
   );
   const why = (p: RegressionPick) => p.reasons.join(" · ");
+  const wasMust = (p: RegressionPick) => (p.was_must ? <span className="ml-2 inline-block rounded bg-surface px-1.5 text-caption font-medium text-fg-strong ring-1 ring-line">Was must run</span> : null);
   const id = `pick-${kind}`;
   return (
     <section aria-labelledby={id} className="space-y-2">
@@ -573,6 +589,7 @@ function PickGroup({ title, note, picks, kind, generatedBy, explanation }: { tit
               <Tr key={p.case_lineage_id}>
                 <Td rowHeader className="whitespace-normal">
                   {caseLink(p)} {p.title}
+                  {wasMust(p)}
                 </Td>
                 <Td className="whitespace-normal break-words">{why(p)}</Td>
                 <Td className="whitespace-normal">
@@ -588,6 +605,7 @@ function PickGroup({ title, note, picks, kind, generatedBy, explanation }: { tit
           <li key={p.case_lineage_id} className="space-y-1 rounded-lg bg-surface p-3 text-small ring-1 ring-line">
             <p className="break-words font-medium text-fg-strong">
               {caseLink(p)} {p.title}
+              {wasMust(p)}
             </p>
             <p className="break-words text-fg">Why: {why(p)}</p>
             <div className="flex flex-wrap items-center gap-2 text-fg">

@@ -48,7 +48,8 @@ import {
 } from "../../src/lib/change";
 import { fmtDate } from "../../src/lib/format";
 import { CURRENT_PHASE } from "../../src/lib/sections";
-import { changeSet, cosmeticItems, demoImpact, demoItems, demoRecommendation, newP6, scanRef } from "../../e2e/mocked/phase6-fixtures";
+import { changeSet, cosmeticItems, demoImpact, demoItems, demoRecommendation, demoRepairs, newP6, scanRef } from "../../e2e/mocked/phase6-fixtures";
+import * as R from "../../src/lib/repairs";
 
 const ANY: ChangeFilter = { hideCosmetic: false, kind: "", significance: "", page: "" };
 const s1 = scanRef({ n: 1, day: "12", pages: 11 }, 2);
@@ -228,6 +229,7 @@ test.describe("Phase 6 · impact and the regression run (P6-02, design P6 §3.3,
     expect(impactLine(set)).toBe("13 of 13 impact items open · 2 scripts outdated · regression run: not requested yet");
     expect(impactLine({ impact: null, regression: null })).toBeNull();
     const rec = demoRecommendation({ outdated: true, runs: [], role: "owner" }, set);
+    expect(nextSteps(items, rec)[0]).toMatchObject({ tab: "repairs", action: "Review repairs" });
     expect(nextSteps(items, rec).map((s) => [s.text, s.done])).toEqual([
       ["Repair 2 outdated scripts", false],
       ["Request the regression run (Gate 7)", false],
@@ -239,6 +241,72 @@ test.describe("Phase 6 · impact and the regression run (P6-02, design P6 §3.3,
       ["Scripts repaired", true],
       ["Regression run requested (RUN-0005)", true],
       ["Review items closed", true],
+    ]);
+  });
+});
+
+test.describe("Phase 6 · repairs (P6-04, design P6 §3.5, §8)", () => {
+  const [h1, h2, h3, h5, h4] = demoRepairs();
+  const fmt = () => "15 Nov 10:20";
+
+  test("vocabulary: levels, statuses, sources and titles in words", () => {
+    expect(R.REPAIR_LINE).toBe("Only this locator changes; the test's checks stay the same.");
+    expect(R.levelText(h1.candidates[0])).toBe("High match (0.93)");
+    expect(R.levelText({ level: "medium", score: 0.5 })).toBe("Medium match (0.50)");
+    expect(R.statusLabel(h1)).toBe("Open");
+    expect(R.statusLabel(h3)).toBe("Needs a person");
+    expect(R.statusLabel({ kind: "locator", status: "superseded" })).toBe("Replaced");
+    expect(R.sourceLine(h1)).toBe("From CHG-0001 (before any test failed)");
+    expect(R.sourceLine(h5)).toBe("From a failed test (RUN-0003-07)");
+    expect(R.cardTitle(h1)).toBe("HEAL-0001 · ContactPage.ts · the Message field");
+    expect(R.cardTitle(h3)).toBe("HEAL-0003 · Expected result may be out of date · TC-0021");
+    expect(R.cardTitle({ ...h3, review: { ...h3.review!, reason: "page_removed" } })).toBe("HEAL-0003 · Test case needs review · TC-0021");
+    expect(R.tabLabel(2)).toBe("Repairs (2)");
+    expect(R.tabLabel(undefined)).toBe("Repairs");
+  });
+
+  test("candidates: High and Medium listed, Low under Other possibilities, ambiguous not offered; the first is chosen", () => {
+    const s = R.splitCandidates(h1);
+    expect(s.main.map((c) => c.expression)).toEqual(["getByLabel('Your message')", "getByRole('textbox', { name: 'Your message' })"]);
+    expect(s.other.map((c) => c.expression)).toEqual(["getByLabel('Order number')"]);
+    expect(R.firstChoice(h1)).toBe(0);
+    expect(R.firstChoice(h4)).toBeNull();
+    expect(R.notOfferedText(h4.candidates[0])).toBe("More than one element matches; not offered (2 matches)");
+    expect(R.firstChoice({ candidates: h1.candidates.filter((c) => c.level === "low") })).toBe(2);
+  });
+
+  test("text alternatives and the verified line", () => {
+    expect(R.screenshotAlt(h1.candidates[0], "/contact")).toBe("Screenshot of /contact on 15 Nov with the matched element outlined: text box 'Your message'.");
+    expect(R.screenshotAlt(h2.candidates[0], "/contact")).toBe("Screenshot of /contact on 15 Nov with the matched element outlined: button 'Send'.");
+    expect(R.elementText(null)).toBe("the element");
+    expect(R.verifiedLine(h1.candidates[0], "/contact", fmt)).toBe("Found exactly 1 visible element on /contact (checked 15 Nov 10:20)");
+  });
+
+  test("accept confirmation, decided lines and the check result", () => {
+    expect(R.acceptText(h1, h1.candidates[0])).toBe(
+      "Use getByLabel('Your message') in ContactPage.ts? Only this locator changes; the test's checks stay the same. ContactPage.ts version 3 is created, and the 1 script that uses it is checked again (Gate 6) before it can run.",
+    );
+    expect(R.acceptText(h2, h2.candidates[0])).toContain("the 2 scripts that use it are checked again (Gate 6) before they can run.");
+    expect(R.acceptName(h1)).toBe("Accept this replacement for getByLabel('Message')");
+    const accepted = { ...h1, status: "accepted" as const, decided_by: { id: "m", full_name: "M. Member" }, decided_at: "2026-11-15T10:31:00Z", new_asset_version: 3 };
+    expect(R.acceptedLine(accepted, fmt)).toBe("Accepted by M. Member · 15 Nov 10:20 · ContactPage.ts version 3");
+    expect(R.checkingLine({ ...accepted, checking: { state: "checking", scripts: h2.used_by } })).toEqual({ tone: "busy", text: "Checking 2 scripts…" });
+    expect(R.checkingLine({ ...accepted, checking: { state: "valid", scripts: h1.used_by } })?.text).toBe("1 script valid again. The impact item is closed.");
+    const bad = [{ ...h2.used_by[0], state: "invalid", first_error: "Expected the Send control to be shown" }];
+    expect(R.checkingLine({ ...accepted, checking: { state: "invalid", scripts: bad } })?.text).toBe("TC-0020 still fails its checks: Expected the Send control to be shown.");
+    expect(R.checkingLine(h1)).toBeNull();
+    const rejected = { ...h2, status: "rejected" as const, reason: "Tested elsewhere", decided_by: { id: "m", full_name: "M. Member" } };
+    expect(R.rejectedLine(rejected)).toBe("Rejected by M. Member: 'Tested elsewhere'. Fix the test case or regenerate the scripts.");
+    expect(R.replacedLine({ reason: "Another suggestion for this locator was accepted (HEAL-0001)" })).toBe("Replaced: another suggestion for this locator was accepted (HEAL-0001)");
+    expect(R.acceptError(h1, "The page object changed since this suggestion.", 409)).toBe("The page object changed since this suggestion.");
+    expect(R.acceptError(h1, "These scripts were replaced by a newer version.", 422)).toBe("Couldn't accept HEAL-0001: These scripts were replaced by a newer version. Nothing was changed.");
+  });
+
+  test("grouped by page object file; reviews under their own heading", () => {
+    expect(R.groupByFile([h1, h2, h3, h4, h5]).map((g) => [g.file, g.items.map((x) => x.key)])).toEqual([
+      ["ContactPage.ts", ["HEAL-0001", "HEAL-0002", "HEAL-0005"]],
+      ["Expected results to review", ["HEAL-0003"]],
+      ["HomePage.ts", ["HEAL-0004"]],
     ]);
   });
 });

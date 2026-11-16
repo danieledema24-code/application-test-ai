@@ -2319,14 +2319,14 @@ Job: "When my site changes, tell me what changed, what that breaks in my tests, 
      - journey "Contact us" changed
      - a new form "Promo code" on `/offers`
   3. **Impact.** The Contact requirements and their approved cases are directly impacted. The Contact scripts become `outdated` (the locator re-check finds no "Message" label and no "Send message" button). Cases and the a11y/perf items on `/products/1` are "Page removed: review". `/offers` and its form are "Not covered by any requirement". The regression recommendation has the Contact cases as **must run**, plus a re-test of DEF-0001.
-  4. **Healing.** HEAL-0001 suggests `getByLabel('Message')` → `getByLabel('Your message')`, and HEAL-0002 suggests `getByRole('button', { name: 'Send message' })` → `{ name: 'Send' }`. Both are scored High, with the "same field, renamed" signal from the diff and a screenshot with the element outlined. A member accepts both, G6 static validation passes, and the scripts are `valid`.
-  5. **Regression run.** A member requests the recommended run, and an approver authorises it at G7. The empty-Message case now **passes** (v2 makes Message required). DEF-0001 can be marked `fixed`, then `verified` on the passing rerun (the Phase 4 rule). The must-run impact items close automatically.
+  4. **Healing.** HEAL-0001 suggests `getByLabel('Message')` → `getByLabel('Your message')`, HEAL-0002 suggests `getByRole('button', { name: 'Send message' })` → `{ name: 'Send' }`, and HEAL-0003 the Contact form found by its button (`locator('form').filter({ has: getByRole('button', { name: 'Send message' }) })` → `{ name: 'Send' }`). Each is scored High, with the "same field, renamed" signal from the diff and a screenshot with the element outlined. A member accepts HEAL-0001 to HEAL-0003 one at a time, G6 static validation passes, and the scripts are `valid`. The field checks follow the page-object locators (D36), so the repaired locators repair the checks too; what they check never changes.
+  5. **Regression run.** A member requests the recommended run, and an approver authorises it at G7. The empty-Message case (TC-0006 on the demo) now **passes**: v2 makes "Your message" required, and its check finds the field through the repaired locator (D36). DEF-0001 can be marked `fixed`, then `verified` on the passing rerun (the Phase 4 rule). The must-run impact items close automatically.
   6. **Exploration.** EXP-0001 runs with the charter "New and changed pages from CHG-0001", rules only. Clicking "Show details" on `/offers` throws an uncaught `TypeError` and shows "Bundle price: £NaN", which becomes finding EXP-0001-01 (medium) with before/after screenshots and the console excerpt, and a defect draft. Clicking "Add to basket" tries `POST /basket`, which is blocked and recorded as an observation. "Apply code" (submit) is listed as "Not tried: may change data". The fixture access log shows no non-GET request.
   7. **Conditional on v2.** After G8 confirms the exploratory defect as minor, REL-0002 recommends **conditional**: blocking criteria are met, and the conditions name the open minor defect, the two "Page removed: review" items, and (if the Phase 5 chain ran on this project) the open serious accessibility finding and the failed `/products/2` default p95 threshold. An approver decides G9 and the verdict becomes `final`, with the approver's name.
   8. **Reports.** The Test Completion and Release Readiness reports download as PDF, HTML, JSON, CSV and XLSX (D34). The verdict, criteria and counts equal the API. The v1 and v2 scans can still be compared, and DEF-0001's v1 evidence still opens.
   A **go** verdict is shown on the backend fixture site (all criteria met), not on the demo.
 
-**Product decisions D25–D35 (resolved 2026-11-15; table in `docs/product/backlog.md`).** D27, D29, D30, D32 and D33 are the user's choices; D25, D26, D28, D31, D34 and D35 were decided by the lead on the PM recommendation. Every decision took the recommended option. Each story names the decision it implements:
+**Product decisions D25–D36 (resolved 2026-11-15, D36 2026-11-16; table in `docs/product/backlog.md`).** D27, D29, D30, D32 and D33 are the user's choices; D25, D26, D28, D31, D34 and D35 were decided by the lead on the PM recommendation. Every decision took the recommended option. Each story names the decision it implements:
 - **D25 (lead):** rescans are started by a person (workspace or assistant). There are no scheduled rescans. The baseline is the last G2-approved scan, and any two completed scans can be compared.
 - **D26 (lead):** how elements are matched across scans: same page (`url_hash` + `auth_context`), then fingerprint, then kind + role + selector (rename), then kind + role + name (moved), and anything left is added or removed.
 - **D27 (user):** targeted impact instead of whole-chain staleness after a rescan (see the rules above).
@@ -2338,6 +2338,7 @@ Job: "When my site changes, tell me what changed, what that breaks in my tests, 
 - **D33 (user):** G9 can approve, reject, or override the recommendation with a written reason that is shown in the report.
 - **D34 (lead):** Test Completion and Release Readiness reports in HTML/PDF/JSON, plus CSV and XLSX for their tables. DOCX stays cut (P5-04c).
 - **D35 (lead):** the egress proxy (P5-05a, T3) comes back as P6-07 in the hardening pool. It doesn't block exploration and is cut second.
+- **D36 (user):** field checks find the field through the script's page-object locator (`qa.expectFieldFlagged(contact.message, "Message")`), so accepting a repair fixes the check too. What the check expects (for example, that the field is flagged as required) never changes. Older scripts that name the label keep working until they are regenerated.
 
 ### Build order and PR split
 
@@ -2954,7 +2955,7 @@ As specified in P5-05a, unchanged: an in-worker resolve-once forward proxy for e
   1. Phase 4 chain on v1 (reusing the journey helpers), then REL-0001 `no_go` naming DEF-0001
   2. flip to v2, then rescan, then CHG-0001 with the exact item set
   3. impact (outdated Contact scripts, review and gap items, the must-run list)
-  4. accept HEAL-0001/0002, then validation, then request the regression run, then G7, then it passes, then DEF-0001 fixed and verified, then the must-run items resolve
+  4. accept HEAL-0001 to HEAL-0003, then validation, then request the regression run, then G7, then it passes, then DEF-0001 fixed and verified, then the must-run items resolve
   5. EXP-0001: the `/offers` findings, blocked `POST /basket`, "Apply code" not tried, then the draft, then G8 (minor)
   6. REL-0002 `conditional`, then G9 approve (and, on a second assessment, an override with a reason)
   7. Test Completion and Release Readiness reports (PDF, CSV, XLSX), with the verdict equal to the API

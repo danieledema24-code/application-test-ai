@@ -61,7 +61,8 @@ Steps (trusted, approved at Gate 5):
 Overall expected result: {overall}
 
 Rules: put it in {path}; import `test` (and `expect` if needed) from "../../fixtures"; use the `qa` fixture helpers
-(qa.expectSubmissionBlocked(form), qa.expectFieldFlagged(label), qa.expectSubmissionAccepted(form), qa.expectText(text))
+(qa.expectSubmissionBlocked(form), qa.expectFieldFlagged(fieldLocator, label), qa.expectSubmissionAccepted(form),
+qa.expectText(text))
 or web-first `expect(locator)` matchers; prefer getByRole/getByLabel locators. One test titled "{key}: <title>" tagged
 "@{key}". Every assertion carries a `// expects: step <n>` or `// expects: overall` comment naming the expected result
 it checks. No fixed waits, no `test.only`/`skip`, no file, process or network access, no secrets. Return the file

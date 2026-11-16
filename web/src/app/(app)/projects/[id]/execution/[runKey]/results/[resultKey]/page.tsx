@@ -18,6 +18,7 @@ import { AnalysisPanel } from "@/components/execution/Analysis";
 import { EvidenceViewer, ExpectedActual, StepResults } from "@/components/execution/Result";
 import { RunDialog, type RunPrefill } from "@/components/execution/RunDialog";
 import { FixSuggestion } from "@/components/execution/FixSuggestion";
+import { RepairCard } from "@/components/automation/Repairs";
 import { api, ApiError } from "@/lib/api";
 
 function ResultPage() {
@@ -127,7 +128,18 @@ function ResultPage() {
           }}
         />
       )}
-      {!passed && r.heal_suggestions?.length > 0 && (
+      {/* Design P6 §8.1: a HEAL- suggestion from this failure shows its RepairCard; Phase 4 JSON keeps FixSuggestion. */}
+      {!passed && (r.repairs?.length ?? 0) > 0 && (
+        <section aria-labelledby="repair-title" className="space-y-3">
+          <h2 id="repair-title" className="text-h2 font-semibold text-fg-strong">
+            Repair suggestion
+          </h2>
+          {r.repairs!.map((x) => (
+            <RepairCard key={x.id} repair={x} projectId={p.id} headingLevel={3} onChanged={() => void q.mutate()} />
+          ))}
+        </section>
+      )}
+      {!passed && !r.repairs?.length && r.heal_suggestions?.length > 0 && (
         <FixSuggestion
           result={r}
           onAccepted={(res) => {

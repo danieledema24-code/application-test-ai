@@ -51,6 +51,8 @@ import { useProject } from "@/components/workspace/ProjectContext";
 import { ChangeSetStatusPill, changeSetHref } from "./Changes";
 import { useChangeItems, useChangeSet, useImpact, useRecommendation } from "./hooks";
 import { ImpactTab, RegressionTab, TabBody } from "./Impact";
+import { RepairList, useRepairs } from "@/components/automation/Repairs";
+import { REPAIR_LINE, tabLabel } from "@/lib/repairs";
 
 const RANK: Record<Significance, number> = { structural: 0, behavioural: 1, cosmetic: 2 };
 
@@ -75,7 +77,9 @@ export function ChangeSetPage({ chgKey }: { chgKey: string }) {
   const pathname = usePathname();
   const params = useSearchParams();
   const tabParam = params.get("tab");
-  const tab: Tab = tabParam === "impact" || tabParam === "regression" ? tabParam : "what";
+  const tab: Tab = tabParam === "impact" || tabParam === "regression" || tabParam === "repairs" ? tabParam : "what";
+  const repairs = useRepairs(p.id, { status: "all", change_set: set?.id }, !!set && set.status === "completed");
+  const openRepairs = repairs.data?.counts.open;
   const kindParam = params.get("kind") as ImpactFilter["kind"] | null;
   const setTab = (t: Tab, extra: Record<string, string> = {}) => router.replace(`${pathname}${buildQuery({ tab: t === "what" ? undefined : t, ...extra })}`, { scroll: false });
   const [busy, setBusy] = useState(false);
@@ -237,6 +241,7 @@ export function ChangeSetPage({ chgKey }: { chgKey: string }) {
               { id: "what", label: `What changed (${total})` },
               { id: "impact", label: impact.data?.available ? `Impact (${impact.data.items.filter((i) => i.status === "open").length} open)` : "Impact" },
               { id: "regression", label: "Regression run" },
+              { id: "repairs", label: tabLabel(openRepairs) },
             ]}
           />
           {tab === "what" && (
@@ -274,8 +279,24 @@ export function ChangeSetPage({ chgKey }: { chgKey: string }) {
           {tab === "regression" && (
             <TabPanel id="regression" idPrefix="chg">
               <TabBody q={rec} what="the regression run">
-                {(r) => <RegressionTab set={set} rec={r} onOpenRepairs={() => setTab("impact", { kind: "automation_script" })} />}
+                {(r) => <RegressionTab set={set} rec={r} onOpenRepairs={() => setTab("repairs")} />}
               </TabBody>
+            </TabPanel>
+          )}
+          {tab === "repairs" && (
+            <TabPanel id="repairs" idPrefix="chg">
+              <section aria-labelledby="repairs-title" className="space-y-4">
+                <h2 id="repairs-title" className="text-h2 font-semibold text-fg-strong">
+                  {tabLabel(openRepairs)}
+                </h2>
+                <p className="text-body text-fg">{REPAIR_LINE} A person accepts each suggestion; nothing is applied automatically.</p>
+                <RepairList
+                  projectId={p.id}
+                  changeSet={set.id}
+                  focusKey={params.get("heal")}
+                  onChanged={() => void Promise.all([repairs.mutate(), impact.mutate(), rec.mutate(), q.mutate()])}
+                />
+              </section>
             </TabPanel>
           )}
         </>
@@ -284,7 +305,7 @@ export function ChangeSetPage({ chgKey }: { chgKey: string }) {
   );
 }
 
-type Tab = "what" | "impact" | "regression";
+type Tab = "what" | "impact" | "regression" | "repairs";
 
 /** The Next steps card (design P6 §6.4): an ordered list; done steps show a tick; viewers get no buttons. */
 function NextSteps({ items, rec, member, onOpen }: { items: ImpactItem[]; rec: Recommendation | undefined; member: boolean; onOpen: (t: Tab, extra?: Record<string, string>) => void }) {

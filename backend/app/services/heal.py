@@ -116,7 +116,10 @@ def candidates_for(item: dict[str, Any], names: list[str], role_for_field: str |
 
 
 def apply_fix(code: str, old: str, new: str) -> str:
-    """Replaces the one locator expression; anything else changing is refused."""
+    """Replaces the one locator expression; anything else changing is refused. An expression that also appears inside
+    another getter (a button inside "the form that has this button") is matched as its getter's `return …;` line."""
+    if code.count(old) != 1 and code.count(f"return {old};") == 1:
+        old, new = f"return {old};", f"return {new};"
     if code.count(old) != 1:
         raise Conflict("The page object changed since this suggestion. Validate the scripts again.")
     out = code.replace(old, new)

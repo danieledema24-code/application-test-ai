@@ -1,6 +1,6 @@
 "use client";
 
-// Automation workspace (design P4 §6): Overview | Scripts | Review · Gate 6, with the §6.5 states.
+// Automation workspace (design P4 §6): Overview | Scripts | Review · Gate 6 | Repairs (design P6 §8.1), with the §6.5 states.
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -18,8 +18,10 @@ import { hostOf } from "@/lib/url";
 import { AssessAction, ExportCard, NotAutomatedCard, SuitabilitySummary, ValidationSummary } from "@/components/automation/Overview";
 import { AssetViewer, FileList, ScriptViewer } from "@/components/automation/Scripts";
 import { Gate6Review } from "@/components/automation/Gate6Review";
+import { RepairList, useRepairs } from "@/components/automation/Repairs";
+import { REPAIR_LINE, tabLabel } from "@/lib/repairs";
 
-const VIEWS = ["overview", "scripts", "review"] as const;
+const VIEWS = ["overview", "scripts", "review", "repairs"] as const;
 type View = (typeof VIEWS)[number];
 
 function AutomationScreen() {
@@ -37,6 +39,7 @@ function AutomationScreen() {
   const stages = p.workflow?.stages;
   const busyStage = stages?.some((s) => (s.key === "automation" || s.key === "automation_assessment") && (s.status === "queued" || s.status === "running"));
   const [validating, setValidating] = useState(false);
+  const repairs = useRepairs(p.id, { status: "all" });
   const overview = useApi<AutomationOverview>(`/projects/${p.id}/automation`, version ? { version } : undefined, {
     refreshInterval: (d) => (busyStage || validating || d?.bundle?.validation.status === "running" ? 2000 : 0),
   });
@@ -249,6 +252,7 @@ function AutomationScreen() {
             { id: "overview", label: "Overview" },
             { id: "scripts", label: `Scripts (${scripts.filter((s) => s.status !== "outdated").length})` },
             { id: "review", label: "Review · Gate 6" },
+            { id: "repairs", label: tabLabel(repairs.data?.counts.open) },
           ]}
           value={view}
           onChange={(v) => go({ view: v as View, file: v === "scripts" ? file : null })}
@@ -279,6 +283,24 @@ function AutomationScreen() {
                 )}
               </div>
             </div>
+          )}
+          {view === "repairs" && (
+            <section aria-labelledby="repairs-title" className="space-y-4">
+              <h2 id="repairs-title" className="text-h2 font-semibold text-fg-strong">
+                Repair suggestions
+              </h2>
+              <p className="text-body text-fg">{REPAIR_LINE} A person accepts each suggestion; nothing is applied automatically.</p>
+              <RepairList
+                projectId={p.id}
+                filters
+                focusKey={params.get("heal")}
+                onChanged={() => {
+                  void repairs.mutate();
+                  void overview.mutate();
+                  p.refresh();
+                }}
+              />
+            </section>
           )}
           {view === "review" && (
             <Gate6Review

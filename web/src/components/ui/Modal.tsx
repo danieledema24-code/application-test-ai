@@ -116,6 +116,7 @@ export function ConfirmDialog({
   loading,
   onCancel,
   focusConfirm,
+  focusCancel,
 }: {
   open: boolean;
   onClose: () => void;
@@ -130,6 +131,8 @@ export function ConfirmDialog({
   loading?: boolean;
   /** Start with focus on the confirm button (e.g. "Stop now", where confirming is the safe direction). */
   focusConfirm?: boolean;
+  /** Start with focus on Cancel (e.g. accepting a repair, where confirming is not the safe direction). */
+  focusCancel?: boolean;
 }) {
   return (
     <Modal
@@ -139,7 +142,7 @@ export function ConfirmDialog({
       size="sm"
       footer={
         <>
-          <Button variant="secondary" onClick={onCancel ?? onClose}>
+          <Button variant="secondary" onClick={onCancel ?? onClose} data-autofocus={focusCancel || undefined}>
             {cancelLabel}
           </Button>
           <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} loading={loading} data-autofocus={focusConfirm || undefined}>

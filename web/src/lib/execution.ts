@@ -4,6 +4,7 @@
 
 import type { IsoDate, Uuid } from "@/lib/contract";
 import type { Tone } from "@/components/ui/StatusPill";
+import type { Repair } from "@/lib/repairs";
 
 export type RunStatus = "awaiting_authorisation" | "rejected" | "queued" | "running" | "passed" | "failed" | "error" | "cancelled";
 export type ResultState = "passed" | "failed" | "error" | "flaky" | "skipped" | "blocked" | "running" | "waiting";
@@ -198,6 +199,8 @@ export type ResultDetail = TestRow & {
   signs_in: boolean;
   analysis: Analysis | null;
   heal_suggestions: HealSuggestion[];
+  /** P6-04: HEAL- suggestions from this failure (design P6 §8.1); absent from older API responses. */
+  repairs?: Repair[];
   permissions: { can_reclassify: boolean; can_raise_defect: boolean; can_accept_fix: boolean };
 };
 

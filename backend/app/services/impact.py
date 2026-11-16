@@ -55,6 +55,8 @@ from app.domain.enums import (
     ActorType,
     ChangeSetStatus,
     FindingStatus,
+    HealKind,
+    HealStatus,
     ImpactAction,
     ImpactLevel,
     ImpactStatus,
@@ -716,7 +718,8 @@ async def _scripts_now(s: AsyncSession, project_id: uuid.UUID) -> dict[str, Auto
 
 
 async def _heal_links(s: AsyncSession, project_id: uuid.UUID, cs: ChangeSet) -> dict[str, list[dict[str, Any]]]:
-    """Repair suggestions (P6-04) for each outdated script's broken locators, by case lineage."""
+    """Repair suggestions (P6-04) for each outdated script's broken locators, by case lineage: the latest locator
+    suggestion for each broken locator (a rejected one is not offered again)."""
     broken: dict[str, list[dict[str, Any]]] = dict(((cs.summary or {}).get("locator_check") or {}).get("broken") or {})
     if not broken:
         return {}
@@ -724,18 +727,67 @@ async def _heal_links(s: AsyncSession, project_id: uuid.UUID, cs: ChangeSet) -> 
         (
             await s.execute(
                 select(HealSuggestion)
-                .where(HealSuggestion.project_id == project_id)
+                .where(HealSuggestion.project_id == project_id, HealSuggestion.kind == HealKind.locator)
                 .order_by(HealSuggestion.created_at)
             )
         ).scalars()
     )
+    latest: dict[tuple[str | None, str | None], HealSuggestion] = {}
+    for h in rows:
+        latest[(h.file, h.getter)] = h
+    # A link to a page the change set removed gets a "Test case needs review" item, never a repair (QA P6-04).
+    reviews = (
+        await s.execute(
+            select(HealSuggestion).where(
+                HealSuggestion.project_id == project_id, HealSuggestion.kind == HealKind.expected_result_review
+            )
+        )
+    ).scalars()
+    gone: dict[tuple[str, str], HealSuggestion] = {}
+    for h in reviews:
+        rv = next((c.get("review") for c in h.candidates or [] if isinstance(c, dict) and c.get("meta")), None) or {}
+        if rv.get("reason") == "page_removed" and h.test_case_lineage_id:
+            gone[(str(h.test_case_lineage_id), str(rv.get("before") or ""))] = h
     outp: dict[str, list[dict[str, Any]]] = {}
     for lineage, locs in broken.items():
         for loc in locs:
-            for h in rows:
-                if h.file == loc.get("file") and h.getter == loc.get("getter"):
-                    outp.setdefault(lineage, []).append({"id": str(h.id), "key": h.key, "status": h.status.value})
+            last = latest.get((loc.get("file"), loc.get("getter")))
+            outp.setdefault(lineage, [])
+            href = _HREF_IN.search(str(loc.get("expression") or ""))
+            review = gone.get((lineage, href.group(2))) if href else None
+            if last is None and review is not None:
+                outp[lineage].append({"id": str(review.id), "key": review.key, "status": PAGE_REMOVED,
+                                      "expression": loc.get("expression")})  # fmt: skip
+            elif last is not None:
+                outp[lineage].append({"id": str(last.id), "key": last.key, "status": last.status.value,
+                                      "expression": loc.get("expression")})  # fmt: skip
+            else:
+                outp[lineage].append({"id": None, "key": None, "status": None, "expression": loc.get("expression")})
     return outp
+
+
+PAGE_REMOVED = "page_removed"
+_HREF_IN = re.compile(r"""a\[href=(["'])(.+?)\1\]""")
+
+
+def removed_reason(keys: list[str]) -> str:
+    return f"Page removed: review or retire the case ({', '.join(keys)})"
+
+
+def repair_decision(links: list[dict[str, Any]]) -> tuple[bool, list[str]]:
+    """(every repair of the script decided, keys of the rejected ones). A locator without a suggestion yet is
+    undecided (design P6 OQ3: the run waits until each repair is accepted or rejected)."""
+    decided = bool(links) and all(
+        x.get("status") in ("accepted", "rejected", "superseded", PAGE_REMOVED) for x in links
+    )
+    return decided, [str(x["key"]) for x in links if x.get("status") == "rejected"]
+
+
+def rejected_reason(keys: list[str]) -> str:
+    return (
+        f"Repair rejected ({', '.join(keys)}): its script is still outdated. Fix the test case or regenerate the "
+        "scripts; it isn't part of this run"
+    )
 
 
 def _group(i: ImpactItem, changes: dict[str, ChangeItem]) -> tuple[str, str | None]:
@@ -836,7 +888,7 @@ async def impact_view(
                 "outdated_reason": sc.outdated_reason if sc else None,
                 "case_lineage_id": i.target_ref,
                 "locators": broken.get(i.target_ref, []),
-                "heal_suggestions": heals.get(i.target_ref, []),
+                "heal_suggestions": [x for x in heals.get(i.target_ref, []) if x.get("key")],
             }
         elif kind == "coverage_gap":
             c = changes.get(i.target_ref)
@@ -944,15 +996,21 @@ async def recommendation_view(s: AsyncSession, cs: ChangeSet, *, can_request: bo
         lin = str(p["case_lineage_id"])
         sc = scripts.get(lin)
         why = im.runnable_reason(states.get(lin))
+        links = [x for x in heals.get(lin, []) if x.get("key")]
+        decided, rejected = repair_decision(heals.get(lin, []))
+        if why == im.OUTDATED_SHOULD and decided and rejected:
+            why = rejected_reason(rejected)  # OQ3: a rejected repair lifts the block; the test stays listed
         return {
             **p,
+            "was_must": False,  # True on a Not included test moved out of Must run (D28, QA P6-04 R3)
             "test_case_id": ids.get(lin),
             "script": {
                 "id": str(sc.id),
                 "path": sc.path,
                 "state": asvc.script_state(sc),
                 "outdated_reason": sc.outdated_reason,
-                "heal_suggestions": heals.get(lin, []),
+                "heal_suggestions": links,
+                "repairs_decided": decided,
             }
             if sc
             else None,
@@ -963,6 +1021,18 @@ async def recommendation_view(s: AsyncSession, cs: ChangeSet, *, can_request: bo
     must = [enrich(p, True) for p in view["must"]]
     should = [enrich(p, False) for p in view["should"]]
     excluded = [enrich(p, False) for p in view["excluded"]]
+    # D28: a test whose script follows a link to a removed page can't run as written: Not included, "review or
+    # retire", with its review item kept open (QA P6-04 R2: nothing to accept or reject, so it never blocks).
+    for group in (must, should, excluded):
+        for p in list(group):
+            gone = [x["key"] for x in heals.get(str(p["case_lineage_id"]), []) if x.get("status") == PAGE_REMOVED]
+            if gone and (p["script"] or {}).get("state") == "outdated":
+                if group is excluded:
+                    p.update(runnable=False, not_runnable_reason=removed_reason(gone))
+                    continue
+                group.remove(p)
+                excluded.append({**p, "runnable": False, "not_runnable_reason": removed_reason(gone),
+                                 "was_must": group is must})  # fmt: skip
     durations, runs_of = await last_durations(s, cs.project_id)
     # Every automated test the run would include, also must-run ones that can't run until their repair is decided.
     must_run = [p["case_lineage_id"] for p in must if p["script"] is not None]
@@ -970,7 +1040,11 @@ async def recommendation_view(s: AsyncSession, cs: ChangeSet, *, can_request: bo
     used = [runs_of[x] for x in [*must_run, *should_run] if x in runs_of]
     key_of = {p["case_lineage_id"]: p["key"] for p in [*must, *should]}
     no_history = [key_of[x] for x in [*must_run, *should_run] if x not in durations]
-    outdated = [p for p in must if (p["script"] or {}).get("state") == "outdated"]
+    # OQ3: the run waits while a must-run test's script is outdated and its repairs aren't all decided (accepted or
+    # rejected). After a reject the test stays in Must run, not runnable, with the reason.
+    outdated = [
+        p for p in must if (p["script"] or {}).get("state") == "outdated" and not p["script"].get("repairs_decided")
+    ]
     requested = await requested_runs(s, cs)
     return {
         **base,
@@ -1040,11 +1114,14 @@ async def request_run(
     view = await recommendation_view(s, cs, can_request=True)
     if not view["available"]:
         raise Conflict(str(view["reason"]))
-    outdated = [p for p in view["must"] if (p["script"] or {}).get("state") == "outdated"]
+    outdated = [p for p in view["must"] if p["key"] in set((view["blocked"] or {}).get("case_keys") or [])]
     if outdated:
         named = ", ".join(
             f"{p['key']} ({p['script']['path']}: "
-            + (", ".join(h["key"] for h in p["script"]["heal_suggestions"]) or "repair suggestion not ready yet")
+            + (
+                ", ".join(h["key"] for h in p["script"]["heal_suggestions"] if h.get("status") == "open")
+                or "repair suggestion not ready yet"
+            )
             + ")"
             for p in outdated
         )
@@ -1078,13 +1155,20 @@ async def request_run(
 async def set_extras(s: AsyncSession, cs: ChangeSet) -> dict[str, Any]:
     """Impact and regression counts for the change set card (design P6 §6.1, §6.4)."""
     if cs.stage_run_id is None or cs.rerun_recommendation is None:
-        return {"impact": None, "regression": None}
+        return {"impact": None, "regression": None, "repairs": None}
     items = list((await s.execute(select(ImpactItem).where(ImpactItem.change_set_id == cs.id))).scalars())
     counts = summarise(items, cs.rerun_recommendation)
     runs = await requested_runs(s, cs)
     latest = runs[0] if runs else None
+    ids = select(ChangeItem.id).where(ChangeItem.change_set_id == cs.id)
+    heal_rows = list((await s.execute(select(HealSuggestion).where(HealSuggestion.change_item_id.in_(ids)))).scalars())
     return {
         "impact": counts,
+        "repairs": {
+            "total": len(heal_rows),
+            "open": sum(1 for h in heal_rows if h.status == HealStatus.open),
+            "decided": sum(1 for h in heal_rows if h.status != HealStatus.open),
+        },
         "regression": {
             "must": counts["must"],
             "should": counts["should"],

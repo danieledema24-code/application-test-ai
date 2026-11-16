@@ -443,6 +443,8 @@ export type RegressionPick = {
   script: (ScriptRef & { heal_suggestions: HealRef[] }) | null;
   runnable: boolean;
   not_runnable_reason: string | null;
+  /** Moved from Must run to Not included (a link to a removed page, D28): P6-05/G9 still see it was must-run. */
+  was_must?: boolean;
 };
 
 export type RequestedRun = { id: Uuid; key: string; status: string; include_should: boolean; created_at: IsoDate | null };
@@ -631,7 +633,7 @@ export function affectedLines(c: ImpactCounts): string[] {
   ];
 }
 
-export type NextStep = { text: string; done: boolean; tab: "impact" | "regression"; action: string; query?: string };
+export type NextStep = { text: string; done: boolean; tab: "impact" | "regression" | "repairs"; action: string; query?: string };
 
 /** The Next steps card (design P6 §6.4), from the impact rows and the recommendation as they are now. */
 export function nextSteps(items: ImpactItem[], rec: Recommendation | undefined): NextStep[] {
@@ -643,8 +645,8 @@ export function nextSteps(items: ImpactItem[], rec: Recommendation | undefined):
   if (anyRepairs)
     steps.push(
       repairs
-        ? { text: `Repair ${plural(repairs, "outdated script")}`, done: false, tab: "impact", action: "Review repairs", query: "kind=automation_script" }
-        : { text: "Scripts repaired", done: true, tab: "impact", action: "Review repairs", query: "kind=automation_script" },
+        ? { text: `Repair ${plural(repairs, "outdated script")}`, done: false, tab: "repairs", action: "Review repairs" }
+        : { text: "Scripts repaired", done: true, tab: "repairs", action: "Review repairs" },
     );
   steps.push(
     requested

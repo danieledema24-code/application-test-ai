@@ -89,7 +89,7 @@ class Locator:
 
     getter: str
     element: str  # what a person calls it: "Message", "Send message", "Contact us form"
-    by: str  # label | placeholder | role | form_role | form_button | css
+    by: str  # label | placeholder | role | form_role | form_button | css (| text | testid from a P6-04 repair)
     name: str = ""
     role: str = ""
     exact: bool = False
@@ -104,6 +104,10 @@ class Locator:
             return f"{p}.getByLabel({q(self.name)})"
         if self.by == "placeholder":
             return f"{p}.getByPlaceholder({q(self.name)})"
+        if self.by == "text":
+            return f"{p}.getByText({q(self.name)}{', { exact: true }' if self.exact else ''})"
+        if self.by == "testid":
+            return f"{p}.getByTestId({q(self.name)})"
         if self.by in ("role", "form_role"):
             role = "form" if self.by == "form_role" else self.role
             exact = ", exact: true" if self.exact else ""
@@ -316,6 +320,13 @@ class Emitter:
         spec.locators.append(f"{pom.file}#{loc.getter}")
         return f"{self._var(pom)}.{loc.getter}"
 
+    def _field_check_ref(self, spec: _Spec, anchor: str | None, field_key: Any) -> str | None:
+        """The page-object getter a field check uses (D36), or None when the field isn't known (label form)."""
+        form = self.site.form(anchor)
+        if form is None or not field_key or form.field_by_key(str(field_key)) is None:
+            return None
+        return self._field_ref(spec, str(anchor), str(field_key))
+
     def _uses_field(self, spec: _Spec, anchor: str | None, field_key: Any) -> None:
         """A `qa.expect*` helper finds the field by its label: count that locator as used by the spec, so the live
         check covers it (a renamed label makes the script invalid). Only when the spec already uses the page object."""
@@ -395,6 +406,7 @@ class Emitter:
         spec.uses_qa = True
         form = a.get("form")
         args: list[str] = []
+        start = len(spec.locators)
         if kind == "form_shown":
             helper, call = "expectFormShown", f"qa.expectFormShown({self._form_ref(spec, form)})"
         elif kind == "submission_blocked":
@@ -410,10 +422,19 @@ class Emitter:
         elif kind == "every_field_labelled":
             helper, call = "expectEveryFieldLabelled", f"qa.expectEveryFieldLabelled({self._form_ref(spec, form)})"
         elif kind == "field_flagged":
-            helper, call = "expectFieldFlagged", f"qa.expectFieldFlagged({q(a['label'])})"
+            # D36: the check finds the field through the page object, so repairing the locator repairs the check;
+            # the label is only the name people read. What is checked never changes.
+            ref = self._field_check_ref(spec, form, a.get("field"))
+            arg = f"{ref}, {q(a['label'])}" if ref else q(a["label"])
+            helper, call = "expectFieldFlagged", f"qa.expectFieldFlagged({arg})"
         elif kind == "field_length":
-            opt = ", { atMost: true }" if a.get("at_most") else ""
-            helper, call = "expectFieldLength", f"qa.expectFieldLength({q(a['label'])}, {int(a['n'])}{opt})"
+            ref = self._field_check_ref(spec, form, a.get("field"))
+            opt = "{ atMost: true }" if a.get("at_most") else ""
+            if ref:
+                call = f"qa.expectFieldLength({ref}, {int(a['n'])}, {opt or '{}'}, {q(a['label'])})"
+            else:
+                call = f"qa.expectFieldLength({q(a['label'])}, {int(a['n'])}{', ' + opt if opt else ''})"
+            helper = "expectFieldLength"
             args += [str(a["n"]), "at most" if a.get("at_most") else "exactly"]
         elif kind in ("signed_in", "still_signed_in"):
             helper, call = "expectSignedIn", "qa.expectSignedIn()"
@@ -433,13 +454,19 @@ class Emitter:
             helper, call = "expectControlEnabled", f"qa.expectControlEnabled({q(a['name'])})"
         else:
             raise ValueError(f"Unknown assertion {kind}")
+        through = list(dict.fromkeys(spec.locators[start:]))  # page-object locators the call itself goes through
         if kind in ("field_flagged", "field_length"):
             self._uses_field(spec, form, a.get("field"))
         found = self.site.form(form) if form else None
         named = found.name if found is not None else None
         human = [x for x in (named, a.get("label"), a.get("path"), a.get("text") if kind == "text_visible" else None,
                              a.get("name")) if x]  # fmt: skip
-        spec.assertion_map.append({"step": where, "helper": helper, "args": human + args, "kind": kind})
+        entry: dict[str, Any] = {"step": where, "helper": helper, "args": human + args, "kind": kind}
+        if kind in ("field_flagged", "field_length") and not call.split("(", 1)[1].startswith('"'):
+            entry["by_locator"] = True  # D36: follows the page-object locator (no text of its own to go stale)
+        if through:
+            entry["locators"] = through  # which repaired locators a failed check involves (failure analysis)
+        spec.assertion_map.append(entry)
         return f"await {call};"
 
     def _body(self, spec: _Spec) -> list[str]:
@@ -603,11 +630,12 @@ class Emitter:
                 name = loc.element[:-5] if loc.element.endswith(" form") else loc.element
                 lines.append(f"    return {{ name: {q(name)}, locator: {loc.ts()} }};")
             else:
-                lines.append(f"  /** {one_line(loc.element)} */")
+                # What the element is, on the locator's own line: a repair rewrites that one line, comment included,
+                # so no comment is left naming the old label (QA P6-04).
                 lines.append(f"  get {loc.getter}(): Locator {{")
                 if loc.fallback:
                     lines.append(f"    // fallback locator: {one_line(loc.fallback)}")
-                lines.append(f"    return {loc.ts()};")
+                lines.append(f"    return {loc.ts()}; // {one_line(loc.element)}")
             lines.append("  }")
         lines.append("}")
         return "\n".join(lines) + "\n"

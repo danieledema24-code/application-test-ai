@@ -578,6 +578,11 @@ async def _check_heal(flow: Flow, keys: list[str]) -> None:
     assert first["recommended"] and first["expression"] == 'getByLabel("Comments")', sug
     assert "spec" not in first
     assert res["permissions"]["can_accept_fix"] is True
+    # P6-04: the same failure is also a repair suggestion from a failed test, ranked and verified on the live page.
+    [rep] = res["repairs"]
+    assert rep["key"].startswith("HEAL-") and rep["source"] == "failure" and rep["status"] == "open"
+    assert rep["execution_result"]["key"] == res["key"] and rep["old_expression"] == "getByLabel('Message')"
+    assert rep["candidates"][0]["expression"] == "getByLabel('Comments')" and rep["candidates"][0]["match_count"] == 1
     sid = flow.state["scripts"][res["case_key"]]["id"]
     script_before = (await flow.get(f"/automation-scripts/{sid}")).json()
     url = f"/execution-results/{res['id']}/heal-suggestions/0/accept"
@@ -588,6 +593,8 @@ async def _check_heal(flow: Flow, keys: list[str]) -> None:
     assert body["message"] == "ContactPage.ts version 2 created. Validate it before the next run."
     assert res["case_key"] in body["scripts_to_validate"]
     assert (await flow.post(url, {}, flow.member)).status_code == 409
+    # The Phase 4 accept decided the locator: its repair row is replaced, not offered any more.
+    assert (await flow.get(f"/heal-suggestions/{rep['id']}")).json()["status"] == "superseded"
     asset = (await flow.get(f"/automation-assets/{body['asset']['id']}")).json()
     assert 'getByLabel("Comments")' in asset["code"] and 'getByLabel("Message")' not in asset["code"]
     assert asset["version"] == 2 and asset["generated_by"] == "heal"

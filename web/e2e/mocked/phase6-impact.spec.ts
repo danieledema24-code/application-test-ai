@@ -57,7 +57,7 @@ test.describe("Phase 6 · impact (P6-02)", () => {
     await expect(under.getByText('Directly affected: button "Send message" renamed; field "Message" changed')).toBeVisible();
     await expect(under.getByText("Closes by itself when TC-0019 has a result from a run after CHG-0001.")).toBeVisible();
     await expect(under.getByText("getByLabel('Message') not found after CHG-0001").first()).toBeVisible();
-    await expect(under.getByText("Repair suggestion: HEAL-0001")).toBeVisible();
+    await expect(under.getByRole("link", { name: "Review HEAL-0001" })).toHaveAttribute("href", `${CHG1}?tab=repairs&heal=HEAL-0001`);
     // Re-run and repair items have no Close button (OQ4).
     await expect(page.getByRole("button", { name: "Close impact item for TC-0019" })).toHaveCount(0);
     await req2.focus();
@@ -137,7 +137,7 @@ test.describe("Phase 6 · impact (P6-02)", () => {
 });
 
 test.describe("Phase 6 · regression run (P6-02)", () => {
-  test("outdated must-run scripts: Request this run is aria-disabled with the reason; Review repairs opens Script items (§7.4, OQ3)", async ({ page }) => {
+  test("outdated must-run scripts: Request this run is aria-disabled with the reason; Review repairs opens the Repairs tab (§7.4, OQ3)", async ({ page }) => {
     const q = await setup(page);
     await page.goto(`${CHG1}?tab=regression`);
     await expect(page.getByRole("heading", { level: 2, name: "Regression run · recommended by rules" })).toBeVisible();
@@ -154,16 +154,18 @@ test.describe("Phase 6 · regression run (P6-02)", () => {
     const must = page.getByRole("table", { name: "Must run (2)" });
     await expect(must.getByRole("row", { name: /TC-0019/ })).toContainText("Re-tests DEF-0001");
     await expect(must.getByRole("row", { name: /TC-0019/ })).toContainText("Outdated");
-    await expect(must.getByRole("row", { name: /TC-0020/ })).toContainText("Repair: HEAL-0001");
+    await expect(must.getByRole("row", { name: /TC-0020/ }).getByRole("link", { name: "Review HEAL-0001" })).toHaveAttribute("href", `${CHG1}?tab=repairs&heal=HEAL-0001`);
     await expect(page.getByRole("table", { name: "Should run (3)" }).getByRole("row", { name: /TC-0030/ })).toContainText("Linked to high risk RISK-03");
     await expect(page.getByRole("table", { name: "Not included (2)" }).getByRole("row", { name: /TC-0031/ })).toContainText("Manual test: a person runs it");
+    // QA P6-04 R3: a test moved out of Must run (link to a removed page, D28) keeps its must-run marker.
+    await expect(page.getByRole("table", { name: "Not included (2)" }).getByRole("row", { name: /TC-0012/ })).toContainText("Was must run");
+    await expect(page.getByRole("table", { name: "Not included (2)" }).getByRole("row", { name: /TC-0031/ })).not.toContainText("Was must run");
     await expect(page.getByRole("checkbox", { name: 'Include the 3 "should run" tests' })).toBeChecked();
     await expect(page.getByText("5 tests, about 3 min · without them: 2 tests, under a minute")).toBeVisible();
     expect(await axe(page)).toEqual([]);
     await page.getByRole("tabpanel", { name: "Regression run" }).getByRole("button", { name: "Review repairs" }).click();
-    await expect(page).toHaveURL(/tab=impact&kind=automation_script|kind=automation_script&tab=impact/);
-    await expect(page.getByLabel("Type")).toHaveValue("automation_script");
-    await expect(page.getByText("Showing 2 of 13 impact items")).toBeAttached();
+    await expect(page).toHaveURL(/tab=repairs/);
+    await expect(page.getByRole("tab", { name: /^Repairs/ })).toHaveAttribute("aria-selected", "true");
   });
 
   test("repaired: Request this run sends the selection, toasts and opens the run (§7.4)", async ({ page }) => {
@@ -214,6 +216,7 @@ test.describe("Phase 6 · regression run (P6-02)", () => {
     await page.getByRole("tab", { name: "Regression run" }).click();
     const cards = page.getByRole("list", { name: "Must run (2)" });
     await expect(cards.getByRole("listitem").first()).toContainText("Why: Directly affected");
+    await expect(page.getByRole("list", { name: "Not included (2)" }).getByRole("listitem").filter({ hasText: "TC-0012" })).toContainText("Was must run");
     await expect(page.getByRole("button", { name: "Request this run" })).toBeVisible();
     expect(await sideways(page)).toBeLessThanOrEqual(0);
     expect(await axe(page)).toEqual([]);

@@ -473,6 +473,18 @@ async def _asset_version(s: Any, script: AutomationScript | None, path: Any) -> 
     return int(asset.version) if asset else None
 
 
+async def _repairs_of(ctx: Ctx, s: Any, p: Principal, r: ExecutionResult) -> list[dict[str, Any]]:
+    from app.services import repairs
+
+    rows = await repairs.list_rows(s, r.project_id, result=r.id)
+    # The repairs and reviews that concern this script now (QA P6-04): a failure right after a repair links to it.
+    script = await s.get(AutomationScript, r.automation_script_id) if r.automation_script_id else None
+    if script is not None and r.status != ResultStatus.passed:
+        seen = {x.id for x in rows}
+        rows += [x for x in await repairs.related(s, script) if x.id not in seen]
+    return await repairs.views(ctx, s, rows, see_email=out.sees_email(p.membership.role), can_decide=_member(p))
+
+
 async def result_detail(ctx: Ctx, s: Any, p: Principal, r: ExecutionResult) -> dict[str, Any]:
     run = await s.get(ExecutionRun, r.execution_run_id)
     plan: list[dict[str, Any]] = list((run.config or {}).get("plan") or []) if run else []
@@ -536,6 +548,8 @@ async def result_detail(ctx: Ctx, s: Any, p: Principal, r: ExecutionResult) -> d
         "defect": {"id": defect.id, "key": defect.key, "status": defect.status.value, "summary": defect.summary}
         if defect
         else None,
+        # P6-04: repair suggestions (HEAL-…) made from this failure; Phase 4 JSON suggestions stay below.
+        "repairs": await _repairs_of(ctx, s, p, r),
         "heal_suggestions": [
             {
                 **h,
@@ -660,12 +674,14 @@ async def reclassify(
 async def accept_fix(result_id: uuid.UUID, n: int, ctx: Ctx, s: ScopedSession, p: MemberPrincipal) -> dict[str, Any]:
     """Accepts fix suggestion option `n` (design §9.3): a new page-object version with only that locator changed.
     Expected results and assertions never change; scripts using it must pass their checks before the next run."""
-    from app.services import heal
+    from app.services import repairs
 
     r: ExecutionResult = await c.load(s, ExecutionResult, result_id, "Result")
     project = await c.project_of(s, r.project_id)
-    asset, keys = await heal.accept(s, project, r, n, p.user.id)
+    # P6-04: Phase 4 JSON suggestions accept as before; a result with only a repair row (HEAL-…) accepts that row.
+    asset, keys, scripts = await repairs.accept_p4(s, project, r, n, p.user)
     await s.commit()
+    await repairs.enqueue_checks(ctx, project, scripts, f"result-{r.key}")
     name = asset.path.rsplit("/", 1)[-1]
     await ctx.events.emit(
         org_id=project.organisation_id,

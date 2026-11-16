@@ -50,6 +50,8 @@ class FixtureSite:
     message_label: str = "Message"  # P4-04: rename it to make a generated locator miss
     # P4-06/P4-08: the demo shop's bug. The Message field loses `required` and POST /contact says "Thank you".
     contact_bug: bool = False
+    # P6-04 (QA R3): the Message field loses `required` and POST /contact shows the form again (no confirmation).
+    message_unflagged: bool = False
     down: bool = False  # P4-08: every request is answered by closing the connection (site unreachable)
     version: int = 1  # P6-00: release 1 or 2 (module docstring); read on every request
     contact_posts: list[str] = field(default_factory=list)
@@ -141,7 +143,7 @@ class FixtureSite:
             q = query.get("q", [""])[0]
             return 200, html, self.layout("Search results", f"<p>Results for {q!s:.40}</p>")
         if path == "/contact":
-            required = "" if self.contact_bug else ' required minlength="10"'
+            required = "" if self.contact_bug or self.message_unflagged else ' required minlength="10"'
             body = (
                 '<form action="/contact" method="post"><label for="name">Name</label>'
                 '<input id="name" name="name" required maxlength="80">'
@@ -217,6 +219,9 @@ def _handler(site: FixtureSite, internal: bool) -> type[BaseHTTPRequestHandler]:
                 with site.lock:
                     site.contact_posts.append(raw)
                 status, headers, body = (200, {"Content-Type": "text/html; charset=utf-8"}, site.contact_sent())
+            elif self.command == "POST" and parts.path == "/contact" and site.message_unflagged:
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                status, headers, body = site.pages("/contact", {}, self.headers.get("Cookie") or "")
             elif self.command != "GET":
                 status, headers, body = 405, {"Content-Type": "text/plain"}, "no"
             else:
