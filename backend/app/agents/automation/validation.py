@@ -227,6 +227,11 @@ async def validate_bundle(
             "issues": issues,
         }
         run.output = output
+        await s.flush()
+        # P6-02: a repair item closes when its script is valid again.
+        from app.services.impact import resolve_heals
+
+        await resolve_heals(s, project_id)
         await s.commit()
     first_invalid = f" ({issues[0].split(': ', 1)[-1]})" if issues else ""
     unchecked = counts["not_checked"] + counts["locators_not_checked"]
@@ -294,9 +299,12 @@ async def _verify_locators(
     pages: dict[str, str],
     specs: dict[str, list[dict[str, Any]]],
     creds: dict[str, str] | None,
+    *,
+    also_exact: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Counts each locator on its page in an isolated session under the network policy. Read-only: only page loads
-    (GET), plus the one sign-in when a page needs it and credentials are saved."""
+    (GET), plus the one sign-in when a page needs it and credentials are saved. With `also_exact` (P6-02's re-check
+    after a change), each locator is also counted with exact name matching, under `exact`."""
     from playwright.async_api import Error, Page
 
     from app.agents.discovery.signin import sign_in
@@ -352,6 +360,7 @@ async def _verify_locators(
                     with contextlib.suppress(Error):
                         await page.wait_for_load_state("load", timeout=5_000)
                     counts: dict[str, tuple[str, int | None]] = {}
+                    exact: dict[str, int] = {}
                     for item in items:
                         try:
                             n = await _locate(page, item).count()
@@ -360,7 +369,12 @@ async def _verify_locators(
                         counts[item["getter"]] = (
                             ("unique", 1) if n == 1 else ("missing", 0) if n == 0 else ("multiple", n)
                         )
-                    out[file] = {"locators": counts}
+                        if also_exact:
+                            try:
+                                exact[item["getter"]] = await _locate(page, item, exact=True).count()
+                            except Error:
+                                exact[item["getter"]] = 0
+                    out[file] = {"locators": counts, **({"exact": exact} if also_exact else {})}
                 except Error:
                     out[file] = {
                         "reason": "the page couldn't be opened",
@@ -393,16 +407,20 @@ async def _auth_paths(ctx: AppContext, scope: TenantScope, project_id: uuid.UUID
     return {svc.same_site_path(p.url) for p in data.pages if p.requires_auth and svc.same_site_path(p.url) in paths}
 
 
-def _locate(page: Any, item: dict[str, Any]) -> Any:
+def _locate(page: Any, item: dict[str, Any], *, exact: bool = False) -> Any:
+    """The locator as the page object writes it; `exact` matches the whole name (P6-02 re-check)."""
     by, name = item.get("by"), str(item.get("name") or "")
     if by == "label":
-        return page.get_by_label(name)
+        return page.get_by_label(name, exact=True) if exact else page.get_by_label(name)
     if by == "placeholder":
-        return page.get_by_placeholder(name)
+        return page.get_by_placeholder(name, exact=True) if exact else page.get_by_placeholder(name)
     if by in ("role", "form_role"):
         role = "form" if by == "form_role" else str(item.get("role") or "button")
         scope = page.get_by_role("navigation") if item.get("within") == "navigation" else page
-        return scope.get_by_role(role, name=name, exact=bool(item.get("exact")) or None)
+        return scope.get_by_role(role, name=name, exact=(exact or bool(item.get("exact"))) or None)
     if by == "form_button":
-        return page.locator("form").filter(has=page.get_by_role("button", name=name))
+        return page.locator("form").filter(has=page.get_by_role("button", name=name, exact=exact or None))
     return page.locator(str(item.get("css") or "body"))
+
+
+verify_locators = _verify_locators  # P6-02: the change set's read-only re-check of script locators

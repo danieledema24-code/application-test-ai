@@ -89,7 +89,7 @@ export type ChangeSet = {
   error: string | null;
   statement: string;
   permissions: { can_compare: boolean };
-};
+} & ChangeSetImpact;
 
 export type ChangeRef = {
   page_id: string | null;
@@ -325,4 +325,344 @@ export function rebaselineText(set: Pick<ChangeSet, "summary" | "target">): stri
 /** Status text of a change set (design P6 §6.4). */
 export function setStatusLabel(status: ChangeSetStatus): string {
   return status === "completed" ? "Compared" : status === "failed" ? "Didn't complete" : "Comparing…";
+}
+
+// ---- impact and the regression recommendation (P6-02, design P6 §3.3, §7) -------------------------------------
+
+export type ImpactLevel = "direct" | "indirect" | "gap";
+export type ImpactAction = "rerun" | "review" | "heal" | "regenerate" | "write_requirement";
+export type ImpactStatus = "open" | "resolved" | "no_action";
+export type ImpactTargetKind = "requirement" | "test_case" | "automation_script" | "defect" | "quality_finding" | "performance_target" | "coverage_gap";
+export type ImpactGroup = "requirements" | "defects" | "page_removed" | "review" | "gaps";
+
+export const IMPACT_LEVELS: ImpactLevel[] = ["direct", "indirect", "gap"];
+export const IMPACT_LEVEL_LABEL: Record<ImpactLevel, string> = { direct: "Direct", indirect: "Indirect", gap: "Not covered" };
+/** The level's meaning line (legend and the row's screen-reader text). */
+export const IMPACT_LEVEL_HELP: Record<ImpactLevel, string> = {
+  direct: "A test step or script uses the changed element.",
+  indirect: "On a changed page or feature, but no step uses the changed element.",
+  gap: "Nothing tests this yet.",
+};
+export const IMPACT_ACTION_LABEL: Record<ImpactAction, string> = { rerun: "Re-run", review: "Review", heal: "Repair the script", regenerate: "Regenerate", write_requirement: "Write a requirement" };
+export const IMPACT_STATUSES: ImpactStatus[] = ["open", "resolved", "no_action"];
+export const IMPACT_STATUS_LABEL: Record<ImpactStatus, string> = { open: "Open", resolved: "Resolved", no_action: "No action needed" };
+export const TARGET_KIND_LABEL: Record<Exclude<ImpactTargetKind, "coverage_gap">, string> = {
+  requirement: "Requirement",
+  test_case: "Test case",
+  automation_script: "Script",
+  defect: "Defect",
+  quality_finding: "Finding",
+  performance_target: "Performance target",
+};
+export const IMPACT_GROUP_TITLE: Record<ImpactGroup, string> = {
+  requirements: "Requirements and tests",
+  defects: "Defects to re-test",
+  page_removed: "Page removed: review",
+  review: "Findings and targets to review",
+  gaps: "Not covered by any requirement",
+};
+export const IMPACT_GROUPS: ImpactGroup[] = ["requirements", "defects", "page_removed", "review", "gaps"];
+export const IMPACT_HOW =
+  "Approved versions stay current after a rescan. Work through these items to bring them up to date.";
+export const CHOOSE_OPTION = "Choose an option.";
+export const NO_ACTION_REASON = "Say why no action is needed.";
+
+export type ScriptRef = { id: string | null; path: string | null; state: string | null; outdated_reason: string | null };
+export type HealRef = { id: string; key: string; status: string };
+
+export type ImpactTarget = {
+  id: string | null;
+  key: string | null;
+  title: string | null;
+  // test_case
+  requirement_lineages?: string[];
+  script?: ScriptRef | null;
+  // automation_script
+  path?: string | null;
+  state?: string | null;
+  outdated_reason?: string | null;
+  case_lineage_id?: string;
+  locators?: { file: string; getter: string; page: string; expression: string }[];
+  heal_suggestions?: HealRef[];
+  // defect, finding
+  severity?: string;
+  status?: string;
+  kind?: string | null;
+};
+
+export type ImpactItem = {
+  id: Uuid;
+  target_kind: ImpactTargetKind;
+  target_ref: string;
+  level: ImpactLevel;
+  action: ImpactAction;
+  reason: string;
+  status: ImpactStatus;
+  status_reason: string | null;
+  resolved_by: UserRef | null;
+  resolved_by_run: { id: string; key: string | null } | null;
+  resolved_at: IsoDate | null;
+  target: ImpactTarget | null;
+  changes: { id: string; subject: string }[];
+  group: ImpactGroup;
+  page: string | null;
+  can_close: boolean;
+};
+
+export type ImpactCounts = {
+  total: number;
+  open: number;
+  requirements: number;
+  test_cases: number;
+  scripts_outdated: number;
+  defects: number;
+  review: number;
+  gaps: number;
+  must: number;
+  should: number;
+  by_level?: Record<ImpactLevel, number>;
+  by_status?: Record<ImpactStatus, number>;
+};
+
+export type ImpactView = {
+  change_set: { id: Uuid; key: string };
+  generated_by: string;
+  permissions: { can_close: boolean };
+  available: boolean;
+  reason: string | null;
+  items: ImpactItem[];
+  counts: ImpactCounts | null;
+};
+
+export type RegressionPick = {
+  case_lineage_id: string;
+  key: string;
+  title: string;
+  reasons: string[];
+  test_case_id: string | null;
+  script: (ScriptRef & { heal_suggestions: HealRef[] }) | null;
+  runnable: boolean;
+  not_runnable_reason: string | null;
+};
+
+export type RequestedRun = { id: Uuid; key: string; status: string; include_should: boolean; created_at: IsoDate | null };
+
+export type Recommendation = {
+  change_set: { id: Uuid; key: string };
+  permissions: { can_request: boolean };
+  available: boolean;
+  reason: string | null;
+  order?: "rules" | "ai";
+  explanation?: string | null;
+  must?: RegressionPick[];
+  should?: RegressionPick[];
+  excluded?: RegressionPick[];
+  estimate?: { must_seconds: number | null; with_should_seconds: number | null; must_tests: number; with_should_tests: number; from_run_key: string | null; no_history?: string[] };
+  blocked?: { outdated: number; message: string; case_keys: string[] } | null;
+  requested_runs?: RequestedRun[];
+};
+
+/** Change set additions of P6-02 (`GET /change-sets/{id}`): null for a person's comparison. */
+export type ChangeSetImpact = {
+  impact?: ImpactCounts | null;
+  regression?: { must: number; should: number; requested_run: { id: Uuid; key: string; status: string } | null } | null;
+};
+
+export type ImpactFilter = { level: ImpactLevel | ""; status: ImpactStatus | "all"; kind: Exclude<ImpactTargetKind, "coverage_gap"> | "" };
+export const DEFAULT_IMPACT_FILTER: ImpactFilter = { level: "", status: "open", kind: "" };
+
+export function filterImpact(items: ImpactItem[], f: ImpactFilter): ImpactItem[] {
+  return items.filter((i) => (!f.level || i.level === f.level) && (f.status === "all" || i.status === f.status) && (!f.kind || i.target_kind === f.kind));
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** "Impact · 15 open of 18". */
+export function impactHeading(items: ImpactItem[]): string {
+  return `Impact · ${items.filter((i) => i.status === "open").length} open of ${items.length}`;
+}
+
+/** The row label of an item's target: "TC-0019 Send the form…", "/offers · page added". */
+export function targetLabel(i: ImpactItem): string {
+  const t = i.target;
+  if (i.target_kind === "coverage_gap") return t?.title ?? "Not covered";
+  if (i.target_kind === "automation_script") return `Script ${t?.path ?? "(no longer in the bundle)"}`;
+  if (i.target_kind === "performance_target") return `${t?.key ?? "Load profile"} target ${i.page ?? ""}`.trim();
+  if (!t) return `${TARGET_KIND_LABEL[i.target_kind]} (no longer current)`;
+  return [t.key, t.title].filter(Boolean).join(" ");
+}
+
+/** How a re-run or repair item closes (design P6 §7.1, §7.3); null for items a person closes. */
+export function autoCloseLine(i: ImpactItem, setKey: string): string | null {
+  if (i.action === "rerun") {
+    const key = i.target_kind === "defect" ? (i.reason.match(/Re-tested by ([^.]+)\./)?.[1] ?? "its test case") : (i.target?.key ?? "the test case");
+    return `Closes by itself when ${key} has a result from a run after ${setKey}.`;
+  }
+  if (i.action === "heal") return "Closes by itself when the script is valid again.";
+  return null;
+}
+
+/** The closed line (design P6 §3.3, §7.3): "Resolved by RUN-0005 (15 Nov 15:40)", "Resolved by M. Member", "M. Member: 'reason'". */
+export function closedLine(i: ImpactItem, fmt: (iso: string | null | undefined) => string): string | null {
+  if (i.status === "open") return null;
+  const who = i.resolved_by?.full_name || i.resolved_by?.email || null;
+  if (i.status === "no_action") return `No action needed · ${who ?? "Someone"}: '${i.status_reason ?? ""}'`;
+  const when = i.resolved_at ? ` (${fmt(i.resolved_at)})` : "";
+  if (i.resolved_by_run) return `Resolved by ${i.resolved_by_run.key ?? "a run"}${when}`;
+  if (i.action === "heal") return `Resolved: ${i.target?.key ? `${i.target.key}'s script` : "the script"} is valid again.`;
+  return `Resolved by ${who ?? "someone"}${when}`;
+}
+
+export type ImpactNode = { item: ImpactItem; children: ImpactNode[] };
+
+/**
+ * The "Requirements and tests" group as a tree (design P6 §7.1): requirement → its test cases → their scripts.
+ * Cases and scripts whose parent isn't listed stay at the top level, so nothing is hidden by a filter.
+ */
+export function requirementTree(items: ImpactItem[]): ImpactNode[] {
+  const reqs = items.filter((i) => i.target_kind === "requirement");
+  const cases = items.filter((i) => i.target_kind === "test_case");
+  const scripts = items.filter((i) => i.target_kind === "automation_script");
+  const placedCases = new Set<string>();
+  const placedScripts = new Set<string>();
+  const caseNode = (c: ImpactItem): ImpactNode => {
+    const kids = scripts.filter((s) => s.target_ref === c.target_ref);
+    kids.forEach((s) => placedScripts.add(s.id));
+    return { item: c, children: kids.map((s) => ({ item: s, children: [] })) };
+  };
+  const roots: ImpactNode[] = reqs.map((r) => {
+    const mine = cases.filter((c) => c.target?.requirement_lineages?.includes(r.target_ref) && !placedCases.has(c.id));
+    mine.forEach((c) => placedCases.add(c.id));
+    return { item: r, children: mine.map(caseNode) };
+  });
+  for (const c of cases) if (!placedCases.has(c.id)) roots.push(caseNode(c));
+  for (const s of scripts) if (!placedScripts.has(s.id)) roots.push({ item: s, children: [] });
+  return roots;
+}
+
+/** Items of one group in display order (the server's order), and of the page-removed group by page. */
+export function byGroup(items: ImpactItem[]): Record<ImpactGroup, ImpactItem[]> {
+  const out: Record<ImpactGroup, ImpactItem[]> = { requirements: [], defects: [], page_removed: [], review: [], gaps: [] };
+  for (const i of items) out[i.group].push(i);
+  return out;
+}
+
+/**
+ * After closing an item, focus goes to the next open item's [Close…] in the same group, else the group heading
+ * (design P6 §7.2, §16.2). `items` are the rows as they were before the close.
+ */
+export function nextCloseTarget(items: ImpactItem[], closedId: string): { kind: "item"; id: string } | { kind: "group"; group: ImpactGroup } {
+  const at = items.findIndex((i) => i.id === closedId);
+  const group = items[at]?.group ?? "requirements";
+  const same = items.filter((i) => i.group === group);
+  const pos = same.findIndex((i) => i.id === closedId);
+  const after = [...same.slice(pos + 1), ...same.slice(0, Math.max(pos, 0))];
+  const next = after.find((i) => i.id !== closedId && i.can_close && i.status === "open");
+  return next ? { kind: "item", id: next.id } : { kind: "group", group };
+}
+
+/** Close dialog checks, on submit (design P6 §7.2). */
+export function closeErrors(choice: "resolved" | "no_action" | null, reason: string): { choice?: string; reason?: string } {
+  if (!choice) return { choice: CHOOSE_OPTION };
+  if (choice === "no_action" && !reason.trim()) return { reason: NO_ACTION_REASON };
+  return {};
+}
+
+/** "about 3 min", "under a minute"; null when there is no timing. */
+export function durationText(seconds: number | null | undefined): string | null {
+  if (seconds === null || seconds === undefined) return null;
+  if (seconds < 60) return "under a minute";
+  return `about ${Math.round(seconds / 60)} min`;
+}
+
+/** The regression tab's estimate line (design P6 §7.4). */
+export function estimateLine(rec: Recommendation, includeShould: boolean): string {
+  const e = rec.estimate;
+  const s = includeShould ? e?.with_should_seconds : e?.must_seconds;
+  const t = durationText(s);
+  if (!t) return "No estimate: these tests haven't run before.";
+  const base = e?.from_run_key ? `${t} (from ${e.from_run_key})` : t;
+  // Tests without a timing count as the average of the others; say which they are.
+  const none = (e?.no_history ?? []).filter((k) => includeShould || (rec.must ?? []).some((p) => p.key === k));
+  if (!none.length) return base;
+  const shown = none.length > 3 ? `${none.slice(0, 3).join(", ")} and ${none.length - 3} more` : none.join(", ");
+  return `${base} · no timing yet for ${shown}`;
+}
+
+/** `[x] Include the 4 "should run" tests  (7 tests, about 3 min · without them: 3 tests, about 1 min)`. */
+export function includeShouldText(rec: Recommendation): { label: string; detail: string } {
+  const n = rec.should?.length ?? 0;
+  const e = rec.estimate;
+  const t = (secs: number | null | undefined) => durationText(secs) ?? "no estimate";
+  return {
+    label: `Include the ${n} "should run" test${n === 1 ? "" : "s"}`,
+    detail: e ? `${plural(e.with_should_tests, "test")}, ${t(e.with_should_seconds)} · without them: ${plural(e.must_tests, "test")}, ${t(e.must_seconds)}` : "",
+  };
+}
+
+/** Run status in words for "was requested from this recommendation" (P4 §3 wording). */
+export function requestedRunStatus(status: string): string {
+  return (
+    {
+      awaiting_authorisation: "Waiting for authorisation",
+      rejected: "Not authorised",
+      queued: "Waiting to start",
+      running: "Running",
+      passed: "Finished",
+      failed: "Finished",
+      error: "Didn't complete",
+      cancelled: "Cancelled",
+    }[status] ?? status
+  );
+}
+
+/** Toast after a regression run request (design P6 §7.4). */
+export function requestedToast(runKey: string, canApprove: boolean): string {
+  return canApprove ? `${runKey} created. Review and authorise it to start.` : `${runKey} requested. Someone who can approve must authorise it (Gate 7).`;
+}
+
+/** The Affected summary card (design P6 §6.4). */
+export function affectedLines(c: ImpactCounts): string[] {
+  return [
+    `${plural(c.requirements, "requirement")} · ${plural(c.test_cases, "test case")}`,
+    `${plural(c.scripts_outdated, "script")} outdated`,
+    `${plural(c.defects, "defect")} to re-test`,
+    `${c.review} to review · ${c.gaps} not covered`,
+  ];
+}
+
+export type NextStep = { text: string; done: boolean; tab: "impact" | "regression"; action: string; query?: string };
+
+/** The Next steps card (design P6 §6.4), from the impact rows and the recommendation as they are now. */
+export function nextSteps(items: ImpactItem[], rec: Recommendation | undefined): NextStep[] {
+  const repairs = items.filter((i) => i.action === "heal" && i.status === "open").length;
+  const anyRepairs = items.some((i) => i.action === "heal");
+  const closable = items.filter((i) => (i.action === "review" || i.action === "regenerate" || i.action === "write_requirement") && i.status === "open").length;
+  const requested = rec?.requested_runs?.[0];
+  const steps: NextStep[] = [];
+  if (anyRepairs)
+    steps.push(
+      repairs
+        ? { text: `Repair ${plural(repairs, "outdated script")}`, done: false, tab: "impact", action: "Review repairs", query: "kind=automation_script" }
+        : { text: "Scripts repaired", done: true, tab: "impact", action: "Review repairs", query: "kind=automation_script" },
+    );
+  steps.push(
+    requested
+      ? { text: `Regression run requested (${requested.key})`, done: true, tab: "regression", action: "Open regression run" }
+      : { text: "Request the regression run (Gate 7)", done: false, tab: "regression", action: "Open regression run" },
+  );
+  steps.push(
+    closable
+      ? { text: `Close ${plural(closable, "review item")}`, done: false, tab: "impact", action: "Open impact" }
+      : { text: "Review items closed", done: true, tab: "impact", action: "Open impact" },
+  );
+  return steps;
+}
+
+/** The Latest change card's impact line (design P6 §6.1); null for a comparison without impact. */
+export function impactLine(set: Pick<ChangeSet, "impact" | "regression">): string | null {
+  const c = set.impact;
+  if (!c) return null;
+  const run = set.regression?.requested_run;
+  return `${c.open} of ${plural(c.total, "impact item")} open · ${plural(c.scripts_outdated, "script")} outdated · regression run: ${run ? `${run.key} requested` : "not requested yet"}`;
 }

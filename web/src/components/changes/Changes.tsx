@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSWRConfig } from "swr";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { g2EverApproved, compareError, countsLine, existingPair, scanKindLabel, scanOptionLabel, setStatusLabel, type ChangeSet } from "@/lib/change";
+import { g2EverApproved, compareError, countsLine, existingPair, impactLine, scanKindLabel, scanOptionLabel, setStatusLabel, type ChangeSet } from "@/lib/change";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { Button, Callout, Card, EmptyState, ErrorState, LinkButton, SelectField, Skeleton, StatusPill, Table, TBody, Td, Th, THead, Tr, useToast } from "@/components/ui";
 import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
@@ -180,6 +180,7 @@ function LatestCard({ set, member }: { set: ChangeSet; member: boolean }) {
         {set.source === "rescan" ? " (rescan)" : ""} · {fmtDateTime(set.finished_at ?? set.created_at)}
       </p>
       <p className="mt-1 text-body text-fg">{countsLine(set)}</p>
+      {impactLine(set) && <p className="mt-1 text-body text-fg">{impactLine(set)}</p>}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <GeneratedByLabel generatedBy={set.generated_by} />
         <LinkButton href={changeSetHref(p.id, set.key)} variant="secondary">

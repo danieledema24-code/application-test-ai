@@ -1,6 +1,30 @@
 import { expect, test } from "@playwright/test";
 import {
   CHANGE_STATEMENT,
+  CHOOSE_OPTION,
+  DEFAULT_IMPACT_FILTER,
+  IMPACT_ACTION_LABEL,
+  IMPACT_LEVEL_HELP,
+  IMPACT_LEVEL_LABEL,
+  IMPACT_STATUS_LABEL,
+  NO_ACTION_REASON,
+  affectedLines,
+  autoCloseLine,
+  byGroup,
+  closeErrors,
+  closedLine,
+  durationText,
+  estimateLine,
+  filterImpact,
+  impactHeading,
+  impactLine,
+  includeShouldText,
+  nextCloseTarget,
+  nextSteps,
+  requestedRunStatus,
+  requestedToast,
+  requirementTree,
+  targetLabel,
   LATER_SCAN,
   compareError,
   compareWithHint,
@@ -24,7 +48,7 @@ import {
 } from "../../src/lib/change";
 import { fmtDate } from "../../src/lib/format";
 import { CURRENT_PHASE } from "../../src/lib/sections";
-import { changeSet, cosmeticItems, demoItems, scanRef } from "../../e2e/mocked/phase6-fixtures";
+import { changeSet, cosmeticItems, demoImpact, demoItems, demoRecommendation, newP6, scanRef } from "../../e2e/mocked/phase6-fixtures";
 
 const ANY: ChangeFilter = { hideCosmetic: false, kind: "", significance: "", page: "" };
 const s1 = scanRef({ n: 1, day: "12", pages: 11 }, 2);
@@ -112,5 +136,109 @@ test.describe("Phase 6 · change sets (P6-01, design P6 §3, §6)", () => {
     expect(rebaselineText(big)).toBe(
       "More than half the pages changed (8 of 12). Approved requirements may no longer describe the site. Consider regenerating requirements from Scan 3; you review the result before anything is replaced.",
     );
+  });
+});
+
+test.describe("Phase 6 · impact and the regression run (P6-02, design P6 §3.3, §6.4, §7)", () => {
+  const items = demoImpact();
+  const byId = (id: string) => items.find((i) => i.id === id)!;
+  const fmt = (iso: string | null | undefined) => (iso ? "15 Nov 15:40" : "—");
+
+  test("labels: levels, actions, statuses and the level meanings (§3.3)", () => {
+    expect(IMPACT_LEVEL_LABEL).toEqual({ direct: "Direct", indirect: "Indirect", gap: "Not covered" });
+    expect(IMPACT_LEVEL_HELP.indirect).toBe("On a changed page or feature, but no step uses the changed element.");
+    expect(IMPACT_ACTION_LABEL.heal).toBe("Repair the script");
+    expect(IMPACT_STATUS_LABEL.no_action).toBe("No action needed");
+  });
+
+  test("filters: Open by default; level, status and type combine", () => {
+    expect(filterImpact(items, DEFAULT_IMPACT_FILTER)).toHaveLength(13);
+    expect(filterImpact(items, { ...DEFAULT_IMPACT_FILTER, level: "gap" }).map((i) => i.id)).toEqual(["i-gap1", "i-gap2"]);
+    expect(filterImpact(items, { ...DEFAULT_IMPACT_FILTER, kind: "automation_script" }).map((i) => i.id)).toEqual(["i-sc19", "i-sc20"]);
+    const closed = items.map((i) => (i.id === "i-tc12" ? { ...i, status: "no_action" as const } : i));
+    expect(filterImpact(closed, DEFAULT_IMPACT_FILTER)).toHaveLength(12);
+    expect(filterImpact(closed, { ...DEFAULT_IMPACT_FILTER, status: "no_action" }).map((i) => i.id)).toEqual(["i-tc12"]);
+    expect(filterImpact(closed, { ...DEFAULT_IMPACT_FILTER, status: "all" })).toHaveLength(13);
+    expect(impactHeading(closed)).toBe("Impact · 12 open of 13");
+  });
+
+  test("requirement → case → script nesting; orphans stay at the top level", () => {
+    const req = byGroup(items).requirements;
+    const tree = requirementTree(req);
+    expect(tree.map((n) => n.item.id)).toEqual(["i-req7", "i-req2"]);
+    expect(tree[0].children.map((n) => [n.item.id, n.children.map((c) => c.item.id)])).toEqual([
+      ["i-tc19", ["i-sc19"]],
+      ["i-tc20", ["i-sc20"]],
+    ]);
+    // Filtered to scripts only: nothing is hidden for want of a parent.
+    expect(requirementTree(req.filter((i) => i.target_kind === "automation_script")).map((n) => n.item.id)).toEqual(["i-sc19", "i-sc20"]);
+    expect(Object.fromEntries(Object.entries(byGroup(items)).map(([g, xs]) => [g, xs.length]))).toEqual({ requirements: 7, defects: 1, page_removed: 3, review: 0, gaps: 2 });
+  });
+
+  test("rows say how they close: by themselves (re-run, repair) or by a person, and who closed them", () => {
+    expect(autoCloseLine(byId("i-tc19"), "CHG-0001")).toBe("Closes by itself when TC-0019 has a result from a run after CHG-0001.");
+    expect(autoCloseLine(byId("i-def1"), "CHG-0001")).toBe("Closes by itself when TC-0019 has a result from a run after CHG-0001.");
+    expect(autoCloseLine(byId("i-sc19"), "CHG-0001")).toBe("Closes by itself when the script is valid again.");
+    expect(autoCloseLine(byId("i-tc12"), "CHG-0001")).toBeNull();
+    expect(closedLine(byId("i-tc12"), fmt)).toBeNull();
+    expect(closedLine({ ...byId("i-tc19"), status: "resolved", resolved_by_run: { id: "r5", key: "RUN-0005" }, resolved_at: "2026-11-15T15:40:00Z" }, fmt)).toBe("Resolved by RUN-0005 (15 Nov 15:40)");
+    expect(closedLine({ ...byId("i-tc12"), status: "no_action", status_reason: "Retired", resolved_by: { id: "m", full_name: "M. Member" } }, fmt)).toBe("No action needed · M. Member: 'Retired'");
+    expect(closedLine({ ...byId("i-sc19"), status: "resolved", resolved_at: null }, fmt)).toBe("Resolved: TC-0019's script is valid again.");
+    expect(targetLabel(byId("i-gap1"))).toBe("/offers · page added");
+    expect(targetLabel(byId("i-sc20"))).toBe("Script tests/contact/TC-0020.spec.ts");
+    expect(targetLabel(byId("i-prf"))).toBe("PRF-01 target /products/1");
+  });
+
+  test("close dialog errors and where focus goes after closing (§7.2, §16.2)", () => {
+    expect(closeErrors(null, "")).toEqual({ choice: CHOOSE_OPTION });
+    expect(closeErrors("no_action", "  ")).toEqual({ reason: NO_ACTION_REASON });
+    expect(closeErrors("no_action", "Retired")).toEqual({});
+    expect(closeErrors("resolved", "")).toEqual({});
+    const rows = filterImpact(items, DEFAULT_IMPACT_FILTER);
+    expect(nextCloseTarget(rows, "i-tc12")).toEqual({ kind: "item", id: "i-a11y" });
+    expect(nextCloseTarget(rows, "i-prf")).toEqual({ kind: "item", id: "i-tc12" });
+    const one = rows.filter((i) => i.group !== "page_removed" || i.id === "i-prf");
+    expect(nextCloseTarget(one, "i-prf")).toEqual({ kind: "group", group: "page_removed" });
+    // Re-run items are never a target: they have no [Close…].
+    expect(nextCloseTarget(rows.filter((i) => i.group === "defects" || i.id === "i-req2"), "i-req2")).toEqual({ kind: "group", group: "requirements" });
+  });
+
+  test("the regression run: estimate, should-run checkbox, toasts and run status (§7.4)", () => {
+    const set = newP6().sets[0];
+    const rec = demoRecommendation({ outdated: true, runs: [], role: "owner" }, set);
+    expect(rec.blocked?.message).toBe("2 must-run tests have outdated scripts. Accept or reject their repair suggestions first.");
+    expect(estimateLine(rec, true)).toBe("about 3 min (from RUN-0003)");
+    expect(estimateLine(rec, false)).toBe("under a minute (from RUN-0003)");
+    expect(estimateLine({ ...rec, estimate: { ...rec.estimate!, with_should_seconds: null } }, true)).toBe("No estimate: these tests haven't run before.");
+    const partly = { ...rec, estimate: { ...rec.estimate!, no_history: ["TC-0020", "TC-0030"] } };
+    expect(estimateLine(partly, true)).toBe("about 3 min (from RUN-0003) · no timing yet for TC-0020, TC-0030");
+    expect(estimateLine(partly, false)).toBe("under a minute (from RUN-0003) · no timing yet for TC-0020");
+    expect(durationText(null)).toBeNull();
+    expect(durationText(150)).toBe("about 3 min");
+    expect(includeShouldText(rec)).toEqual({ label: 'Include the 3 "should run" tests', detail: "5 tests, about 3 min · without them: 2 tests, under a minute" });
+    expect(requestedToast("RUN-0005", false)).toBe("RUN-0005 requested. Someone who can approve must authorise it (Gate 7).");
+    expect(requestedToast("RUN-0005", true)).toBe("RUN-0005 created. Review and authorise it to start.");
+    expect(requestedRunStatus("awaiting_authorisation")).toBe("Waiting for authorisation");
+    expect(demoRecommendation({ outdated: false, runs: [], role: "owner" }, set).blocked).toBeNull();
+  });
+
+  test("summary cards: Affected, Next steps and the Latest change line (§6.1, §6.4)", () => {
+    const set = newP6().sets[0];
+    expect(affectedLines(set.impact!)).toEqual(["2 requirements · 4 test cases", "2 scripts outdated", "1 defect to re-test", "3 to review · 2 not covered"]);
+    expect(impactLine(set)).toBe("13 of 13 impact items open · 2 scripts outdated · regression run: not requested yet");
+    expect(impactLine({ impact: null, regression: null })).toBeNull();
+    const rec = demoRecommendation({ outdated: true, runs: [], role: "owner" }, set);
+    expect(nextSteps(items, rec).map((s) => [s.text, s.done])).toEqual([
+      ["Repair 2 outdated scripts", false],
+      ["Request the regression run (Gate 7)", false],
+      ["Close 7 review items", false],
+    ]);
+    const done = items.map((i) => (i.action === "heal" || i.can_close ? { ...i, status: "resolved" as const } : i));
+    const requested = { ...rec, requested_runs: [{ id: "r5", key: "RUN-0005", status: "queued", include_should: true, created_at: null }] };
+    expect(nextSteps(done, requested).map((s) => [s.text, s.done])).toEqual([
+      ["Scripts repaired", true],
+      ["Regression run requested (RUN-0005)", true],
+      ["Review items closed", true],
+    ]);
   });
 });

@@ -597,6 +597,11 @@ class Engine:
                 status = xsvc.final_status(run.totals)
             await self._set_status(s, project, run, status)
             await self._case_status(s, run)
+            # P6-02: change-set re-run items whose test now has a result close themselves (a cancelled run's
+            # finished tests count; its cancelled rows don't).
+            from app.services.impact import resolve_reruns
+
+            await resolve_reruns(s, run)
             await s.commit()
             message = finished_message(run) if status != RunStatus.cancelled else f"{run.key} cancelled"
             key = run.key

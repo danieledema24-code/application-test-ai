@@ -1,8 +1,10 @@
-"""The `change_analysis` stage (P6-01, decisions D25, D26): after a rescan finishes, compare it with its baseline.
+"""The `change_analysis` stage (P6-01, P6-02; decisions D25–D28): after a rescan finishes, compare it with its
+baseline, then work out what the change affects and which tests to rerun.
 
 Queued once per rescan by `advance()` (P6-00). The diff itself is `app.domain.change.diff`; writing the set and its
-items is `app.services.changes.compute`, shared with comparisons a person asks for. Code only: with AI on, the model
-may only add a labelled plain-words summary (counts are placeholders).
+items is `app.services.changes.compute`, shared with comparisons a person asks for. Impact, the live locator re-check
+and the regression recommendation are `app.services.impact.analyse` (rescans only). Code only: with AI on, the model
+may only add a labelled plain-words summary (counts are placeholders) and reorder the "should run" tests.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from app.db.tenant import TenantScope, bind_scope
 from app.domain.change.diff import COMPARABLE_SCAN_STATUSES
 from app.domain.enums import GeneratedBy, StageKey
 from app.services import changes as svc
+from app.services import impact as impact_svc
 
 
 class ChangeAnalysisAgent:
@@ -63,6 +66,7 @@ class ChangeAnalysisAgent:
             await s.commit()
             cs_id = cs.id
         cs = await svc.compute(self.ctx, self.scope, cs_id)
+        impact = await impact_svc.analyse(self.ctx, self.scope, cs_id)
         summary = cs.summary or {}
         return StageOutcome(
             output={
@@ -71,6 +75,7 @@ class ChangeAnalysisAgent:
                 "total": summary.get("total", 0),
                 "by_significance": summary.get("by_significance", {}),
                 "rebaseline_suggested": cs.rebaseline_suggested,
+                "impact": impact,
             },
             generated_by=GeneratedBy.rules,
             llm=summary.get("llm"),

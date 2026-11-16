@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import type { Page, ScanSummary } from "@/lib/contract";
-import { COMPARABLE, type ChangeItem, type ChangeSet, type ChangeSetList } from "@/lib/change";
+import { COMPARABLE, type ChangeItem, type ChangeSet, type ChangeSetList, type ImpactView, type Recommendation } from "@/lib/change";
 import { useApi } from "@/lib/hooks";
 import { scanNumber } from "@/lib/url";
 
@@ -25,6 +25,15 @@ export function useChangeSet(projectId: string, key: string | null) {
 
 export function useChangeItems(set: ChangeSet | undefined) {
   return useApi<{ items: ChangeItem[]; total: number }>(set && set.status === "completed" ? `/change-sets/${set.id}/items` : null);
+}
+
+/** Impact items of a completed change set (all of them; the tab filters on the page). */
+export function useImpact(set: ChangeSet | undefined) {
+  return useApi<ImpactView>(set && set.status === "completed" ? `/change-sets/${set.id}/impact` : null);
+}
+
+export function useRecommendation(set: ChangeSet | undefined) {
+  return useApi<Recommendation>(set && set.status === "completed" ? `/change-sets/${set.id}/regression-recommendation` : null);
 }
 
 export type ScanRow = ScanSummary & { n: number };

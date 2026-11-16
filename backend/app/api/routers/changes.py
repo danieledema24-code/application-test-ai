@@ -9,6 +9,10 @@
   returns its existing set (200); a new pair is computed by the `change_compare` job (202).
 - `GET /change-sets/{id}`, `GET /projects/{id}/change-sets/{key}`, `GET /change-sets/{id}/items?kind=&significance=
   &page=`.
+- P6-02 (D27, D28): `GET /change-sets/{id}/impact?level=&target_kind=&status=`, `PATCH /impact-items/{id} {status,
+  reason}` (member; review, regenerate and write-requirement items only; a reason for "No action needed"),
+  `GET /change-sets/{id}/regression-recommendation` and `POST /change-sets/{id}/regression-run {include_should?}`
+  (member): a run waiting for G7, refused (422) while a must-run test's script is outdated.
 
 Reads are open to viewers; other organisations get 404. Nothing here changes or deletes a scan, page or evidence file.
 """
@@ -16,21 +20,22 @@ Reads are open to viewers; other organisations get 404. Nothing here changes or 
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, Principal, ScopedSession
 from app.api.errors import NotFound, RateLimited, ValidationFailed
 from app.api.routers import p2common as c
-from app.db.models import ChangeSet, ScanSession
+from app.db.models import ChangeSet, ImpactItem, ScanSession
 from app.domain.enums import Role, StageKey
 from app.orchestrator.orchestrator import Orchestrator
 from app.schemas import api
 from app.services import changes as svc
+from app.services import impact as impact_svc
 from app.services import serialize_p2 as out
 from app.services.audit import audit
 
@@ -54,7 +59,8 @@ def _member(p: Principal) -> bool:
 
 
 async def _set_out(s: AsyncSession, cs: ChangeSet, p: Principal) -> dict[str, Any]:
-    return await svc.set_dict(s, cs, see_email=out.sees_email(p.membership.role), can_compare=_member(p))
+    d = await svc.set_dict(s, cs, see_email=out.sees_email(p.membership.role), can_compare=_member(p))
+    return {**d, **await impact_svc.set_extras(s, cs)}
 
 
 async def load_set(s: AsyncSession, change_set_id: uuid.UUID) -> ChangeSet:
@@ -201,3 +207,90 @@ async def change_items(
 ) -> dict[str, Any]:
     cs = await load_set(s, change_set_id)
     return await svc.items_list(ctx, s, cs, kind=kind, significance=significance, page=page)
+
+
+# ------------------------------------------------------------------ impact and regression (P6-02)
+
+
+@router.get("/change-sets/{change_set_id}/impact")
+async def impact(
+    change_set_id: uuid.UUID,
+    s: ScopedSession,
+    p: CurrentPrincipal,
+    level: str | None = None,
+    target_kind: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    cs = await load_set(s, change_set_id)
+    return await impact_svc.impact_view(
+        s, cs, level=level, target_kind=target_kind, status=status, see_email=out.sees_email(p.membership.role),
+        can_close=_member(p),
+    )  # fmt: skip
+
+
+class CloseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["resolved", "no_action"]
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+@router.patch("/impact-items/{item_id}")
+async def close_impact_item(
+    item_id: uuid.UUID, body: CloseInput, ctx: Ctx, s: ScopedSession, p: MemberPrincipal
+) -> dict[str, Any]:
+    item = await c.load(s, ImpactItem, item_id, "Impact item")
+    project = await c.project_of(s, item.project_id)
+    cs = await load_set(s, item.change_set_id)
+    await impact_svc.close(s, project, item, p.user, body.status, body.reason)
+    await s.commit()
+    view = await impact_svc.impact_view(s, cs, level=None, target_kind=None, status=None,
+                                        see_email=out.sees_email(p.membership.role), can_close=True)  # fmt: skip
+    row = next(x for x in view["items"] if x["id"] == str(item.id))
+    label = (row["target"] or {}).get("key") or ("Gap" if row["level"] == "gap" else "Impact")
+    name = p.user.full_name or p.user.email
+    await ctx.events.emit(
+        org_id=project.organisation_id,
+        project_id=project.id,
+        type="impact.closed",
+        message=f"{cs.key}: an impact item was closed by {name}",
+        stage_key=StageKey.change_analysis.value,
+        agent_key=impact_svc.AGENT,
+        data={"kind": "status", "change_set_key": cs.key, "status": body.status},
+    )
+    return {"item": row, "counts": view["counts"], "message": f"{label} impact item closed."}
+
+
+@router.get("/change-sets/{change_set_id}/regression-recommendation")
+async def regression_recommendation(change_set_id: uuid.UUID, s: ScopedSession, p: CurrentPrincipal) -> dict[str, Any]:
+    cs = await load_set(s, change_set_id)
+    return await impact_svc.recommendation_view(s, cs, can_request=_member(p))
+
+
+class RegressionRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    include_should: bool = True
+
+
+@router.post("/change-sets/{change_set_id}/regression-run", status_code=201)
+async def regression_run(
+    change_set_id: uuid.UUID, ctx: Ctx, s: ScopedSession, p: MemberPrincipal, body: RegressionRunInput | None = None
+) -> dict[str, Any]:
+    from app.api.routers.execution import run_detail
+
+    body = body or RegressionRunInput()
+    cs = await load_set(s, change_set_id)
+    project = await c.project_of(s, cs.project_id)
+    run = await impact_svc.request_run(ctx, s, project, cs, p.user, include_should=body.include_should)
+    await s.commit()
+    name = p.user.full_name or p.user.email
+    tests = len((run.config or {}).get("plan") or [])
+    await ctx.events.emit(
+        org_id=project.organisation_id,
+        project_id=project.id,
+        type="execution.run_requested",
+        message=f"{run.key} requested by {name} from {cs.key}: {tests} tests · waiting for authorisation",
+        stage_key=StageKey.execution.value,
+        agent_key="execution",
+        data={"kind": "request", "run_key": run.key, "tests": tests, "change_set_key": cs.key},
+    )
+    return await run_detail(ctx, s, p, run)

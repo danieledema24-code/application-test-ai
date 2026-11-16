@@ -33,9 +33,15 @@ import {
   type DisplayKind,
   type Group,
   type Significance,
+  affectedLines,
+  nextSteps,
+  type ImpactFilter,
+  type ImpactItem,
+  type Recommendation,
 } from "@/lib/change";
+import { CircleCheck } from "lucide-react";
 import { fmtDate, fmtDateTime } from "@/lib/format";
-import { Button, Callout, Card, Checkbox, Disclosure, Drawer, EmptyState, ErrorState, LinkButton, Segmented, SelectField, Skeleton, Table, TBody, Td, Th, THead, Tr } from "@/components/ui";
+import { Button, Callout, Card, Checkbox, Disclosure, Drawer, EmptyState, ErrorState, LinkButton, Segmented, SelectField, Skeleton, Table, TabPanel, Tabs, TBody, Td, Th, THead, Tr } from "@/components/ui";
 import { ChangeKindLabel, SignificanceLabel, SignificanceLegend } from "@/components/domain/ChangeLabels";
 import { HonestyNote } from "@/components/domain/NonFunctionalLabels";
 import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
@@ -43,7 +49,8 @@ import { RemovedEvidence, removedText } from "@/components/domain/RemovedEvidenc
 import { RegenerateDialog, requirementsRegenerateCopy } from "@/components/requirements/RegenerateDialog";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { ChangeSetStatusPill, changeSetHref } from "./Changes";
-import { useChangeItems, useChangeSet } from "./hooks";
+import { useChangeItems, useChangeSet, useImpact, useRecommendation } from "./hooks";
+import { ImpactTab, RegressionTab, TabBody } from "./Impact";
 
 const RANK: Record<Significance, number> = { structural: 0, behavioural: 1, cosmetic: 2 };
 
@@ -62,7 +69,15 @@ export function ChangeSetPage({ chgKey }: { chgKey: string }) {
   const q = useChangeSet(p.id, chgKey);
   const set = q.data;
   const items = useChangeItems(set);
+  const impact = useImpact(set);
+  const rec = useRecommendation(set);
   const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const tabParam = params.get("tab");
+  const tab: Tab = tabParam === "impact" || tabParam === "regression" ? tabParam : "what";
+  const kindParam = params.get("kind") as ImpactFilter["kind"] | null;
+  const setTab = (t: Tab, extra: Record<string, string> = {}) => router.replace(`${pathname}${buildQuery({ tab: t === "what" ? undefined : t, ...extra })}`, { scroll: false });
   const [busy, setBusy] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [regenOpen, setRegenOpen] = useState(false);
@@ -175,22 +190,35 @@ export function ChangeSetPage({ chgKey }: { chgKey: string }) {
               <GeneratedByLabel generatedBy="ai" className="mt-2" />
             </Card>
           )}
-          <Card className="p-5">
-            <h2 className="text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted">Changes</h2>
-            <p className="mt-1 text-h2 font-semibold tabular-nums text-fg-strong">
-              {total} change{total === 1 ? "" : "s"}
-            </p>
-            {by && (
-              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-small text-fg">
-                {SIGNIFICANCES.map((s) => (
-                  <li key={s}>
-                    <span className="tabular-nums">{by[s] ?? 0}</span> {s}
-                  </li>
-                ))}
-              </ul>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <Card className="p-5">
+              <h2 className="text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted">Changes</h2>
+              <p className="mt-1 text-h2 font-semibold tabular-nums text-fg-strong">
+                {total} change{total === 1 ? "" : "s"}
+              </p>
+              {by && (
+                <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-small text-fg">
+                  {SIGNIFICANCES.map((s) => (
+                    <li key={s}>
+                      <span className="tabular-nums">{by[s] ?? 0}</span> {s}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <GeneratedByLabel generatedBy={set.generated_by} className="mt-3" />
+            </Card>
+            {set.impact && (
+              <Card className="p-5">
+                <h2 className="text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted">Affected</h2>
+                <ul className="mt-2 space-y-1 text-small text-fg">
+                  {affectedLines(set.impact).map((l) => (
+                    <li key={l}>{l}</li>
+                  ))}
+                </ul>
+              </Card>
             )}
-            <GeneratedByLabel generatedBy={set.generated_by} className="mt-3" />
-          </Card>
+            {set.impact && impact.data?.available && <NextSteps items={impact.data.items} rec={rec.data} member={member} onOpen={setTab} />}
+          </div>
           {/* Design P6 §6.4: the existing dialog; the regeneration reads the current scan (Scan n, this rescan). */}
           <RegenerateDialog
             open={regenOpen}
@@ -200,21 +228,91 @@ export function ChangeSetPage({ chgKey }: { chgKey: string }) {
             {...requirementsRegenerateCopy({ scanN: set.target.number, documents: 0, protectedCount: 0, rejected: 0 })}
             onStarted={p.refresh}
           />
-          <section aria-labelledby="what-changed" className="space-y-4">
-            <h2 id="what-changed" className="text-h2 font-semibold text-fg-strong">
-              What changed ({total})
-            </h2>
-            {items.error && !items.data ? (
-              <ErrorState error={items.error} title="Couldn’t load changes." message="Try again." onRetry={() => void items.mutate()} />
-            ) : !items.data ? (
-              <Skeleton className="h-40" />
-            ) : (
-              <WhatChanged set={set} items={items.data.items} />
-            )}
-          </section>
+          <Tabs
+            label="Change set"
+            idPrefix="chg"
+            value={tab}
+            onChange={(t) => setTab(t as Tab)}
+            tabs={[
+              { id: "what", label: `What changed (${total})` },
+              { id: "impact", label: impact.data?.available ? `Impact (${impact.data.items.filter((i) => i.status === "open").length} open)` : "Impact" },
+              { id: "regression", label: "Regression run" },
+            ]}
+          />
+          {tab === "what" && (
+            <TabPanel id="what" idPrefix="chg">
+              <section aria-labelledby="what-changed" className="space-y-4">
+                <h2 id="what-changed" className="text-h2 font-semibold text-fg-strong">
+                  What changed ({total})
+                </h2>
+                {items.error && !items.data ? (
+                  <ErrorState error={items.error} title="Couldn’t load changes." message="Try again." onRetry={() => void items.mutate()} />
+                ) : !items.data ? (
+                  <Skeleton className="h-40" />
+                ) : (
+                  <WhatChanged set={set} items={items.data.items} />
+                )}
+              </section>
+            </TabPanel>
+          )}
+          {tab === "impact" && (
+            <TabPanel id="impact" idPrefix="chg">
+              <TabBody q={impact} what="impact">
+                {(v) => (
+                  <ImpactTab
+                    key={kindParam ?? ""}
+                    set={set}
+                    view={v}
+                    initialKind={kindParam ?? ""}
+                    onChanged={() => Promise.all([impact.mutate(), rec.mutate(), q.mutate()])}
+                    onRegenerate={member ? () => setRegenOpen(true) : undefined}
+                  />
+                )}
+              </TabBody>
+            </TabPanel>
+          )}
+          {tab === "regression" && (
+            <TabPanel id="regression" idPrefix="chg">
+              <TabBody q={rec} what="the regression run">
+                {(r) => <RegressionTab set={set} rec={r} onOpenRepairs={() => setTab("impact", { kind: "automation_script" })} />}
+              </TabBody>
+            </TabPanel>
+          )}
         </>
       )}
     </div>
+  );
+}
+
+type Tab = "what" | "impact" | "regression";
+
+/** The Next steps card (design P6 §6.4): an ordered list; done steps show a tick; viewers get no buttons. */
+function NextSteps({ items, rec, member, onOpen }: { items: ImpactItem[]; rec: Recommendation | undefined; member: boolean; onOpen: (t: Tab, extra?: Record<string, string>) => void }) {
+  const steps = nextSteps(items, rec);
+  return (
+    <Card className="p-5 md:col-span-2 lg:col-span-1">
+      <h2 className="text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted">Next steps</h2>
+      <ol className="mt-2 space-y-2 text-small text-fg">
+        {steps.map((st, n) => (
+          <li key={st.text} className="flex flex-wrap items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5">
+              {st.done ? <CircleCheck className="h-4 w-4 text-success-fg" aria-hidden /> : <span className="tabular-nums text-fg-muted">{n + 1}</span>}
+              {st.done && <span className="sr-only">Done: </span>}
+              {st.text}
+            </span>
+            {member && !st.done && (
+              <button
+                type="button"
+                className="min-h-6 font-medium text-navy-700 underline underline-offset-2"
+                onClick={() => onOpen(st.tab, st.query ? Object.fromEntries(new URLSearchParams(st.query)) : {})}
+              >
+                {st.action}
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </Card>
   );
 }
 
