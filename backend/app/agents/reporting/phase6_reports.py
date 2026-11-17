@@ -54,6 +54,7 @@ from app.domain.enums import (
     ReportType,
 )
 from app.domain.release import criteria as rc
+from app.services import exploratory as esvc
 
 PHASE6 = frozenset({ReportType.completion, ReportType.release_readiness})
 NOT_AVAILABLE = "Not available yet: assess release readiness first"
@@ -608,9 +609,13 @@ async def _completion(ctx: AppContext, s: AsyncSession, project: Project, report
     for sx in scans:
         found = list((await s.execute(select(QualityFinding).where(QualityFinding.scan_id == sx.id))).scalars())
         sm: dict[str, Any] = dict(sx.summary or {})
-        n, m = sm.get("actions"), sm.get("pages")
+        # Only a session that ran gets actions and the honesty statement; a request that was refused, withdrawn,
+        # expired or is still waiting shows its status ("Not approved", …) and never "tried 0 actions".
+        ran = sx.started_at is not None
+        n, m = (sm.get("actions"), sm.get("pages")) if ran else (None, None)
         sessions.append({
-            "key": sx.key, "status": sx.status.value, "actions": n, "pages": m, "findings": len(found),
+            "key": sx.key, "status": sx.status.value, "status_label": esvc.status_label(sx, {}), "ran": ran,
+            "actions": n, "pages": m, "findings": len(found),
             "open_high_medium": sum(1 for f in found if f.status.value == "open"
                                     and f.severity.value in ("high", "medium")),
             "statement": EXPLORE_STATEMENT.format(n=n, m=m) if isinstance(n, int) and isinstance(m, int) else None,
@@ -664,7 +669,7 @@ async def _completion(ctx: AppContext, s: AsyncSession, project: Project, report
         "results of the same test case aren't counted.",
         "Automated checks can't judge wording, look and feel, or emails and other effects outside the browser.",
     ]
-    if not sessions:
+    if not any(x["ran"] for x in sessions):
         limitations.append("No exploratory session has run, so nothing beyond the scripted tests was explored.")
     if a is not None and a.status in (AssessmentStatus.stale, AssessmentStatus.superseded):
         limitations.append(

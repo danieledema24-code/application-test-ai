@@ -78,9 +78,13 @@ async def _links(s: Any, ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, list
 
 def why_line(d: Defect) -> str | None:
     """Gate 8 "Why" line of a non-functional draft (design P5 §10): what was observed, and in which check or run."""
+    env = d.environment or {}
+    if d.source == DefectSource.exploratory:  # design P6 §9.8: "… on /offers · EXP-0001 step 22 [Observed]"
+        what = env.get("why") or d.summary
+        where = " ".join(str(x) for x in (env.get("scan_key"), f"step {env['step']}" if env.get("step") else None) if x)
+        return f"{what} · {where} [Observed]" if where else f"{what} [Observed]"
     if d.source not in dsvc.NON_FUNCTIONAL:
         return None
-    env = d.environment or {}
     text = re.sub(r"^\[[^\]]*\]\s*", "", d.actual or d.description or "").strip()
     ref = env.get("scan_key") or env.get("run_key")
     return f"{text} · {ref}" if ref and text else (text or None)

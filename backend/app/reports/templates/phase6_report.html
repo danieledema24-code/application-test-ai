@@ -103,7 +103,7 @@
   {% else %}<p>No rescan has been compared yet.</p>{% endif %}
 </section>
 <section><h2>Exploratory sessions</h2>
-  {% if c.exploratory.sessions %}<ul>{% for x in c.exploratory.sessions %}<li>{{ x.key }} · {{ x.status }} · {{ x.actions if x.actions is not none else '—' }} actions · {{ x.findings }} findings ({{ x.open_high_medium }} open high or medium){% if x.statement %}<br><span class="statement">{{ x.statement }}</span>{% endif %}</li>{% endfor %}</ul>
+  {% if c.exploratory.sessions %}<ul>{% for x in c.exploratory.sessions %}<li>{{ x.key }} · {{ x.status_label or x.status }}{% if x.ran is not defined or x.ran %} · {{ x.actions if x.actions is not none else '—' }} actions · {{ x.findings }} findings ({{ x.open_high_medium }} open high or medium){% endif %}{% if x.statement %}<br><span class="statement">{{ x.statement }}</span>{% endif %}</li>{% endfor %}</ul>
   {% else %}<p>{{ c.exploratory.empty }}</p>{% endif %}
 </section>
 <section><h2>Non-functional summary</h2>

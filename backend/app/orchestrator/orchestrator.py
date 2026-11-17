@@ -210,7 +210,8 @@ PHASE4_HANDLERS: dict[StageKey, Any] = {
     StageKey.security_assessment: type("RunDriven_P5_03", (NotAvailableYet,), {"story": "P5-03", "implemented": True}),
     StageKey.performance: type("RunDriven_P5_01b", (NotAvailableYet,), {"story": "P5-01b", "implemented": True}),
     # Phase 6 (P6-00): P6-01 landed change analysis, P6-05a the release readiness assessment. Exploratory
-    # sessions (job `quality_scan`, P6-03a) start from Test Execution, never as a stage task (RUN_DRIVEN_STAGES).
+    # sessions (job `exploratory_session`, P6-03a) start from Test Execution, never as a stage task
+    # (RUN_DRIVEN_STAGES).
     StageKey.change_analysis: _LazyHandler("app.agents.change.analysis", "ChangeAnalysisAgent"),
     StageKey.release_readiness: _LazyHandler("app.agents.release.agent", "ReleaseReadinessAgent"),
     StageKey.exploratory: type("RunDriven_P6_03a", (NotAvailableYet,), {"story": "P6-03a", "implemented": True}),
@@ -1598,6 +1599,10 @@ class Orchestrator:
             from app.agents.performance.runner import run_load_test
 
             await run_load_test(self.ctx, scope, uuid.UUID(job.payload["run_id"]), job)
+        elif job.kind == "exploratory_session":
+            from app.agents.exploratory.explorer import run_session
+
+            await run_session(self.ctx, scope, uuid.UUID(job.payload["scan_id"]), job)
         else:
             raise ValueError(f"Unknown job kind {job.kind}")
 
@@ -1907,6 +1912,11 @@ class Orchestrator:
             from app.agents.performance.runner import run_interrupted
 
             await run_interrupted(self.ctx, job)
+            return
+        if job.kind == "exploratory_session":
+            from app.agents.exploratory.explorer import session_interrupted
+
+            await session_interrupted(self.ctx, job)
             return
         if job.kind != "agent_task":
             return

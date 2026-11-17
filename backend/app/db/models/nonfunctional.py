@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, IdMixin, TenantMixin, TimestampMixin
@@ -27,6 +27,8 @@ from app.domain.enums import (
     QualityScanStatus,
 )
 
+ONE_ACTIVE_EXPLORATION = "kind = 'exploratory' AND status IN ('queued', 'running')"
+
 
 class _ProjectMixin:
     project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"))
@@ -39,6 +41,14 @@ class QualityScan(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base):
     __table_args__ = (
         UniqueConstraint("project_id", "key"),
         Index("ix_quality_scans_project_kind_created", "project_id", "kind", "created_at"),
+        # P6-03a (migration 0021): one queued or running exploratory session per project, enforced by the database.
+        Index(
+            "uq_quality_scans_one_active_exploration",
+            "project_id",
+            unique=True,
+            sqlite_where=text(ONE_ACTIVE_EXPLORATION),
+            postgresql_where=text(ONE_ACTIVE_EXPLORATION),
+        ),
     )
 
     key: Mapped[str] = mapped_column(String(32))

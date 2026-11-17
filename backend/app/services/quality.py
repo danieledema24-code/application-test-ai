@@ -321,6 +321,14 @@ async def add_finding(
             "category",
             "why",
             "fix",
+            # Exploratory findings (P6-03a): steps to reproduce, the step numbers, redacted console and network lines.
+            "steps",
+            "step",
+            "steps_seen",
+            "console",
+            "network",
+            "action",
+            "group",
         )
     }
     f = QualityFinding(
@@ -540,6 +548,10 @@ async def raise_defect(s: AsyncSession, project: Project, f: QualityFinding, use
     if f.defect_id is not None:
         d = await s.get(Defect, f.defect_id)
         raise Conflict(f"{f.key} is already linked to {d.key if d else 'a defect'}")
+    if f.kind == QualityScanKind.exploratory:
+        from app.services.exploratory import raise_defect as explore_defect
+
+        return await explore_defect(s, project, f, user)
     scan = await s.get(QualityScan, f.scan_id)
     assert scan is not None
     fs = [f]
@@ -620,6 +632,10 @@ async def mark_findings_for_rejected(s: AsyncSession, d: Defect, user: User, com
 
 
 def status_label(scan: QualityScan) -> str:
+    if scan.kind == QualityScanKind.exploratory:
+        from app.services.exploratory import status_label as explore_label
+
+        return explore_label(scan, {})
     total = len((scan.config or {}).get("pages") or []) * max(1, len((scan.config or {}).get("viewports") or [1]))
     done = int((scan.summary or {}).get("visited") or 0)
     nc = len(scan.not_checked or [])

@@ -19,6 +19,9 @@ const PORT = Number(process.env.DEMO_PORT ?? 4100);
 const DEMO_VERSION = process.env.DEMO_VERSION === "2" ? 2 : 1;
 // Set by the operator; never served (no route reads it). Lets tests flip releases without a restart.
 const VERSION_FILE = process.env.DEMO_VERSION_FILE;
+// P6-03a: if set, one line "METHOD /path?query STATUS" per request is appended to this file (never served; no bodies,
+// headers or cookies). Exploration checks read it to prove that only GET/HEAD requests reached the shop.
+const ACCESS_LOG = process.env.DEMO_ACCESS_LOG;
 /** The release to serve for this request: the version file's content if it is readable and 1 or 2, else DEMO_VERSION. */
 function currentRelease() {
   if (VERSION_FILE) {
@@ -175,6 +178,7 @@ const openapi = {
 };
 
 http.createServer((req, res) => {
+  if (ACCESS_LOG) res.on("finish", () => fs.appendFile(ACCESS_LOG, `${req.method} ${req.url} ${res.statusCode}\n`, () => {}));
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {

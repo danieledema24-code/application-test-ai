@@ -61,5 +61,21 @@ Release 1 is byte-for-byte the Phase 5 shop (checked route by route against a sn
    "Message sent") is unchanged.
 5. Everything else is as in release 1, Phase 5 flaws included.
 
+### Exploratory testing (P6-03a)
+
+Release 2's `/offers` is what the safe explorer finds on the demo (AI off, charter "New and changed pages from
+CHG-0001"): clicking "Show details" gives an uncaught `TypeError` and "Bundle price: £NaN" (two medium findings, one
+grouped defect draft), clicking "Add to basket" makes the page try `POST /basket`, which the explorer blocks before it
+leaves the browser ("Blocked write attempts"), and "Apply code" submits the Promo code form, so it is never clicked
+("Not tried: Submits a form").
+
+To check what reached the shop, set `DEMO_ACCESS_LOG` to a file path: one line `METHOD /path?query STATUS` is
+appended per request (no bodies, headers or cookies; the file is never served, and responses are unchanged). After an
+exploratory session the log holds only `GET` (and `HEAD`) lines.
+
+```sh
+DEMO_VERSION=2 DEMO_ACCESS_LOG=/tmp/demo-access.log npm start
+```
+
 The test login and API token live in `demo-login.mjs`. Tests read them from there or from `DEMO_LOGIN_USER` /
 `DEMO_LOGIN_PASSWORD`; docs never copy them.

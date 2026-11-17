@@ -58,13 +58,16 @@ REJECT_REASONS = {
     "accepted_risk": "Accepted risk",  # non-functional drafts only (P5 design open question 2)
 }
 NON_FUNCTIONAL = (DefectSource.accessibility, DefectSource.security, DefectSource.performance)
-ACCEPTED_RISK_ONLY_NF = "Accepted risk is for accessibility, security and performance defects."
+# Drafts from coded checks rather than test cases: they can be rejected as accepted risk at G8 (P6-03a adds exploratory).
+CHECK_DRAFTS = (*NON_FUNCTIONAL, DefectSource.exploratory)
+ACCEPTED_RISK_ONLY_NF = "Accepted risk is for accessibility, security, performance and exploratory defects."
 # Why a draft exists (revision history); non-functional drafts follow decision D20.
 DRAFT_REASONS = {
     DefectSource.analysis: "Drafted from the failure analysis",
     DefectSource.accessibility: "Drafted from an accessibility check",
     DefectSource.performance: "Drafted from a load test",
     DefectSource.security: "Drafted from a security check",
+    DefectSource.exploratory: "Drafted from an exploratory session",
 }
 EDITABLE = ("summary", "description", "preconditions", "steps", "expected", "actual", "severity", "priority")
 BLOCKING_KINDS = ("submission_blocked", "signed_in", "not_signed_in", "submission_accepted")
@@ -472,7 +475,7 @@ async def set_status(
                     }
                 ],
             )
-        if reason == "accepted_risk" and d.source not in NON_FUNCTIONAL:
+        if reason == "accepted_risk" and d.source not in CHECK_DRAFTS:
             raise ValidationFailed(
                 ACCEPTED_RISK_ONLY_NF, details=[{"field": "reason", "message": ACCEPTED_RISK_ONLY_NF}]
             )

@@ -595,10 +595,12 @@ SIGNED-IN PAGES
      Signed-in sessions need approval: someone who can approve types the host first.
      The sign-out link and button are never clicked.
 WHAT IT DOES
- • Clicks buttons that can't submit, tabs, menus and links to pages on localhost:4100; presses Escape, Back and reload.
+ • Clicks buttons that can't submit, tabs, menus and links to pages on localhost:4100, and presses
+   Escape to check that a dialog closes.
  • Never types, selects, uploads, submits forms or downloads files.
  • Never clicks anything named like delete, remove, buy, pay, order, checkout, subscribe, send, submit,
-   confirm, save or sign out. Those are listed as "Not tried".
+   confirm, save or sign out, and never opens sign-out addresses, even through a redirect. Those are
+   listed as "Not tried".
  • Blocks every request the page tries to send other than reading. Blocked attempts are listed.
  • Desktop 1440 × 900 only.
 ```

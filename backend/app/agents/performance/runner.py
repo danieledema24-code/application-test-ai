@@ -1,9 +1,9 @@
 """The `performance_run` job (P5-01b): one approved load test with the built-in load generator (P5-01a).
 
 Starts only from `queued` (an approved `load_test` approval, which becomes `used` here), one per organisation (job
-group `performance`) and never beside a test run on the same project. Progress is stored as numbers only
-(`metrics.live`, events `performance.progress`); the summary and the one-second time series become evidence;
-thresholds are judged in code. "Stop now" is polled every 0.5 s and stops the generator within 2 s. A run whose
+group `performance`) and never beside a test run or (P6-03a) an exploratory session on the same project. Progress
+is stored as numbers only (`metrics.live`, events `performance.progress`); the summary and the one-second time
+series become evidence; thresholds are judged in code. "Stop now" is polled every 0.5 s and stops the generator within 2 s. A run whose
 worker stopped is `error`, and the generator stops itself when its parent dies.
 """
 
@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from app.automation.loadgen import LoadGenerator, LoadGeneratorError, LoadRefused, LoadResult
 from app.context import AppContext
-from app.db.models import Approval, Defect, ExecutionRun, Job, PerformanceRun, Project
+from app.db.models import Approval, Defect, ExecutionRun, Job, PerformanceRun, Project, QualityScan
 from app.db.tenant import TenantScope, bind_scope, system_scope
 from app.db.types import utcnow
 from app.domain.enums import (
@@ -35,6 +35,8 @@ from app.domain.enums import (
     EvidenceKind,
     PerfRunStatus,
     Priority,
+    QualityScanKind,
+    QualityScanStatus,
     RunStatus,
     StageKey,
 )
@@ -101,6 +103,16 @@ class LoadTestJob:
                     )
                 )
             ).first()
+            if busy is None:  # P6-03a: nor beside an exploratory session on the same project
+                busy = (
+                    await s.execute(
+                        select(QualityScan.key).where(
+                            QualityScan.project_id == run.project_id,
+                            QualityScan.kind == QualityScanKind.exploratory,
+                            QualityScan.status == QualityScanStatus.running,
+                        )
+                    )
+                ).first()
             if busy is not None:  # never beside a test run on the same project: wait for it
                 await self.ctx.queue.enqueue(
                     "performance_run",

@@ -225,11 +225,11 @@ async def test_exploratory_needs_g2_and_never_runs_as_a_stage(setup: Any) -> Non
         r = await client.post(f"{API}/projects/{pid}/stages/exploratory/run", json={}, headers=owner.headers)
         assert r.status_code == 422, r.text
         assert r.json()["error"]["message"] == "Start an exploratory session from Test Execution"
-    # After G2 the endpoint exists but the explorer is P6-03a's: 422, and nothing is queued.
+    # After G2 the endpoint validates the session (P6-03a: charters are keys, not labels), and no stage task is queued.
     r = await client.post(
         f"{API}/projects/{ready}/exploratory-sessions", json={"charter": "All discovered pages"}, headers=owner.headers
     )
-    assert r.status_code == 422 and r.json()["error"]["message"] == "Exploratory testing is not available yet"
+    assert r.status_code == 422 and r.json()["error"]["message"] == "Choose what to explore"
     bad = await client.post(f"{API}/projects/{ready}/exploratory-sessions", json={"x": 1}, headers=owner.headers)
     assert bad.status_code == 422
     assert "exploratory" not in await _tasks(ctx, ready)

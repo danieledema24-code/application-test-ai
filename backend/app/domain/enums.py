@@ -573,6 +573,11 @@ class QualityScanStatus(StrEnum):
     partial = "partial"
     failed = "failed"
     cancelled = "cancelled"
+    # Phase 6 (P6-03a, migration 0021): a signed-in exploratory session waits for its `exploratory_session` approval
+    # (decision D30); refused or withdrawn requests are `rejected`, unanswered ones `expired` after 24 h.
+    awaiting_approval = "awaiting_approval"
+    rejected = "rejected"
+    expired = "expired"
 
 
 class FindingSeverity(StrEnum):
