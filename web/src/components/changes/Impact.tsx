@@ -51,6 +51,8 @@ import { Button, Callout, Checkbox, Disclosure, EmptyState, ErrorState, InlineEr
 import { ImpactActionLabel, ImpactLegend, ImpactLevelLabel, ImpactStatusLabel, ScriptStateLabel } from "@/components/domain/ChangeLabels";
 import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
 import { useProject } from "@/components/workspace/ProjectContext";
+import { MUST_MANUAL } from "@/lib/release";
+import { ManualRetests } from "./ManualRetests";
 
 const link = "font-medium text-navy-700 underline underline-offset-2";
 type KindFilter = ImpactFilter["kind"];
@@ -528,6 +530,7 @@ export function RegressionTab({ set, rec, onOpenRepairs }: { set: ChangeSet; rec
         </div>
       )}
       <PickGroup title={`Must run (${must.length})`} note="Always included" picks={must} kind="must" generatedBy="rules" />
+      {must.some((m) => m.not_runnable_reason === MUST_MANUAL) && <ManualRetests changeSetId={set.id} changeSetKey={set.key} projectId={projectId} />}
       {should.length > 0 && (
         <PickGroup
           title={`Should run (${should.length})`}

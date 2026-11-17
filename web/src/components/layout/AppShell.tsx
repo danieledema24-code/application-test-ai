@@ -103,7 +103,9 @@ function ProjectNav({ id, section, onNavigate }: { id: string; section: string; 
   const scripted = !!workflow?.stages.find((x) => x.key === "automation")?.current_version;
   const { data: runs } = useApi<RunList>(scripted ? `/projects/${id}/execution-runs` : null, { limit: 20 }, { shouldRetryOnError: false, refreshInterval: 15000 });
   const { data: defects } = useApi<DefectList>(scripted ? `/projects/${id}/defects` : null, { status: "draft", limit: 1 }, { shouldRetryOnError: false, refreshInterval: 15000 });
-  const execution = runs || defects ? { runsWaiting: runs?.waiting.length ?? 0, running: !!runs?.running, drafts: defects?.counts.draft ?? 0 } : undefined;
+  const { role, canApprove } = useAuth();
+  // Reports badge (design P6 §4.2): "Decide" for someone who can approve, "Waiting" for everyone else.
+  const execution = runs || defects || workflow ? { runsWaiting: runs?.waiting.length ?? 0, running: !!runs?.running, drafts: defects?.counts.draft ?? 0, canApprove: canApprove && role !== "viewer" } : undefined;
   // Non-functional badge (design P5 §4.2): only once the optional checks are reachable (G2), so earlier projects make no call.
   const g2 = workflow?.stages.find((x) => x.key === "accessibility")?.available && !!workflow?.stages.find((x) => x.key === "discovery")?.current_version;
   const { data: nfOverview } = useApi<Overview>(g2 ? `/projects/${id}/non-functional` : null, undefined, { shouldRetryOnError: false, refreshInterval: 15000 });

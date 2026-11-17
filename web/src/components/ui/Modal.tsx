@@ -17,6 +17,7 @@ export function Modal({
   children,
   footer,
   size = "md",
+  returnFocusRef,
 }: {
   open: boolean;
   onClose: () => void;
@@ -25,8 +26,12 @@ export function Modal({
   children: React.ReactNode;
   footer?: React.ReactNode;
   size?: "sm" | "md" | "lg" | "xl";
+  /** Where focus goes on close when it is set then (e.g. an error the confirmed action produced), instead of back to the opener. */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const returnRef = useRef(returnFocusRef);
+  returnRef.current = returnFocusRef;
   const titleId = useId();
   const descId = useId();
   const onCloseRef = useRef(onClose);
@@ -57,7 +62,9 @@ export function Modal({
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
-      previouslyFocused?.focus?.();
+      const target = returnRef.current?.current;
+      if (target?.isConnected) target.focus();
+      else previouslyFocused?.focus?.();
     };
   }, [open]);
 
@@ -117,6 +124,7 @@ export function ConfirmDialog({
   onCancel,
   focusConfirm,
   focusCancel,
+  returnFocusRef,
 }: {
   open: boolean;
   onClose: () => void;
@@ -133,6 +141,8 @@ export function ConfirmDialog({
   focusConfirm?: boolean;
   /** Start with focus on Cancel (e.g. accepting a repair, where confirming is not the safe direction). */
   focusCancel?: boolean;
+  /** See Modal: focus on close goes here when it is set then. */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }) {
   return (
     <Modal
@@ -140,6 +150,7 @@ export function ConfirmDialog({
       onClose={onClose}
       title={title}
       size="sm"
+      returnFocusRef={returnFocusRef}
       footer={
         <>
           <Button variant="secondary" onClick={onCancel ?? onClose} data-autofocus={focusCancel || undefined}>

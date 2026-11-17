@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { Circle, CircleCheck, CircleDashed, CircleDot, CirclePause, CircleSlash, CircleX, Diamond, Loader2, MessageSquareWarning, RefreshCw, UserRoundCheck } from "lucide-react";
 import type { ProjectSummary, Workflow } from "@/lib/contract";
-import { GATE_1, LIFECYCLE, STATUS_LABEL, autoStartedAfterG4, buildLifecycle, fromApiStatus, gateReview, stageStatusTextFor, statusLabel, subjectGateText, upstreamGateHint, type LifecycleStage, type LifecycleStatus, type SubjectGates } from "@/lib/lifecycle";
+import { GATE_1, LIFECYCLE, STATUS_LABEL, autoStartedAfterG4, buildLifecycle, fromApiStatus, gateReview, stageStatusTextFor, statusLabel, subjectGateText, upstreamGateHint, type LifecycleStage, type LifecycleStatus, type ReleaseSubject, type SubjectGates } from "@/lib/lifecycle";
+import { g9Chip, step21Text } from "@/lib/release";
+import { releaseReachable, useReleaseOverview } from "@/components/release/hooks";
 import { useAuth } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/format";
 import { Button, Disclosure, Tooltip } from "@/components/ui";
@@ -117,41 +119,67 @@ export function LifecycleProgress({
   onRerun?: (stageId: string) => void;
   onReviewGate?: (stageId: string) => void;
 }) {
-  const stages = buildLifecycle(workflow, subjects);
+  const release = useReleaseSubject(projectId, workflow);
+  const stages = buildLifecycle(workflow, subjects, release);
   if (variant === "compact") return <Compact stages={stages} projectId={projectId} />;
   return <Full stages={stages} projectId={projectId} onRerun={onRerun} onReviewGate={onReviewGate} />;
 }
 
+/**
+ * G9 per release assessment (design P6 §4.3), shared with the header, sidebar and Overview (one SWR key). Before
+ * scripts exist no call is made and Reporting reads "Available after the first test run".
+ */
+function useReleaseSubject(projectId: string, workflow: Workflow | null | undefined): ReleaseSubject | null {
+  const reachable = releaseReachable(workflow);
+  const rel = useReleaseOverview(projectId, reachable);
+  if (!workflow?.stages.find((x) => x.key === "release_readiness")?.available) return null;
+  if (!reachable) return { available: false, assessing: false, latest: null };
+  if (!rel.data) return null;
+  return { available: rel.data.available, assessing: rel.data.assessing, latest: rel.data.latest };
+}
+
 function Compact({ stages, projectId }: { stages: LifecycleStage[]; projectId: string }) {
   const { canApprove } = useAuth();
+  const chip = g9Chip(stages.find((s) => s.gate?.key === "G9")?.release?.latest ?? null);
   return (
-    <ol aria-label="QA lifecycle" className="grid grid-cols-8 gap-1">
-      {stages.map((s) => {
-        const current = s.status === "running" || s.status === "waiting" || s.status === "paused" || s.status === "changes_requested";
-        return (
-          <li key={s.id} className="min-w-0">
-            <Tooltip content={`${s.label}: ${stageStatusTextFor(s, canApprove)}`} className="w-full">
-              <Link
-                href={stageHref(projectId, s)}
-                aria-current={current ? "step" : undefined}
-                aria-label={`${a11yStage(s, canApprove)}${s.gate && s.gateStatus === "waiting" ? `. ${gateText(s, canApprove)}` : ""}`}
-                className={`flex w-full min-w-0 items-center justify-center gap-1.5 rounded-sm border-b-[3px] px-1 py-1.5 text-caption font-medium hover:bg-overlay xl:justify-start ${
-                  s.status === "done" ? "border-navy-800" : current ? "border-info-solid" : s.status === "failed" ? "border-danger-solid" : "border-line-strong"
-                } ${s.status === "later" ? "text-fg-muted" : "text-fg-strong"}`}
-              >
-                <StageStatusIcon status={s.status} className="h-4 w-4 shrink-0" />
-                <span className="hidden truncate xl:inline">{s.label}</span>
-              </Link>
-            </Tooltip>
-          </li>
-        );
-      })}
-    </ol>
+    <div>
+      <ol aria-label="QA lifecycle" className="grid grid-cols-8 gap-1">
+        {stages.map((s) => {
+          const current = s.status === "running" || s.status === "waiting" || s.status === "paused" || s.status === "changes_requested";
+          return (
+            <li key={s.id} className="min-w-0">
+              <Tooltip content={`${s.label}: ${stageStatusTextFor(s, canApprove)}`} className="w-full">
+                <Link
+                  href={stageHref(projectId, s)}
+                  aria-current={current ? "step" : undefined}
+                  aria-label={`${a11yStage(s, canApprove)}${s.gate && s.gateStatus === "waiting" ? `. ${gateText(s, canApprove)}` : ""}`}
+                  className={`flex w-full min-w-0 items-center justify-center gap-1.5 rounded-sm border-b-[3px] px-1 py-1.5 text-caption font-medium hover:bg-overlay xl:justify-start ${
+                    s.status === "done" ? "border-navy-800" : current ? "border-info-solid" : s.status === "failed" ? "border-danger-solid" : "border-line-strong"
+                  } ${s.status === "later" ? "text-fg-muted" : "text-fg-strong"}`}
+                >
+                  <StageStatusIcon status={s.status} className="h-4 w-4 shrink-0" />
+                  <span className="hidden truncate xl:inline">{s.label}</span>
+                </Link>
+              </Tooltip>
+            </li>
+          );
+        })}
+      </ol>
+      {chip && (
+        <p className="mt-1 flex justify-end">
+          <Link href={`/projects/${projectId}/release-readiness`} className="rounded-sm px-1.5 py-0.5 text-caption font-medium text-fg-strong ring-1 ring-inset ring-line-strong hover:bg-overlay">
+            {chip}
+          </Link>
+        </p>
+      )}
+    </div>
   );
 }
 
 function stepStatus(stage: LifecycleStage, n: number): LifecycleStatus {
   if (stage.status === "later") return "later";
+  // Step 21 mirrors the latest release assessment (design P6 §4.3).
+  if (stage.release) return stage.release.assessing ? "running" : stage.release.latest ? "done" : "not_started";
   // Step 18 mirrors the latest run only (design P4 §4.3); a run waiting for Gate 7 hasn't started it.
   if (stage.id === "execution") return fromApiStatus(stage.stages[0]);
   if (stage.status === "done" || stage.status === "waiting" || stage.status === "changes_requested" || stage.status === "out_of_date") return "done";
@@ -284,11 +312,20 @@ function AllSteps({ stages, projectId, onRerun, onReviewGate }: { stages: Lifecy
                       <span className="w-6 text-right tabular-nums text-fg-muted">{step.n}</span>
                       <StageStatusIcon status={st} />
                       <span className="min-w-0 flex-1 text-fg-strong">{step.name}</span>
-                      <span className={STATUS_TONE[st]}>{st === "later" ? s.phaseLabel : s.id === "execution" && st === "failed" ? "Didn’t complete" : statusLabel(st, canApprove)}</span>
+                      <span className={s.release && !s.release.available && !s.release.latest ? "text-fg-muted" : STATUS_TONE[st]}>
+                        {st === "later" ? s.phaseLabel : s.release ? step21Text(s.release) : s.id === "execution" && st === "failed" ? "Didn’t complete" : statusLabel(st, canApprove)}
+                      </span>
                       <span className="w-full pl-9 text-caption text-fg-muted sm:w-56 sm:pl-0">{step.agent}</span>
                     </div>
                     {step.n === 13 && st !== "not_started" && st !== "later" && autoStarted && <p className="pl-9 text-caption text-fg-muted">Started automatically after Gate 4 approval.</p>}
                     {s.id === "discovery" && step.n === GATE_1.afterStep && <Gate1Row />}
+                    {step.n === 21 && s.release?.available && !s.release.assessing && role !== "viewer" && role !== null && (
+                      <p className="pl-9 text-caption">
+                        <Link href={`/projects/${projectId}/release-readiness`} className="font-medium text-navy-700 underline underline-offset-2">
+                          Assess release readiness
+                        </Link>
+                      </p>
+                    )}
                     {step.n === 18 && st === "not_started" && stages.find((x) => x.id === "automation")?.status === "done" && (
                       <p className="flex flex-wrap items-center gap-2 pl-9 text-caption text-fg-muted">
                         Ready. Runs start only when someone authorises them.
@@ -334,6 +371,11 @@ function GateRow({ s, projectId }: { s: LifecycleStage; projectId?: string }) {
         Gate {s.gate.key.slice(1)} · {s.gate.name}
       </span>
       <span className={s.gateStatus === "waiting" ? "text-warning-fg" : s.gateStatus === "done" ? "text-success-fg" : "text-fg-muted"}>{st}</span>
+      {s.gate.key === "G9" && s.release?.latest && projectId && (
+        <Link href={`/projects/${projectId}/release-readiness${s.gateStatus === "waiting" && canApprove ? "#gate-9" : ""}`} className="font-medium text-navy-700 underline underline-offset-2">
+          {s.gateStatus === "waiting" && canApprove ? "Decide Gate 9" : "Open release readiness"}
+        </Link>
+      )}
       {s.gate.key === "G7" && s.gateStatus === "waiting" && s.subject?.runKey && projectId && (
         <Link href={`/projects/${projectId}/execution/${s.subject.runKey}`} className="font-medium text-navy-700 underline underline-offset-2">
           Review {s.subject.runKey}

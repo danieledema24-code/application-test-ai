@@ -2,6 +2,7 @@
 // mapped onto the API's workflow stages. Pure functions, unit-tested in tests/unit.
 
 import type { GateKey, StageKey, StageState, StageStatus, Workflow } from "./contract";
+import { AVAILABLE_AFTER_RUN, g9Text, type ReleaseSummary } from "./release";
 
 export type LifecycleStatus =
   | "done"
@@ -151,11 +152,12 @@ export const LIFECYCLE: LifecycleStageDef[] = [
   {
     id: "reporting",
     label: "Reporting",
-    section: "reports",
+    // Step 21 and the G9 diamond open release readiness (design P6 §4.3); the sidebar highlights Reports.
+    section: "release-readiness",
     phase: 6,
-    phaseLabel: "Phase 6",
+    phaseLabel: AVAILABLE_AFTER_RUN,
     apiStages: ["release_readiness"],
-    steps: [{ n: 21, name: "Release readiness assessment", agent: "Lead QA Orchestrator" }],
+    steps: [{ n: 21, name: "Release readiness assessment", agent: "Lead QA Orchestrator (rules)" }],
     gate: { key: "G9", name: "Release readiness", position: "after" },
   },
 ];
@@ -205,6 +207,9 @@ export type SubjectGates = {
   analysed: boolean;
 };
 
+/** G9 is decided per release assessment (design P6 §4.3): the latest one, from `GET /release-readiness`. */
+export type ReleaseSubject = { available: boolean; assessing: boolean; latest: ReleaseSummary | null };
+
 export type LifecycleStage = LifecycleStageDef & {
   status: LifecycleStatus;
   /** "Step 4 of 8" while running, 1-based within the stage. */
@@ -215,6 +220,8 @@ export type LifecycleStage = LifecycleStageDef & {
   gateStage: StageState | null;
   /** G7: the run waiting for authorisation; G8: undecided drafts (design P4 §4.3). */
   subject?: { runKey: string | null; drafts: number } | null;
+  /** Reporting: the latest release assessment (G9). */
+  release?: ReleaseSubject | null;
 };
 
 /**
@@ -306,12 +313,19 @@ function subjectGate(def: LifecycleStageDef, x: SubjectGates): { approved: boole
   return null;
 }
 
-export function buildLifecycle(workflow: Workflow | undefined | null, subjects?: SubjectGates | null): LifecycleStage[] {
+/** G9 from the latest release assessment; null without release data (the workflow's gate is used). */
+function releaseGate(r: ReleaseSubject): { approved: boolean; stage: StageState | null; status: LifecycleStatus } {
+  const st = r.latest?.status;
+  const status: LifecycleStatus = st === "awaiting_approval" ? "waiting" : st === "final" ? "done" : st === "rejected" ? "changes_requested" : st === "stale" ? "out_of_date" : "not_started";
+  return { approved: status === "done", stage: null, status };
+}
+
+export function buildLifecycle(workflow: Workflow | undefined | null, subjects?: SubjectGates | null, release?: ReleaseSubject | null): LifecycleStage[] {
   const all = workflow?.stages ?? [];
   return LIFECYCLE.map((def) => {
     const stages = def.apiStages.map((k) => all.find((s) => s.key === k)).filter((s): s is StageState => !!s);
     const available = stages.length > 0 ? stages.some((s) => s.available) : false;
-    const perSubject = subjects ? subjectGate(def, subjects) : null;
+    const perSubject = def.gate?.key === "G9" ? (release ? releaseGate(release) : null) : subjects ? subjectGate(def, subjects) : null;
     // Without run or defect data a per-subject gate is never read from the workflow (it is never decided there).
     const gate = perSubject ?? (def.gate?.key === "G7" || def.gate?.key === "G8" ? { approved: true, stage: null, status: "not_started" as LifecycleStatus } : gateApprovedFor(stages, def.gate?.key));
     // Traceability mirrors test design: a computed step never reads "Running" on its own.
@@ -320,6 +334,7 @@ export function buildLifecycle(workflow: Workflow | undefined | null, subjects?:
       .filter((s) => s.available)
       .map((s) => (s.key === "traceability" && (s.status === "running" || s.status === "queued") ? fromApiStatus(design) : fromApiStatus(s)));
     if (gate.status === "waiting") statuses.push("waiting");
+    if (def.gate?.key === "G9" && release?.assessing) statuses.push("running");
     const status = rollUp(statuses, gate.approved, available);
     return {
       ...def,
@@ -328,7 +343,8 @@ export function buildLifecycle(workflow: Workflow | undefined | null, subjects?:
       currentStep: status !== "running" ? null : def.id === "discovery" ? discoveryStep(stages) : phase2Step(def.id, stages),
       gateStatus: available ? gate.status : null,
       gateStage: gate.stage,
-      subject: perSubject ? { runKey: def.gate?.key === "G7" ? (subjects?.waiting[0] ?? null) : null, drafts: def.gate?.key === "G8" ? (subjects?.drafts ?? 0) : 0 } : null,
+      release: def.gate?.key === "G9" ? (release ?? null) : null,
+      subject: perSubject && def.gate?.key !== "G9" ? { runKey: def.gate?.key === "G7" ? (subjects?.waiting[0] ?? null) : null, drafts: def.gate?.key === "G8" ? (subjects?.drafts ?? 0) : 0 } : null,
     };
   });
 }
@@ -341,6 +357,8 @@ export function stageStatusText(stage: LifecycleStage): string {
 /** As stageStatusText, with the role-aware waiting copy. */
 export function stageStatusTextFor(stage: LifecycleStage, canApprove: boolean): string {
   if (stage.status === "later") return stage.phaseLabel;
+  // Reporting before any finished run (design P6 §4.3): "Available after the first test run".
+  if (stage.release && !stage.release.available && !stage.release.latest && stage.status === "not_started") return AVAILABLE_AFTER_RUN;
   if (stage.status === "running" && stage.currentStep) {
     if (stage.id === "discovery") return `Running, step ${stage.currentStep} of ${stage.steps.length}`;
     const step = stage.steps[stage.currentStep - 1];
@@ -395,7 +413,8 @@ export function activeStage(workflow: Workflow | undefined | null): StageState |
 
 /** The stage waiting for a gate decision, if any. */
 export function waitingGateStage(workflow: Workflow | undefined | null): StageState | null {
-  return workflow?.stages.find((s) => s.gate?.key !== "G7" && s.gate?.key !== "G8" && gateReview(s) !== null) ?? null;
+  // G7, G8 and G9 are decided per run, defect and release assessment: they have their own pills.
+  return workflow?.stages.find((s) => s.gate?.key !== "G7" && s.gate?.key !== "G8" && s.gate?.key !== "G9" && gateReview(s) !== null) ?? null;
 }
 
 /**
@@ -416,8 +435,9 @@ export function autoStartedAfterG4(design: StageState | null | undefined, strate
  * Text for a gate row (design P4 §4.3). G7: "RUN-0003 is waiting for your authorisation" (role-aware); G8: "Waiting: 2
  * defect drafts" / "Done: no drafts waiting". Null for the other gates (they use the generic approval copy).
  */
-export function subjectGateText(stage: Pick<LifecycleStage, "gate" | "gateStatus" | "subject">, canApprove: boolean): string | null {
+export function subjectGateText(stage: Pick<LifecycleStage, "gate" | "gateStatus" | "subject" | "release">, canApprove: boolean): string | null {
   const key = stage.gate?.key;
+  if (key === "G9") return stage.release ? g9Text(stage.release, canApprove) : null;
   if (key !== "G7" && key !== "G8") return null;
   if (key === "G7") {
     if (stage.gateStatus === "waiting" && stage.subject?.runKey)

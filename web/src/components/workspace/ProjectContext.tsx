@@ -10,6 +10,11 @@ import { activeStage } from "@/lib/lifecycle";
 import { mergeEvents, openEventStream, type StreamHandle, type StreamState } from "@/lib/sse";
 import { useToast } from "@/components/ui";
 
+/** SWR keys of release readiness (design P6 §10): the overview, assessments by key and by id. */
+function isReleaseKey(projectId: string, key: unknown): boolean {
+  return typeof key === "string" && (key.startsWith(`/projects/${projectId}/release-`) || key.startsWith("/release-assessments/"));
+}
+
 const ANNOUNCE_THROTTLE_MS = 15000;
 
 type ProjectCtx = {
@@ -117,7 +122,7 @@ export function ProjectProvider({ id, children, onOpenRescan, onOpenCancel }: { 
   const refresh = useCallback(() => {
     void workflow.mutate();
     void project.mutate();
-    void globalMutate((k) => isExecSummaryKey(id, k));
+    void globalMutate((k) => isExecSummaryKey(id, k) || isReleaseKey(id, k));
   }, [workflow, project, globalMutate, id]);
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
@@ -166,6 +171,8 @@ export function ProjectProvider({ id, children, onOpenRescan, onOpenCancel }: { 
 
         const st = statusAnnouncement(e);
         if (e.type === "stage.status_changed" || e.type === "gate.awaiting_approval" || e.type === "gate.decided" || e.type === "task.failed") scheduleRefresh();
+        // P6-05: an assessment ready, decided or a criterion confirmed; a manual re-test makes a waiting one stale.
+        if (e.type.startsWith("release.") || e.type === "impact.manual_retest") void globalMutate((k) => isReleaseKey(id, k));
         if (e.type === "report.ready") void globalMutate((k) => typeof k === "string" && k.includes(`/projects/${id}/reports`));
         // P6-01: change sets appear and finish in the Changes tab; "CHG-n ready: …" is announced politely, focus stays (design P6 §6.3).
         if (e.type === "change.status" || e.type === "change.ready" || e.type === "rescan.started")

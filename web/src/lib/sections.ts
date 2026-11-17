@@ -124,7 +124,7 @@ export function isBuilt(s: ProjectSection): boolean {
 export type SectionBadge = { text: string; srText: string };
 
 /** Run and defect counts behind the Test Execution and Defects badges (design P4 §4.2). */
-export type ExecutionCounts = { runsWaiting: number; running: boolean; drafts: number };
+export type ExecutionCounts = { runsWaiting: number; running: boolean; drafts: number; canApprove?: boolean };
 
 /**
  * One attention badge per built section, in priority order: gate waiting → out of date → proposals
@@ -175,15 +175,26 @@ export function sectionBadge(
     if (nonFunctional.running) return { text: "Running", srText: "a check is in progress" };
     if (nonFunctional.stale) return { text: "Out of date", srText: "checks are out of date" };
   }
+  if (slug === "reports") {
+    // Release readiness (design P6 §4.2): the assessment waiting for Gate 9, or out of date.
+    const rr = by("release_readiness");
+    if (rr?.status === "awaiting_approval")
+      return execution?.canApprove ? { text: "Decide", srText: "release readiness waiting for your decision" } : { text: "Waiting", srText: "release readiness waiting for a decision" };
+    if (rr?.status === "stale") return { text: "Out of date", srText: "release readiness is out of date" };
+  }
   if (slug === "traceability" && (by("traceability")?.status === "stale" || by("test_design")?.status === "stale")) return { text: "Out of date", srText: "out of date" };
   if (slug === "assistant" && pendingProposals > 0)
     return { text: String(pendingProposals), srText: `${pendingProposals} proposal${pendingProposals === 1 ? "" : "s"} to review` };
   return null;
 }
 
+/** Routes that aren't one of the 12 sections, highlighted as the section they belong to (design P6 §4.1). */
+export const SECTION_ALIASES: Record<string, string> = { "release-readiness": "reports" };
+
 /** "/projects/abc/discovery" → { id: "abc", section: "discovery" }. `/projects/new` is not a project. */
 export function projectRoute(pathname: string): { id: string; section: string } | null {
   const m = pathname.match(/^\/projects\/([^/]+)(?:\/([^/]+))?/);
   if (!m || m[1] === "new") return null;
-  return { id: decodeURIComponent(m[1]), section: m[2] ?? "" };
+  const section = m[2] ?? "";
+  return { id: decodeURIComponent(m[1]), section: SECTION_ALIASES[section] ?? section };
 }

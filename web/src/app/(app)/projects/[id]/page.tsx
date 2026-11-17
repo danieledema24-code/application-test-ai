@@ -24,6 +24,8 @@ import { useProject } from "@/components/workspace/ProjectContext";
 import { useExecSummary } from "@/components/execution/hooks";
 import { lastRunLine, type ExecSummary } from "@/lib/execution";
 import { g6StatusText, type AutomationOverview } from "@/lib/automation";
+import { releaseReachable, useReleaseOverview } from "@/components/release/hooks";
+import { ReleaseGlance } from "@/components/workspace/OverviewRelease";
 
 /** The Automation overview, only once scripts exist (same SWR key as the Automation page). */
 function useAutomation(projectId: string, wf: ReturnType<typeof useProject>["workflow"]) {
@@ -143,6 +145,7 @@ function Attention() {
   const secrets = useApi<SecretMeta[]>(`/projects/${p.id}/secrets`, undefined, { shouldRetryOnError: false });
   const cred = secrets.data?.find((x) => x.name === "scan_credentials" || x.kind === "login_credentials");
   const nf = useNfOverview(p.id, p.workflow);
+  const release = useReleaseOverview(p.id, releaseReachable(p.workflow));
   const rows = attentionRows({
     projectId: p.id,
     wf: p.workflow,
@@ -157,6 +160,8 @@ function Attention() {
     viewer: role === "viewer" || role === null,
     // Phase 5 (design P5 §4.5): load tests waiting or missed, severe accessibility findings, out-of-date checks.
     nonFunctional: nfAttentionRows(nf.overview, p.id, canApprove, role === "viewer" || role === null),
+    // Phase 6 (design P6 §4.5): the release assessment waiting for Gate 9 or out of date, after the run rows.
+    release: release.data?.latest ?? null,
   });
   const shown = all ? rows : rows.slice(0, 5);
   return (
@@ -427,6 +432,7 @@ export default function ProjectOverviewPage() {
     "test-design": `/projects/${p.id}/test-cases?view=review`,
     automation: `/projects/${p.id}/automation?view=review`,
     defects: `/projects/${p.id}/defects?view=review`,
+    reporting: `/projects/${p.id}/release-readiness#gate-9`,
   };
   const exec = useExecSummary(p.id, p.workflow);
   const nf = useNfOverview(p.id, p.workflow);
@@ -481,6 +487,7 @@ export default function ProjectOverviewPage() {
           <AutomationGlance />
           <LastRunGlance exec={exec} />
           <DefectsGlance exec={exec} />
+          <ReleaseGlance />
           <NonFunctionalGlance projectId={p.id} g2={nf.g2} overview={nf.overview} />
           <Scope />
         </div>

@@ -14,6 +14,7 @@ import { hostOf, scanNumber } from "@/lib/url";
 import { FORMAT_HINT, FORMAT_TEXT, REPORT_TYPES, downloadFailedText, downloadFormats, isPhase3Report, phase2ReportFileName, preparingText, type DownloadFormat, type ReportType } from "@/lib/reports";
 import { useAuth } from "@/lib/auth";
 import { gateApproved, requirementsStages } from "@/components/requirements/hooks";
+import { ReleaseGlance } from "@/components/workspace/OverviewRelease";
 
 /** [Download ▾] menu: PDF and HTML, plus CSV for the Phase 3 reports; the trigger shows the loading state (design P2 §10.1, P3 §15.1). */
 function DownloadMenu({ report, name, host }: { report: ReportSummary; name: string; host: string }) {
@@ -435,9 +436,8 @@ export default function ReportsPage() {
           </>
         )}
       </Card>
-      <Card className="px-5 py-4">
-        <p className="text-body text-fg-muted">Test Completion and Release Readiness reports arrive in Phase 6.</p>
-      </Card>
+      {/* Release readiness lives under Reports (design P6 §4.1, §4.6); its two reports arrive with P6-05c. */}
+      <ReleaseGlance />
     </div>
   );
 }

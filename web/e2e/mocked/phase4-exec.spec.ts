@@ -497,7 +497,9 @@ test.describe("Phase 4 · reports (P4-11)", () => {
     await expect(table.getByText("Version 1 · RUN-0003")).toBeVisible();
     await expect(table.getByText("Draft · Gate 8 waiting")).toBeVisible();
     await expect(table.getByRole("button", { name: /Generate \(latest result per test case\)/ })).toBeVisible();
-    await expect(page.getByText("Test Completion and Release Readiness reports arrive in Phase 6.")).toBeVisible();
+    // P6-05b: the "arrive in Phase 6" note became the Release readiness card.
+    await expect(page.getByRole("region", { name: "Release readiness" }).getByRole("link", { name: "Open release readiness" })).toBeVisible();
+    await expect(page.getByText("Phase 6")).toHaveCount(0);
     expect(await axe(page)).toEqual([]);
   });
 

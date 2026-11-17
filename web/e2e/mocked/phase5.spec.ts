@@ -451,7 +451,7 @@ test.describe("Phase 5 · overview, lifecycle and header", () => {
     await expect(row.getByRole("link")).toHaveCount(0);
   });
 
-  test("before Gate 2 the optional rows read 'Available after Gate 2'; after it, 'Not run yet' and Reporting is Phase 6 (checks 2, 3)", async ({ page }) => {
+  test("before Gate 2 the optional rows read 'Available after Gate 2'; after it, 'Not run yet' and Reporting is available after the first test run (checks 2, 3; P6-05b)", async ({ page }) => {
     await setup(page, { g2: false, g4: false, scans: [], findings: [], runs: [] });
     await page.goto("/projects/p1");
     const optional = page.getByRole("region", { name: "Optional checks · any time after Gate 2" });
@@ -462,7 +462,7 @@ test.describe("Phase 5 · overview, lifecycle and header", () => {
     await page.goto("/projects/p1");
     await expect(page.getByRole("region", { name: "Optional checks · any time after Gate 2" }).getByText("Not run yet")).toHaveCount(3);
     await expect(page.getByText("Not checked yet.")).toHaveCount(3);
-    await expect(page.getByRole("list", { name: "QA lifecycle" }).getByText("Phase 6").first()).toBeVisible();
+    await expect(page.getByRole("list", { name: "QA lifecycle" }).getByText("Available after the first test run").first()).toBeVisible();
   });
 });
 
