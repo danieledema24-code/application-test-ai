@@ -1,10 +1,10 @@
 // Phase 2 and 3 report types (design P2 §10, P3 §15): slugs, names, gates and file names. Unit-tested.
 
-export type Phase2ReportSlug = "requirements" | "test-strategy" | "test-plan" | "test-case-spec" | "rtm" | "test-execution" | "defects" | "performance" | "accessibility" | "security";
-export type ReportType = "discovery" | "requirements_spec" | "test_strategy" | "test_plan" | "test_case_spec" | "rtm" | "execution" | "defect" | "performance" | "accessibility" | "security";
+export type Phase2ReportSlug = "requirements" | "test-strategy" | "test-plan" | "test-case-spec" | "rtm" | "test-execution" | "defects" | "performance" | "accessibility" | "security" | "release-readiness" | "completion";
+export type ReportType = "discovery" | "requirements_spec" | "test_strategy" | "test_plan" | "test_case_spec" | "rtm" | "execution" | "defect" | "performance" | "accessibility" | "security" | "release_readiness" | "completion";
 export type DownloadFormat = "pdf" | "html" | "csv" | "csv_timeseries" | "xlsx";
 
-export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportType; name: string; gate: "G2" | "G3" | "G4" | "G5" | "G7" | "G8" | null; file: string; source: string; csv?: boolean; phase?: 4 | 5; unavailable?: string }[] = [
+export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportType; name: string; gate: "G2" | "G3" | "G4" | "G5" | "G7" | "G8" | "G9" | null; file: string; source: string; csv?: boolean; phase?: 4 | 5 | 6; unavailable?: string }[] = [
   { slug: "discovery", type: "discovery", name: "Application Discovery Report", gate: "G2", file: "discovery-report", source: "Scan" },
   { slug: "requirements", type: "requirements_spec", name: "Requirements Specification", gate: "G3", file: "requirements-spec", source: "Requirements" },
   { slug: "test-strategy", type: "test_strategy", name: "Test Strategy", gate: "G4", file: "test-strategy", source: "Strategy" },
@@ -17,7 +17,57 @@ export const REPORT_TYPES: { slug: Phase2ReportSlug | "discovery"; type: ReportT
   { slug: "performance", type: "performance", name: "Performance Report", gate: null, file: "performance", source: "Load test", csv: true, phase: 5, unavailable: "Run a load test first" },
   { slug: "accessibility", type: "accessibility", name: "Accessibility Report", gate: null, file: "accessibility", source: "Accessibility check", csv: true, phase: 5, unavailable: "Check accessibility first" },
   { slug: "security", type: "security", name: "Security Report", gate: null, file: "security", source: "Security check", csv: true, phase: 5, unavailable: "Run a security check first" },
+  // Phase 6 (design P6 §11): one Release Readiness Report per assessment; Test Completion Reports on request.
+  { slug: "release-readiness", type: "release_readiness", name: "Release Readiness Report", gate: "G9", file: "release-readiness", source: "Release assessment", csv: true, phase: 6, unavailable: "Assess release readiness first" },
+  { slug: "completion", type: "completion", name: "Test Completion Report", gate: null, file: "test-completion", source: "Release assessment, or current data", csv: true, phase: 6, unavailable: "Assess release readiness first" },
 ];
+
+export type Phase6ReportType = "release_readiness" | "completion";
+
+export function isPhase6Report(type: ReportType | string): type is Phase6ReportType {
+  return type === "release_readiness" || type === "completion";
+}
+
+/** design P6 §11.3: shown verbatim when a Phase 6 report is reached before any assessment. */
+export const P6_NOT_AVAILABLE = "Not available yet: assess release readiness first";
+export const COMPLETION_GENERATED = "Test Completion Report generated.";
+/** What each Phase 6 CSV contains (design P6 §11.3), one section each after the summary lines. */
+export const P6_CSV_HINT: Record<Phase6ReportType, string> = {
+  release_readiness: "Summary, criteria, conditions and residual risk, one section each.",
+  completion: "Summary, results, measures, runs, deviations, defects, exit criteria, conditions and residual risk, one section each.",
+};
+
+export function completionError(reason: string): string {
+  return `Couldn’t generate the report: ${reason.replace(/\.$/, "")}.`;
+}
+
+/** The Generate dialog's hint under Lessons learned (design P6 §11.1). Never an email: without a name the report
+ * says "Written by someone." and so does the hint. */
+export function lessonsHint(name: string | null | undefined): string {
+  const who = name?.trim() ? name.trim() : "someone (your profile has no name)";
+  return `Shown in the report as written by ${who}. The report is frozen when it’s generated.`;
+}
+
+/** "Suggested by AI and kept by M. Member; not edited." / "Written by M. Member." (the report's lessons line). */
+export function lessonsByline(l: { generated_by: "person" | "ai"; author: string | null }): string {
+  return l.generated_by === "ai" ? `Suggested by AI and kept by ${l.author || "someone"}; not edited.` : `Written by ${l.author || "someone"}.`;
+}
+
+type Keyed = { report_type: string; version: number; run_key?: string | null };
+
+/** The latest version of each assessment's Release Readiness Report, newest version first (design P6 §11.1). */
+export function latestPerAssessment<T extends Keyed>(reports: T[]): T[] {
+  const seen = new Set<string>();
+  return reports
+    .filter((r) => r.report_type === "release_readiness")
+    .sort((a, b) => b.version - a.version)
+    .filter((r) => {
+      const k = r.run_key ?? "";
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+}
 
 export function isPhase5Report(type: ReportType | string): type is "performance" | "accessibility" | "security" {
   return type === "performance" || type === "accessibility" || type === "security";
@@ -73,6 +123,8 @@ export function phase2ReportFileName(host: string, type: ReportType, version: nu
   if (type === "execution") return `${safeHost}-test-execution-${runKey || `latest-v${version}`}-${d}.${format}`;
   // `{host}-performance-PERF-0001-{date}.pdf` and `…-PERF-0001-timeseries-{date}.csv` (design P5 §11.3).
   if (isPhase5Report(type)) return format === "csv_timeseries" ? `${safeHost}-${type}-${runKey ?? "latest"}-timeseries-${d}.csv` : `${safeHost}-${type}-${runKey ?? "latest"}-${d}.${format}`;
+  // `{host}-release-readiness-REL-0002-{date}.pdf`, `{host}-test-completion-REL-0002-…` / `…-current-…` (design P6 §11.3).
+  if (isPhase6Report(type)) return `${safeHost}-${type === "completion" ? "test-completion" : "release-readiness"}-${runKey || "current"}-${d}.${format}`;
   const file = REPORT_TYPES.find((r) => r.type === type)?.file ?? type;
   return `${safeHost}-${file}-v${version}-${d}.${format}`;
 }

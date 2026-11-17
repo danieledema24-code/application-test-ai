@@ -362,6 +362,7 @@ function AssessmentBody({
       <ChangesSinceSection a={a} />
       <ReleaseDecisionPanel a={a} projectId={projectId} supersededAt={supersededAt} onDecided={onDecided} onConflict={onConflict} assessAction={isLatest ? assessAgain : null} />
       <History items={overview.history} current={a.key} base={base} />
+      <ReleaseReports projectId={projectId} assessmentKey={a.key} />
     </>
   );
 }
@@ -642,6 +643,26 @@ function ChangesSinceSection({ a }: { a: Assessment }) {
           )}
         </>
       )}
+    </section>
+  );
+}
+
+/** design P6 §10.1 REPORTS: both P6-05c reports of the assessment shown. */
+function ReleaseReports({ projectId, assessmentKey }: { projectId: string; assessmentKey: string }) {
+  const q = `?assessment=${encodeURIComponent(assessmentKey)}`;
+  return (
+    <section aria-labelledby="release-reports" className="space-y-2">
+      <h2 id="release-reports" className={sectionTitle}>
+        Reports
+      </h2>
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        <LinkButton variant="secondary" href={`/projects/${projectId}/reports/release-readiness${q}`}>
+          Open Release Readiness Report
+        </LinkButton>
+        <LinkButton variant="secondary" href={`/projects/${projectId}/reports/completion${q}`}>
+          Open Test Completion Report
+        </LinkButton>
+      </div>
     </section>
   );
 }

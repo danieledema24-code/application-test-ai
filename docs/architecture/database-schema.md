@@ -336,6 +336,7 @@ Migration `0019_change_intelligence` (written by P6-00 with every column P6-01 t
 - `organisations.settings` gains `exploration_ceiling {actions: 60, minutes: 10}` (D30): the upgrade adds it to every existing organisation (other keys untouched), and the column's server default and the ORM default carry it for new ones.
 - Counter kinds `change_set` (CHG), `exploratory_session` (EXP), `heal` (HEAL) and `release_assessment` (REL) in `services/counters.py` (no migration).
 - Phase 4 `execution_results.heal_suggestions` JSON stays as it is (readable, not backfilled).
+- P6-05c (no migration): the Release Readiness and Test Completion reports are `qa_reports` rows of the existing `release_readiness` and `completion` types (in the CHECK since `0003`). `source_versions` holds `{run_key (REL-n or null), assessment_id, basis (assessment|current), state}` (`state` hashes what the readiness report shows, so a changed assessment makes it not current); the completion report's `content.lessons` is `{text, generated_by (person|ai), author}`.
 
 **As built (P6-00) — differences from the roadmap's list:**
 - P6-01 (no migration): `change_sets.summary` holds `{total, by_significance, by_kind, content_values, pages {…}, not_compared [{page, url, missing_from, reason}], requested_by?}`; `change_items.after.group = "content_values"` marks a noise-filter group.

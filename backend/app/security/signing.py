@@ -20,8 +20,10 @@ class UrlSigner:
         msg = f"{resource_id}|{exp}|{org_id}".encode()
         return hmac.new(self._secret, msg, hashlib.sha256).hexdigest()
 
-    def sign(self, resource_id: uuid.UUID, org_id: uuid.UUID, *, now: float | None = None) -> tuple[int, str]:
-        exp = int((now if now is not None else time.time()) + self._ttl)
+    def sign(
+        self, resource_id: uuid.UUID, org_id: uuid.UUID, *, now: float | None = None, ttl_s: int | None = None
+    ) -> tuple[int, str]:
+        exp = int((now if now is not None else time.time()) + (self._ttl if ttl_s is None else ttl_s))
         return exp, self._sig(resource_id, exp, org_id)
 
     def verify(

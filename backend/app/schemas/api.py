@@ -769,19 +769,27 @@ class KnowledgeItemOut(BaseModel):
 class ReportCreate(Req):
     report_type: Literal[
         "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect",
-        "performance", "accessibility", "security",
+        "performance", "accessibility", "security", "completion", "release_readiness",
     ]  # fmt: skip
     scan_id: uuid.UUID | None = None
     stage_run_version: int | None = None
     # P4-11: the run a Test Execution Report covers; omitted = "latest result per test case".
     # P5-04a: also the load test (PERF-…) or check (A11Y-…, SEC-…) of a non-functional report; omitted = the latest.
+    # P6-05c: the release assessment (REL-…) of a Release Readiness or Test Completion Report; omitted = the latest.
     run_key: str | None = Field(default=None, max_length=40)
+    # P6-05c, Test Completion Report only: from an assessment (default) or current data, and the lessons learned
+    # (a person's text, or AI text the person kept unedited: `lessons_generated_by` "ai").
+    basis: Literal["assessment", "current"] | None = None
+    lessons_learned: str | None = Field(default=None, max_length=4000)
+    lessons_generated_by: Literal["person", "ai"] | None = None
+    # The token the lessons-suggestion endpoint returned with its text: "ai" is only accepted with it, unedited.
+    lessons_token: str | None = Field(default=None, max_length=200)
 
     @classmethod
     def allowed_types(cls) -> set[str]:
         return {
             "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect",
-            "performance", "accessibility", "security",
+            "performance", "accessibility", "security", "completion", "release_readiness",
         }  # fmt: skip
 
 

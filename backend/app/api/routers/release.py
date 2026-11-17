@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from app.agents.reporting.phase6_reports import freeze_for_assessment
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, Principal, ScopedSession
 from app.api.errors import Conflict, Forbidden, NotFound
 from app.api.routers import p2common as c
@@ -144,6 +145,8 @@ async def confirm_criterion(
         agent_key=svc.AGENT,
         data={"kind": "result", "assessment_key": a.key, "recommendation": new},
     )
+    # P6-05c: the Release Readiness Report follows the assessment (a confirmed criterion can change the verdict).
+    await freeze_for_assessment(ctx, p.scope, a.project_id, a.id, p.user.id)
     return {
         "assessment": await _detail(s, p, a),
         "message": f"Criterion confirmed. The recommendation is now {VERDICT_LABEL[new]}.",
@@ -192,4 +195,6 @@ async def decide(
             "final_verdict": a.final_verdict.value if a.final_verdict else None,
         },
     )
+    # P6-05c: a new Release Readiness Report without the DRAFT band (or saying it was rejected), naming the decider.
+    await freeze_for_assessment(ctx, p.scope, a.project_id, a.id, p.user.id)
     return {"assessment": await _detail(s, p, a), "message": svc.decided_message(a)}

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
+from typing import Any, Literal
 
 from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.reporting import phase2_reports
 from app.agents.reporting import phase5_reports as p5
+from app.agents.reporting import phase6_reports as p6
 from app.agents.reporting.discovery_report import approval_for_run, next_report_version, refresh_links
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, ScopedSession
 from app.api.errors import Conflict, GateBlocked, Gone, NotFound, ValidationFailed
@@ -16,8 +21,10 @@ from app.api.routers.projects import load_project
 from app.context import AppContext
 from app.db.models import Evidence, QaReport, ScanSession, WorkflowStage
 from app.domain.enums import ReportStatus, ReportType, StageKey
+from app.llm.base import UntrustedBlock
 from app.schemas import api
 from app.services import serialize as ser
+from app.services.audit import audit
 from app.services.hardening import removed_text
 
 router = APIRouter(tags=["reports"])
@@ -98,12 +105,28 @@ async def create_report(
                 {
                     "field": "report_type",
                     "message": "Use discovery, requirements_spec, test_strategy, test_plan, test_case_spec, rtm, "
-                    "execution, defect, performance, accessibility or security.",
+                    "execution, defect, performance, accessibility, security, completion or release_readiness.",
                 }
             ],
         )
-    req = api.ReportCreate.model_validate(body)
+    try:
+        req = api.ReportCreate.model_validate(body)
+    except PydanticValidationError as exc:  # a 422 with the field, never a 500 (e.g. lessons learned too long)
+        details = [{"field": ".".join(str(x) for x in e["loc"]), "message": e["msg"]} for e in exc.errors()]
+        raise ValidationFailed(details[0]["message"], details=details) from None
     project = await load_project(s, project_id)
+    if req.report_type in ("completion", "release_readiness"):
+        return await _create_phase6(ctx, s, p, project, ReportType(req.report_type), req)
+    if (
+        req.basis is not None
+        or req.lessons_learned is not None
+        or req.lessons_generated_by is not None
+        or req.lessons_token
+    ):
+        raise ValidationFailed(
+            "Only the Test Completion Report takes a basis and lessons learned",
+            details=[{"field": "basis", "message": "Leave basis and lessons learned out for this report."}],
+        )
     if req.report_type != "discovery":
         rtype = ReportType(req.report_type)
         if rtype in p5.PHASE5:
@@ -193,6 +216,141 @@ async def create_report(
     return await _summary(ctx, s, report, await ser.latest_scan_id(s, project_id))
 
 
+async def _create_phase6(
+    ctx: AppContext, s: AsyncSession, p: Any, project: Any, rtype: ReportType, req: api.ReportCreate
+) -> api.ReportSummary:
+    """P6-05c: a Release Readiness Report of an assessment, or a Test Completion Report from an assessment (default)
+    or current data, with optional lessons learned shown as written by the person (or as AI text they kept)."""
+    if not await p6.has_source(s, project.id):
+        raise GateBlocked(p6.NOT_AVAILABLE)
+    if rtype == ReportType.release_readiness and (req.basis == "current" or req.lessons_learned is not None):
+        raise ValidationFailed(
+            "The Release Readiness Report is generated from an assessment",
+            details=[{"field": "basis", "message": "Leave basis and lessons learned out for this report."}],
+        )
+    basis = "current" if req.basis == "current" else "assessment"
+    if basis == "assessment" and await p6.find(s, project.id, req.run_key) is None:
+        raise NotFound(f"We couldn't find {req.run_key} in this project")
+    lessons = None
+    text = (req.lessons_learned or "").strip()
+    if text:
+        ai = req.lessons_generated_by == "ai"
+        if ai:
+            # The AI label only holds for a suggestion this server made for this person and project, unedited, and the
+            # text still passes the checks against the data (no numbers, no keys that aren't in it).
+            ok = _lessons_token_ok(ctx, project, p.user.id, text, req.lessons_token)
+            _, keys = await _lessons_facts(ctx, s, project, req.run_key if basis == "assessment" else None, basis)
+            if not ok or p6.check_lessons(text, keys) is not None:
+                raise ValidationFailed(
+                    "The AI label only applies to a suggestion the platform made that you kept unedited",
+                    details=[{"field": "lessons_generated_by",
+                              "message": "Suggest the lessons learned again, or send them as your own text."}],
+                )  # fmt: skip
+        lessons = {"text": text, "generated_by": "ai" if ai else "person", "author": p.user.full_name or None}
+    report = await p6.create(
+        s, project, rtype, user_id=p.user.id, run_key=req.run_key if basis == "assessment" else None, basis=basis,
+        lessons=lessons,
+    )  # fmt: skip
+    audit(
+        s,
+        org_id=project.organisation_id,
+        action="report.generated",
+        target_type="report",
+        target_id=report.id,
+        actor_user_id=p.user.id,
+        project_id=project.id,
+        metadata={"report_type": rtype.value, "version": report.version,
+                  "source": (report.source_versions or {}).get("run_key") or "current",
+                  "lessons_learned": lessons["generated_by"] if lessons else None},
+    )  # fmt: skip
+    await s.commit()
+    await ctx.queue.enqueue(
+        "report_render",
+        {"report_id": str(report.id)},
+        org_id=project.organisation_id,
+        project_id=project.id,
+        dedupe_key=f"report:{report.id}",
+    )
+    return await _summary(ctx, s, report, await ser.latest_scan_id(s, project.id))
+
+
+class LessonsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_key: str | None = Field(default=None, max_length=40)
+    basis: Literal["assessment", "current"] | None = None
+
+
+class AiLessons(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lessons: str = Field(min_length=20, max_length=1500)
+
+
+@router.post("/projects/{project_id}/reports/completion/lessons-suggestion")
+async def suggest_lessons(
+    project_id: uuid.UUID, body: LessonsInput, ctx: Ctx, s: ScopedSession, p: MemberPrincipal
+) -> dict[str, Any]:
+    """design P6 §11.1 [Suggest lessons learned] (AI on): labelled AI text the person may edit. The model only sees
+    the conditions, unmet criteria, deviations and residual risks; a suggestion that writes a number, or names an item
+    that isn't in that data, is refused (the report's numbers are computed in code)."""
+    project = await load_project(s, project_id)
+    if not ctx.llm.enabled:
+        raise Conflict("AI is off: write the lessons learned yourself")
+    if not await p6.has_source(s, project.id):
+        raise GateBlocked(p6.NOT_AVAILABLE)
+    if body.basis != "current" and await p6.find(s, project.id, body.run_key) is None:
+        raise NotFound(f"We couldn't find {body.run_key} in this project")
+    data, keys = await _lessons_facts(ctx, s, project, body.run_key, body.basis)
+    task = (
+        "Suggest two or three short lessons learned for the test completion report of this release, for a reader with "
+        "no QA background: what to keep doing and what to do differently next time. Use only the facts given. You may "
+        "name items by the keys in the facts, but never write a number, a count or a percentage."
+    )
+    res = await ctx.llm.structured(AiLessons, task, [UntrustedBlock("completion facts", data, 6000)])
+    if not res.ok or res.value is None:
+        raise ValidationFailed("The AI suggestion wasn't usable. Write the lessons learned yourself.")
+    why = p6.check_lessons(res.value.lessons, keys)
+    if why is not None:
+        raise ValidationFailed(f"The AI suggestion wasn't usable ({why}). Write the lessons learned yourself.")
+    text = res.value.lessons.strip()
+    return {"text": text, "generated_by": "ai", "token": _lessons_token(ctx, project, p.user.id, text)}
+
+
+LESSONS_TOKEN_TTL_S = 2 * 60 * 60
+
+
+def _lessons_id(project: Any, user_id: uuid.UUID, text: str) -> uuid.UUID:
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"qa-lessons:{project.id}:{user_id}:{digest}")
+
+
+def _lessons_token(ctx: AppContext, project: Any, user_id: uuid.UUID, text: str) -> str:
+    """`{exp}.{sig}`: an HMAC over this text, person and project (the signed-URL signer, with a longer lifetime)."""
+    exp, sig = ctx.signer.sign(_lessons_id(project, user_id, text), project.organisation_id, ttl_s=LESSONS_TOKEN_TTL_S)
+    return f"{exp}.{sig}"
+
+
+def _lessons_token_ok(ctx: AppContext, project: Any, user_id: uuid.UUID, text: str, token: str | None) -> bool:
+    exp, _, sig = (token or "").partition(".")
+    if not exp.isdigit() or not sig:
+        return False
+    return ctx.signer.verify(_lessons_id(project, user_id, text), project.organisation_id, int(exp), sig)
+
+
+async def _lessons_facts(
+    ctx: AppContext, s: AsyncSession, project: Any, run_key: str | None, basis: str | None
+) -> tuple[str, set[str]]:
+    """The facts an AI suggestion is written from and the keys it may name (the same for the suggestion and when the
+    report is generated with the AI label)."""
+    probe = QaReport(
+        organisation_id=project.organisation_id,
+        project_id=project.id,
+        report_type=ReportType.completion,
+        version=0,
+        source_versions=await p6.stamp(s, project.id, ReportType.completion, run_key, basis),
+    )
+    return p6.lessons_data(await p6.build(ctx, s, project, probe))
+
+
 @router.get("/reports/{report_id}", response_model=api.ReportDetail)
 async def get_report(report_id: uuid.UUID, ctx: Ctx, s: ScopedSession, _p: CurrentPrincipal) -> api.ReportDetail:
     r = await _load(s, report_id)
@@ -223,14 +381,18 @@ async def download(
     ctx: Ctx,
     s: ScopedSession,
     _p: CurrentPrincipal,
-    format: str = Query("pdf", pattern="^(pdf|html|json|csv|csv_timeseries|xlsx)$"),
+    format: str = Query("pdf", pattern="^(pdf|html|json|csv|csv_timeseries|xlsx|docx)$"),
 ) -> RedirectResponse:
     r = await _load(s, report_id)
-    tables = (*phase2_reports.PHASE3, ReportType.execution, ReportType.defect, *p5.PHASE5)
+    if format == "docx":  # D34: Word export stays cut (P5-04c)
+        raise ValidationFailed(
+            "DOCX is not available", details=[{"field": "format", "message": "Use pdf, html, csv or xlsx."}]
+        )
+    tables = (*phase2_reports.PHASE3, ReportType.execution, ReportType.defect, *p5.PHASE5, *p6.PHASE6)
     if format == "csv" and r.report_type not in tables:
         raise ValidationFailed(
             "CSV is available for the Test Case Specification, RTM, Test Execution, Defect, Performance, "
-            "Accessibility and Security reports only",
+            "Accessibility, Security, Test Completion and Release Readiness reports only",
             details=[{"field": "format", "message": "Use pdf, html or json for this report."}],
         )
     if format == "xlsx" and r.report_type not in tables:  # P5-04b: document reports have no tables

@@ -11,10 +11,12 @@ import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { useScans } from "@/components/discovery/hooks";
 import { hostOf, scanNumber } from "@/lib/url";
-import { FORMAT_HINT, FORMAT_TEXT, REPORT_TYPES, downloadFailedText, downloadFormats, isPhase3Report, phase2ReportFileName, preparingText, type DownloadFormat, type ReportType } from "@/lib/reports";
+import { FORMAT_HINT, FORMAT_TEXT, P6_CSV_HINT, REPORT_TYPES, downloadFailedText, downloadFormats, isPhase3Report, isPhase6Report, latestPerAssessment, phase2ReportFileName, preparingText, type DownloadFormat, type ReportType } from "@/lib/reports";
 import { useAuth } from "@/lib/auth";
 import { gateApproved, requirementsStages } from "@/components/requirements/hooks";
 import { ReleaseGlance } from "@/components/workspace/OverviewRelease";
+import { CompletionReportDialog } from "@/components/report/Phase6Report";
+import { releaseReachable, useReleaseOverview } from "@/components/release/hooks";
 
 /** [Download ▾] menu: PDF and HTML, plus CSV for the Phase 3 reports; the trigger shows the loading state (design P2 §10.1, P3 §15.1). */
 function DownloadMenu({ report, name, host }: { report: ReportSummary; name: string; host: string }) {
@@ -45,7 +47,9 @@ function DownloadMenu({ report, name, host }: { report: ReportSummary; name: str
           {formats.map((f) => (
             <button key={f} role="menuitem" type="button" className={item} onClick={() => void get(f)}>
               {FORMAT_TEXT[f]}
-              {FORMAT_HINT[f] && <span className="text-small text-fg-muted">{FORMAT_HINT[f]}</span>}
+              {(f === "csv" && isPhase6Report(report.report_type) ? P6_CSV_HINT[report.report_type] : FORMAT_HINT[f]) && (
+                <span className="text-small text-fg-muted">{f === "csv" && isPhase6Report(report.report_type) ? P6_CSV_HINT[report.report_type] : FORMAT_HINT[f]}</span>
+              )}
             </button>
           ))}
         </div>
@@ -85,6 +89,17 @@ export default function ReportsPage() {
   const phase5 = REPORT_TYPES.filter((t) => t.phase === 5).map((t) => {
     const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
     return { ...t, versions, latest: versions[0] };
+  });
+  // Phase 6 (design P6 §11.1): the Release Readiness Report's latest version per assessment, newest first; Test
+  // Completion Reports on request. Both need an assessment first.
+  const release = useReleaseOverview(p.id, releaseReachable(p.workflow));
+  const assessed = !!release.data?.history.length;
+  const readiness = latestPerAssessment(reports.data ?? []);
+  const completion = (reports.data ?? []).filter((r) => r.report_type === "completion").sort((a, b) => b.version - a.version);
+  const [completionOpen, setCompletionOpen] = useState(false);
+  const phase6 = REPORT_TYPES.filter((t) => t.phase === 6).map((t) => {
+    const versions = t.type === "release_readiness" ? readiness : completion;
+    return { ...t, versions, latest: versions[0], unavailable: !assessed && !versions.length ? t.unavailable : null };
   });
   const phase2 = REPORT_TYPES.filter((t) => t.type !== "discovery" && !t.phase).map((t) => {
     const versions = (reports.data ?? []).filter((r) => r.report_type === t.type).sort((a, b) => b.version - a.version);
@@ -136,6 +151,108 @@ export default function ReportsPage() {
       <h1 tabIndex={-1} className="text-h1 font-semibold tracking-[-0.015em] text-fg-strong focus:outline-none">
         Reports
       </h1>
+      {/* Release readiness sits at the top of Reports (design P6 §4.1, §11.1): the sidebar's way into the workspace. */}
+      <ReleaseGlance />
+      <Card>
+        <CardHeader
+          title="Release readiness and test completion"
+          description="A frozen Release Readiness Report is created for each assessment and again when Gate 9 is decided. Test Completion Reports are generated on request."
+        />
+        {!reports.data ? (
+          <LoadingBlock label="Loading reports…" />
+        ) : (
+          <>
+            <Table label="Release readiness and test completion reports">
+              <THead>
+                <tr>
+                  <Th>Report</Th>
+                  <Th>Latest</Th>
+                  <Th>Status</Th>
+                  <Th srOnly>Actions</Th>
+                </tr>
+              </THead>
+              <TBody>
+                {phase6.map((t) => (
+                  <Tr key={t.type}>
+                    <Td rowHeader>
+                      {t.latest ? (
+                        <Link href={`/projects/${p.id}/reports/${t.slug}`} className="text-navy-700 underline underline-offset-2">
+                          {t.name}
+                        </Link>
+                      ) : (
+                        t.name
+                      )}
+                    </Td>
+                    <Td className="tabular-nums">{t.latest ? `Version ${t.latest.version} · ${t.latest.run_key ?? "current data"}` : "—"}</Td>
+                    <Td>
+                      {t.unavailable ? (
+                        <span className="text-fg-muted">Not available yet · {t.unavailable}</span>
+                      ) : t.latest ? (
+                        <StatusPill
+                          status={t.latest.status === "failed" ? "failed" : t.latest.status === "rendering" ? "running" : t.latest.approval?.status === "draft" ? "draft" : "approved"}
+                          label={
+                            t.latest.status === "rendering"
+                              ? "Preparing"
+                              : t.latest.status === "failed"
+                                ? "Failed"
+                                : t.latest.approval?.status === "draft"
+                                  ? "Draft · Gate 9 not decided"
+                                  : t.type === "release_readiness"
+                                    ? "Final (Gate 9)"
+                                    : "Ready"
+                          }
+                        />
+                      ) : (
+                        <span className="text-fg-muted">No version yet</span>
+                      )}
+                    </Td>
+                    <Td className="text-right">
+                      <span className="inline-flex flex-wrap justify-end gap-2">
+                        {t.type === "completion" && !t.unavailable && role !== "viewer" && role !== null && (
+                          <Button size="sm" variant="secondary" onClick={() => setCompletionOpen(true)}>
+                            Generate…<span className="sr-only"> {t.name}</span>
+                          </Button>
+                        )}
+                        {t.latest && t.latest.status === "ready" ? <DownloadMenu report={t.latest} name={t.name} host={host} /> : null}
+                      </span>
+                    </Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+            {phase6
+              .filter((t) => t.versions.length > 1)
+              .map((t) => (
+                <div key={t.type} className="border-t border-line px-5 py-3">
+                  <Disclosure label={`${t.name}: earlier (${t.versions.length - 1})`}>
+                    <ul className="mt-2 space-y-1 text-body">
+                      {t.versions.slice(1).map((r) => (
+                        <li key={r.id} className="flex flex-wrap items-center gap-2">
+                          <Link href={`/projects/${p.id}/reports/${t.slug}?version=${r.version}`} className="text-navy-700 underline underline-offset-2">
+                            Version {r.version} · {r.run_key ?? "current data"}
+                          </Link>
+                          <span className="text-fg-muted">
+                            {r.approval?.status === "draft" ? "Draft · " : ""}
+                            {fmtDateTime(r.created_at)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Disclosure>
+                </div>
+              ))}
+          </>
+        )}
+      </Card>
+      <CompletionReportDialog
+        open={completionOpen}
+        onClose={() => setCompletionOpen(false)}
+        assessment={release.data?.history[0] ?? null}
+        onGenerated={() => {
+          setCompletionOpen(false);
+          void reports.mutate();
+        }}
+      />
       <Card>
         <CardHeader
           title="Application Discovery Report"
@@ -436,8 +553,6 @@ export default function ReportsPage() {
           </>
         )}
       </Card>
-      {/* Release readiness lives under Reports (design P6 §4.1, §4.6); its two reports arrive with P6-05c. */}
-      <ReleaseGlance />
     </div>
   );
 }

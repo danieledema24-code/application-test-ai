@@ -26,6 +26,8 @@ def band_text(content: dict[str, Any]) -> str | None:
     t = content.get("report_type")
     if t == "defect":
         return content.get("draft_note") or None
+    if t in ("release_readiness", "completion"):  # P6-05c: "DRAFT: Gate 9 not decided for REL-0002."
+        return content.get("band") or None
     if t in ("test_case_spec", "rtm"):
         ap = content.get("approval") or {}
         return None if ap.get("status") == "approved" else f"DRAFT: not the approved version ({ap.get('gate') or 'G5'})"
@@ -60,8 +62,9 @@ def _sheet(wb: Workbook, title: str, rows: list[list[str]]) -> None:
             ws.column_dimensions[get_column_letter(i)].width = 22
 
 
-def to_xlsx(content: dict[str, Any], tables: list[tuple[str, bytes]]) -> bytes:
-    """`tables`: (sheet name, CSV bytes) in order. Returns the workbook bytes."""
+def to_xlsx(content: dict[str, Any], tables: list[tuple[str, bytes]], extra: list[list[str]] | None = None) -> bytes:
+    """`tables`: (sheet name, CSV bytes) in order; `extra`: Summary lines after the band (P6-05c: verdict, Gate 9,
+    override; already formula-guarded). Returns the workbook bytes."""
     wb = Workbook()
     summary = wb.active
     assert summary is not None
@@ -70,6 +73,7 @@ def to_xlsx(content: dict[str, Any], tables: list[tuple[str, bytes]]) -> bytes:
     lines: list[list[str]] = []
     if band:
         lines.append([band])
+    lines += extra or []
     project = content.get("project") or {}
     lines += [
         ["Report", str(content.get("title") or "")],

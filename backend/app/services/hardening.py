@@ -45,6 +45,7 @@ ACTION_LABEL: dict[str, str] = {
     "defect.created": "Raised a defect",
     "defect.updated": "Changed a defect",
     "report.downloaded": "Downloaded a report",
+    "report.generated": "Generated a report",
     "audit_log.exported": "Exported the audit log",
     "load_ceiling.changed": "Changed load limits",
     "retention.changed": "Changed retention",

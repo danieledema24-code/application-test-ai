@@ -258,6 +258,38 @@ async def test_demo_chain_no_go_then_conditional(tmp_path: Path, template_db: Pa
                 ("REL-0002", "superseded"),
                 ("REL-0001", "final"),
             ]
+
+            # P6-05c (design P6 §14 step 8): both reports. Each assessment's latest Release Readiness Report equals it;
+            # REL-0002's (replaced) is no longer current; the Test Completion Report's counts equal the coverage API.
+            await idle(timeout=600)
+            reps = sorted((await c.get(f"{API}/projects/{pid}/reports", headers=h)).json(), key=lambda r: r["version"])
+            rr = {r["run_key"]: r for r in reps if r["report_type"] == "release_readiness"}  # the latest per assessment
+            assert set(rr) == {"REL-0001", "REL-0002", "REL-0003"} and all(r["status"] == "ready" for r in rr.values())
+            assert rr["REL-0002"]["is_latest_source"] is False
+            assert (
+                rr["REL-0002"]["approval"]["band"] == "DRAFT: REL-0002 was replaced by REL-0003 and can't be decided."
+            )
+            r1 = (await c.get(f"{API}/reports/{rr['REL-0001']['id']}", headers=h)).json()["content"]
+            assert r1["verdict_text"] == "No-go · Final" and r1["band"] is None
+            assert r1["decision_line"].startswith("Decided by Team Mate, ")
+            r3 = (await c.get(f"{API}/reports/{rr['REL-0003']['id']}", headers=h)).json()["content"]
+            assert r3["verdict_text"] == "Conditional · Final" and r3["band"] is None
+            assert [x["text"] for x in r3["conditions"]] == [x["text"] for x in a3["conditions_list"]]
+            gen = await c.post(f"{API}/projects/{pid}/reports", headers=member,
+                               json={"report_type": "completion", "run_key": "REL-0003"})  # fmt: skip
+            assert gen.status_code == 202, gen.text
+            await idle(timeout=600)
+            done = (await c.get(f"{API}/reports/{gen.json()['id']}", headers=h)).json()
+            assert done["status"] == "ready", done["error"]
+            cov = (await c.get(f"{API}/projects/{pid}/traceability/coverage?basis=approved", headers=h)).json()
+            total = done["content"]["measures"]["total"]
+            res = cov["execution"]["results"]
+            assert (total["passed"], total["failed"]) == (res["passed"], res["failed"]), (total, res)
+            assert done["content"]["exploratory"]["empty"] == "No exploratory session has run."
+            for f in ("html", "csv", "json"):
+                body = await c.get(f"{API}/reports/{gen.json()['id']}/download?format={f}", headers=h,
+                                   follow_redirects=True)  # fmt: skip
+                assert body.status_code == 200 and "@p6-release-demo.example.com" not in body.text
     finally:
         shop.stop()
         await ctx.close()

@@ -38,6 +38,10 @@ class ReleaseReadinessAgent:
             key, verdict, n = row.key, row.recommendation.value, len(row.conditions or [])
             generated_by = row.generated_by
             assessment_id = row.id
+        # P6-05c: the assessment's Release Readiness Report (DRAFT until Gate 9 is decided).
+        from app.agents.reporting.phase6_reports import freeze_for_assessment
+
+        await freeze_for_assessment(self.ctx, self.scope, self.project_id, assessment_id)
         label = VERDICT_LABEL[verdict]
         message = f"{key} recommended {label}" + (f" ({plural(n, 'condition')})" if n else "")
         return StageOutcome(
