@@ -455,7 +455,8 @@ test.describe("Phase 5 · overview, lifecycle and header", () => {
     await setup(page, { g2: false, g4: false, scans: [], findings: [], runs: [] });
     await page.goto("/projects/p1");
     const optional = page.getByRole("region", { name: "Optional checks · any time after Gate 2" });
-    await expect(optional.getByText("Available after Gate 2")).toHaveCount(3);
+    // P6-03c adds the Exploratory testing row (design P6 §4.3).
+    await expect(optional.getByText("Available after Gate 2")).toHaveCount(4);
     await expect(optional.getByRole("link")).toHaveCount(0);
     await expect(page.getByText("Available after Gate 2.")).toBeVisible();
     await setup(page, { scans: [], findings: [], runs: [] });
@@ -501,7 +502,8 @@ test.describe("Phase 5 · defects, traceability, assistant and settings", () => 
     await setup(page);
     await page.goto("/projects/p1/defects");
     const source = page.getByLabel("Source");
-    await expect(source.locator("option")).toHaveText(["Any", "Functional", "Accessibility", "Security", "Performance"]);
+    // P6-03c (design P6 §9.8) adds Exploratory.
+    await expect(source.locator("option")).toHaveText(["Any", "Functional", "Accessibility", "Security", "Performance", "Exploratory"]);
     await expect(page.getByRole("table", { name: "Defects" }).getByText("Accessibility", { exact: true }).first()).toBeVisible();
     const req = page.waitForRequest((r) => r.url().includes("/projects/p1/defects?") && r.url().includes("source=accessibility"));
     await source.selectOption("accessibility");

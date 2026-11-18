@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
-import { isNonFunctional, nextUndecided, reproText, SEVERITY_TEXT, SOURCE_TEXT, type DefectList, type DefectRow } from "@/lib/defects";
+import { isCheckDraft, isNonFunctional, nextUndecided, reproText, SEVERITY_TEXT, SOURCE_TEXT, type DefectList, type DefectRow } from "@/lib/defects";
 import { Button, Callout, Disclosure, StatusPill, useToast } from "@/components/ui";
 import { DefectStatusPill, ObservedLabel } from "@/components/domain/ExecutionLabels";
 import { RejectDefectDialog, type RejectInput } from "./RejectDefectDialog";
@@ -88,9 +88,9 @@ export function Gate8Review({ projectId, drafts, decided, list, viewer, onChange
         ) : (
           <>
             <p className="text-body text-fg">Confirm a draft when it&apos;s a real bug in the application. Reject it when it isn&apos;t, and say why.</p>
-            {drafts.some((d) => isNonFunctional(d.source)) && (
+            {drafts.some((d) => isCheckDraft(d.source)) && (
               <p className="text-body text-fg">
-                Non-functional drafts state what was observed. Confirm when it&apos;s a problem you&apos;ll fix; reject with &lsquo;Works as intended&rsquo; or &lsquo;Accepted risk&rsquo; when it isn&apos;t.
+                {drafts.some((d) => isNonFunctional(d.source)) ? "Non-functional" : "Exploratory"} drafts state what was observed. Confirm when it&apos;s a problem you&apos;ll fix; reject with &lsquo;Works as intended&rsquo; or &lsquo;Accepted risk&rsquo; when it isn&apos;t.
               </p>
             )}
             <ul className="divide-y divide-line">
@@ -113,9 +113,9 @@ export function Gate8Review({ projectId, drafts, decided, list, viewer, onChange
                       <p className="text-small text-fg-muted">
                         {SEVERITY_TEXT[d.severity]} · {reproText(d.reproducibility)}
                         {d.cases.length ? ` · ${d.cases.join(", ")}` : ""}
-                        {isNonFunctional(d.source) ? ` · ${SOURCE_TEXT[d.source]}` : d.source === "analysis" ? " · from analysis" : " · raised by a person"}
+                        {isCheckDraft(d.source) ? ` · ${SOURCE_TEXT[d.source]}` : d.source === "analysis" ? " · from analysis" : " · raised by a person"}
                       </p>
-                      {isNonFunctional(d.source) && d.why && (
+                      {d.why && (
                         <p className="flex flex-wrap items-center gap-2 text-small text-fg">
                           <span>Why: {d.why}</span>
                           <ObservedLabel />
@@ -188,7 +188,7 @@ export function Gate8Review({ projectId, drafts, decided, list, viewer, onChange
         projectId={projectId}
         duplicates={list.items.filter((x) => !rejecting?.some((r) => r.id === x.id)).map((x) => ({ key: x.key, summary: x.summary }))}
         onReject={reject}
-        nonFunctional={!!rejecting?.length && rejecting.every((r) => isNonFunctional(r.source))}
+        nonFunctional={!!rejecting?.length && rejecting.every((r) => isCheckDraft(r.source))}
       />
     </section>
   );

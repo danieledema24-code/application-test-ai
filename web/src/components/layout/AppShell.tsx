@@ -13,6 +13,8 @@ import { Topbar } from "./Topbar";
 import type { RunList } from "@/lib/execution";
 import type { DefectList } from "@/lib/defects";
 import { nfCounts, type Overview } from "@/lib/nonfunctional";
+import { exploreReachable } from "@/lib/exploratory";
+import { useSessions } from "@/components/exploratory/hooks";
 import { takeRouteFocusClaim } from "@/lib/focusReturn";
 import { tabbables, trapTab } from "@/lib/pointerFocus";
 
@@ -105,7 +107,12 @@ function ProjectNav({ id, section, onNavigate }: { id: string; section: string; 
   const { data: defects } = useApi<DefectList>(scripted ? `/projects/${id}/defects` : null, { status: "draft", limit: 1 }, { shouldRetryOnError: false, refreshInterval: 15000 });
   const { role, canApprove } = useAuth();
   // Reports badge (design P6 §4.2): "Decide" for someone who can approve, "Waiting" for everyone else.
-  const execution = runs || defects || workflow ? { runsWaiting: runs?.waiting.length ?? 0, running: !!runs?.running, drafts: defects?.counts.draft ?? 0, canApprove: canApprove && role !== "viewer" } : undefined;
+  // Exploratory sessions (design P6 §4.2): "Approve" for a waiting signed-in session, "Running" while one explores; after G2 only.
+  const { data: sessions } = useSessions(id, exploreReachable(workflow));
+  const execution =
+    runs || defects || workflow
+      ? { runsWaiting: runs?.waiting.length ?? 0, running: !!runs?.running, drafts: defects?.counts.draft ?? 0, canApprove: canApprove && role !== "viewer", exploreWaiting: sessions?.waiting.length ?? 0, exploring: !!sessions?.running }
+      : undefined;
   // Non-functional badge (design P5 §4.2): only once the optional checks are reachable (G2), so earlier projects make no call.
   const g2 = workflow?.stages.find((x) => x.key === "accessibility")?.available && !!workflow?.stages.find((x) => x.key === "discovery")?.current_version;
   const { data: nfOverview } = useApi<Overview>(g2 ? `/projects/${id}/non-functional` : null, undefined, { shouldRetryOnError: false, refreshInterval: 15000 });

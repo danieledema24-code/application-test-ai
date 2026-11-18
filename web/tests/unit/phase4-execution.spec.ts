@@ -274,7 +274,7 @@ test.describe("Phase 4 · defects and Gate 8 (design P4 §11)", () => {
 test.describe("Phase 4 · sidebar badges (design P4 §4.2)", () => {
   test("Authorise, then Running; Defects {n} to review", () => {
     expect(sectionBadge("execution", [], 0, 0, { runsWaiting: 2, running: true, drafts: 0 })).toEqual({ text: "Authorise", srText: "2 runs waiting for authorisation" });
-    expect(sectionBadge("execution", [], 0, 0, { runsWaiting: 0, running: true, drafts: 0 })).toEqual({ text: "Running", srText: "a run is in progress" });
+    expect(sectionBadge("execution", [], 0, 0, { runsWaiting: 0, running: true, drafts: 0 })).toEqual({ text: "Running", srText: "a run or exploratory session is in progress" });
     expect(sectionBadge("execution", [], 0, 0, { runsWaiting: 0, running: false, drafts: 0 })).toBeNull();
     expect(sectionBadge("defects", [], 0, 0, { runsWaiting: 0, running: false, drafts: 2 })).toEqual({ text: "2 to review", srText: "2 drafts waiting for review" });
   });

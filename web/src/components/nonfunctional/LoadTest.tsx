@@ -40,19 +40,8 @@ import { Button, Callout, ConfirmDialog, Disclosure, ErrorState, Segmented, Skel
 import { HypothesisLabel, ObservedLabel } from "@/components/domain/ExecutionLabels";
 import { HonestyNote, LoadRunStatusPill, ThresholdResultLabel } from "@/components/domain/NonFunctionalLabels";
 import { useProject } from "@/components/workspace/ProjectContext";
+import { useReducedMotion } from "@/lib/useMotion";
 import { LimitsTable, LoadApprovalPanel } from "./LoadApproval";
-
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const m = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(m.matches);
-    const on = () => setReduced(m.matches);
-    m.addEventListener("change", on);
-    return () => m.removeEventListener("change", on);
-  }, []);
-  return reduced;
-}
 
 // ------------------------------------------------------------------ chart with a table one control away (§9.6, §18)
 

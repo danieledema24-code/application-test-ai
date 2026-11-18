@@ -7,31 +7,9 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui";
+import { useReducedMotion, useVisible } from "@/lib/useMotion";
 
 type Slot = { slot: string; title: string; state: string | null; frame_url: string | null; at: string | null };
-
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const m = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(m.matches);
-    const on = () => setReduced(m.matches);
-    m.addEventListener("change", on);
-    return () => m.removeEventListener("change", on);
-  }, []);
-  return reduced;
-}
-
-function useVisible(): boolean {
-  const [visible, setVisible] = useState(true);
-  useEffect(() => {
-    const on = () => setVisible(document.visibilityState !== "hidden");
-    on();
-    document.addEventListener("visibilitychange", on);
-    return () => document.removeEventListener("visibilitychange", on);
-  }, []);
-  return visible;
-}
 
 export function LiveRunView({ runId, chromium }: { runId: string; chromium: boolean }) {
   const reduced = useReducedMotion();

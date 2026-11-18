@@ -92,7 +92,7 @@ export function WhatItDoes({ items, pages }: { items: string[]; pages: number })
 }
 
 /** The typed-host field and its rules (§9.3, §18): aria-disabled with the reason until the host matches. */
-function useTypedHost(host: string) {
+export function useTypedHost(host: string) {
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string | null>(null);
   const ok = hostMatches(typed, host);

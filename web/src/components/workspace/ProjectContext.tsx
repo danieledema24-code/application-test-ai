@@ -177,6 +177,9 @@ export function ProjectProvider({ id, children, onOpenRescan, onOpenCancel }: { 
         // P6-01: change sets appear and finish in the Changes tab; "CHG-n ready: …" is announced politely, focus stays (design P6 §6.3).
         if (e.type === "change.status" || e.type === "change.ready" || e.type === "rescan.started")
           void globalMutate((k) => typeof k === "string" && (k.includes(`/projects/${id}/change`) || k.startsWith("/change-sets/") || k.includes(`/projects/${id}/scans`)));
+        // P6-03c: exploratory sessions refresh on their events (SSE first; the session page also polls every 1–2 s).
+        if (e.type.startsWith("exploration.") || e.type === "quality.finding" || e.type === "quality.scan_status")
+          void globalMutate((k) => typeof k === "string" && (k.startsWith(`/projects/${id}/exploratory-sessions`) || k.startsWith(`/projects/${id}/quality-scans/by-key/`) || k.startsWith("/quality-scans/")));
         if (e.type === "change.ready" && e.message) {
           announce(e.message, true);
           return;

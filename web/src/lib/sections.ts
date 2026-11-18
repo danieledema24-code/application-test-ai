@@ -123,8 +123,8 @@ export function isBuilt(s: ProjectSection): boolean {
 
 export type SectionBadge = { text: string; srText: string };
 
-/** Run and defect counts behind the Test Execution and Defects badges (design P4 §4.2). */
-export type ExecutionCounts = { runsWaiting: number; running: boolean; drafts: number; canApprove?: boolean };
+/** Run and defect counts behind the Test Execution and Defects badges (design P4 §4.2), plus exploratory sessions (P6 §4.2). */
+export type ExecutionCounts = { runsWaiting: number; running: boolean; drafts: number; canApprove?: boolean; exploreWaiting?: number; exploring?: boolean };
 
 /**
  * One attention badge per built section, in priority order: gate waiting → out of date → proposals
@@ -161,7 +161,10 @@ export function sectionBadge(
   if (slug === "execution" && execution) {
     const n = execution.runsWaiting;
     if (n > 0) return { text: "Authorise", srText: `${n} run${n === 1 ? "" : "s"} waiting for authorisation` };
-    if (execution.running) return { text: "Running", srText: "a run is in progress" };
+    // Design P6 §4.2: a signed-in exploratory session waiting for someone who can approve, after "Authorise".
+    const w = execution.exploreWaiting ?? 0;
+    if (w > 0 && execution.canApprove) return { text: "Approve", srText: `${w} exploratory session${w === 1 ? "" : "s"} waiting for your approval` };
+    if (execution.running || execution.exploring) return { text: "Running", srText: "a run or exploratory session is in progress" };
   }
   if (slug === "defects" && execution && execution.drafts > 0) {
     const n = execution.drafts;

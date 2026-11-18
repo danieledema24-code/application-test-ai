@@ -306,6 +306,12 @@ async def test_signed_in_session_waits_for_a_typed_host_approval(env: Any) -> No
     approval = req["approval"]
     assert approval["status"] == "pending" and approval["confirm_prompt"] == f"Type {host} to approve"
     assert req["permissions"]["can_approve"] is False and req["permissions"]["can_withdraw"] is True
+    # One session at a time includes a waiting request (QA P6-03c): a repeated or new start is refused, naming it.
+    for body in ({"signed_in": True, "charter": "chosen", "pages": [project["pages"]["/account"]]}, {}):
+        r = await client.post(url, json=body, headers=member)
+        assert r.status_code == 409, r.text
+        assert r.json()["error"]["message"] == f"{req['key']} is waiting for approval. One session at a time."
+        assert r.json()["error"]["details"]["key"] == req["key"]
     # Nothing contacts the site while it waits.
     await worker_for(ctx).run_until_idle(timeout=30)
     assert site.requests == []

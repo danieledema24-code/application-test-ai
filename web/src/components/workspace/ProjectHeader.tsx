@@ -18,10 +18,12 @@ import { nfHeaderPill, nfReachable, type Overview } from "@/lib/nonfunctional";
 import { useNfOverview } from "@/components/nonfunctional/Summary";
 import { headerPill, type ReleaseSummary } from "@/lib/release";
 import { releaseReachable, useReleaseOverview } from "@/components/release/hooks";
+import { exploreHeaderPill, exploreReachable, type SessionList } from "@/lib/exploratory";
+import { useSessions } from "@/components/exploratory/hooks";
 import { useProject } from "./ProjectContext";
 
 /** The project's overall status, from the live workflow. */
-function overallStatus(p: ReturnType<typeof useProject>, canApprove: boolean, x: ExecSummary | null, nf: Overview | undefined, release: ReleaseSummary | null) {
+function overallStatus(p: ReturnType<typeof useProject>, canApprove: boolean, x: ExecSummary | null, nf: Overview | undefined, release: ReleaseSummary | null, sessions: SessionList | undefined) {
   const wf = p.workflow;
   if (!wf) return null;
   if (wf.project_status === "archived") return { status: "archived", label: "Archived" };
@@ -34,6 +36,9 @@ function overallStatus(p: ReturnType<typeof useProject>, canApprove: boolean, x:
   // Load tests and checks (design P5 §4.4): after run states, before defect drafts.
   const nfPill = nfHeaderPill(nf, canApprove);
   if (nfPill) return { status: nfPill.tone === "blue" ? "running" : "awaiting_approval", label: nfPill.text };
+  // Exploratory sessions (design P6 §4.4): "Exploring: EXP-0001" or "EXP-0002 waiting for your approval".
+  const expPill = exploreHeaderPill(sessions, canApprove);
+  if (expPill) return { status: expPill.tone === "blue" ? "running" : "awaiting_approval", label: expPill.text };
   // Release readiness waiting for Gate 9 (design P6 §4.4): after the load-test states.
   const rel = headerPill(release, canApprove);
   if (rel) return { status: "awaiting_approval", label: rel };
@@ -81,6 +86,8 @@ function MoreMenu() {
   // "Assess release readiness" once a test run finished (design P6 §4.4).
   const release = useReleaseOverview(p.id, releaseReachable(p.workflow));
   const canAssess = !!release.data?.available && role !== "viewer" && role !== null;
+  // "Explore pages…" after Gate 2 (design P6 §4.4).
+  const canExplore = exploreReachable(p.workflow) && role !== "viewer" && role !== null;
   const item = "flex min-h-10 w-full items-center px-4 py-2 text-left text-body text-fg-strong hover:bg-overlay disabled:text-fg-muted";
   return (
     <div ref={ref} className="relative">
@@ -107,6 +114,11 @@ function MoreMenu() {
           {scripted && role !== "viewer" && role !== null && (
             <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), router.push(`/projects/${p.id}/execution?new=1`))}>
               Run tests…
+            </button>
+          )}
+          {canExplore && (
+            <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), router.push(`/projects/${p.id}/execution?tab=exploratory&new=1`))}>
+              Explore pages…
             </button>
           )}
           {canAssess && (
@@ -175,7 +187,8 @@ export function ProjectHeader({ asHeading }: { asHeading: boolean }) {
   const exec = useExecSummary(p.id, p.workflow);
   const nf = useNfOverview(p.id, p.workflow);
   const release = useReleaseOverview(p.id, releaseReachable(p.workflow));
-  const st = overallStatus(p, canApprove && role !== "viewer", exec, nf.overview, release.data?.latest ?? null);
+  const sessions = useSessions(p.id, exploreReachable(p.workflow));
+  const st = overallStatus(p, canApprove && role !== "viewer", exec, nf.overview, release.data?.latest ?? null, sessions.data);
   const active = activeStage(p.workflow);
   const paused = p.workflow?.project_status === "paused" || active?.status === "paused";
   const runningNow = active && (active.status === "running" || active.status === "queued") && !paused;

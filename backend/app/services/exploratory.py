@@ -407,6 +407,25 @@ def _one_at_a_time(key: str) -> Conflict:
     return Conflict(f"{key} is already running on this project. One session at a time.", details={"key": key})
 
 
+async def _waiting(s: AsyncSession, project_id: uuid.UUID) -> QualityScan | None:
+    """A signed-in request still waiting for approval (one past its 24 h is expired here instead)."""
+    rows = (
+        await s.execute(
+            select(QualityScan)
+            .where(QualityScan.project_id == project_id, QualityScan.kind == KIND, QualityScan.status.in_(WAITING))
+            .order_by(QualityScan.created_at)
+        )
+    ).scalars()
+    for scan in list(rows):
+        if not await expire(s, scan):
+            return scan
+    return None
+
+
+def _waiting_for_approval(key: str) -> Conflict:
+    return Conflict(f"{key} is waiting for approval. One session at a time.", details={"key": key})
+
+
 async def _claim(s: AsyncSession, project_id: uuid.UUID) -> None:
     """Flushes a session that just became `queued`. The partial unique index `uq_quality_scans_one_active_exploration`
     (migration 0021) lets only one queued or running exploratory session exist per project, so of two concurrent
@@ -441,7 +460,7 @@ async def create_session(
 ) -> tuple[QualityScan, Approval | None]:
     """EXP-0001: queued (anonymous) or `awaiting_approval` with its approval (signed in). Sends nothing.
 
-    409 when G2 isn't satisfied or a session is already running on the project; 422 for an unknown charter, pages
+    409 when G2 isn't satisfied, a session is already running on the project or a request is waiting for approval; 422 for an unknown charter, pages
     that can't be explored, a budget over a limit (the message names it) or missing credentials."""
     from app.orchestrator.orchestrator import Orchestrator
     from app.services.secrets import credentials_secret
@@ -450,6 +469,11 @@ async def create_session(
     busy = await _busy(s, project.id)
     if busy is not None:
         raise _one_at_a_time(busy.key)
+    # One session at a time includes a waiting request: approve, refuse or withdraw it first. This also stops a
+    # repeated click from creating a second request (QA P6-03c). Service-level check; no index needed.
+    waiting = await _waiting(s, project.id)
+    if waiting is not None:
+        raise _waiting_for_approval(waiting.key)
     ceiling = await org_ceiling(s, project.organisation_id)
     cap = ctx.settings.explore_cap
     eff = lim.effective_ceiling(ceiling, cap)
