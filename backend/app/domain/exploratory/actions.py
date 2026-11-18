@@ -46,6 +46,7 @@ NOT_A_PAGE = "Opens an email or phone app"
 SCRIPT_LINK = "Runs a script instead of opening a page"
 DESTRUCTIVE_LINK = "Link looks like it changes data"
 NAV_BLOCKED = "Leads to an address exploration may not open"
+NEW_WINDOW = "Opens a new window"
 
 
 @dataclass(frozen=True)

@@ -26,6 +26,7 @@ import { lastRunLine, type ExecSummary } from "@/lib/execution";
 import { g6StatusText, type AutomationOverview } from "@/lib/automation";
 import { releaseReachable, useReleaseOverview } from "@/components/release/hooks";
 import { ReleaseGlance } from "@/components/workspace/OverviewRelease";
+import { ChangedBanner } from "@/components/workspace/OverviewChanged";
 import { exploreAttentionRows, exploreGlanceLine, exploreReachable } from "@/lib/exploratory";
 import { useSessions } from "@/components/exploratory/hooks";
 
@@ -471,6 +472,7 @@ export default function ProjectOverviewPage() {
   }, [p.project]);
   return (
     <div className="space-y-6">
+      <ChangedBanner />
       <Card>
         <CardHeader title="QA lifecycle" />
         <CardBody>

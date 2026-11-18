@@ -668,3 +668,23 @@ export function impactLine(set: Pick<ChangeSet, "impact" | "regression">): strin
   const run = set.regression?.requested_run;
   return `${c.open} of ${plural(c.total, "impact item")} open · ${plural(c.scripts_outdated, "script")} outdated · regression run: ${run ? `${run.key} requested` : "not requested yet"}`;
 }
+
+// ---- Overview "Application changed" banner (design P6 §4.5, P6-06) ---------------------------------------------
+
+export const REBASELINE_LINE = (scan: number) => `More than half the pages changed. Consider regenerating requirements from Scan ${scan}.`;
+
+/**
+ * The banner for the latest rescan's change set while it has open impact items; null otherwise (no rescan yet, still
+ * comparing, a person's comparison, or every item closed). `sets` is the Changes list, newest first.
+ */
+export function changedBanner(sets: ChangeSet[] | undefined, fmt: (iso: string | null | undefined) => string): { key: string; text: string; rebaseline: string | null } | null {
+  const cs = (sets ?? []).find((x) => x.source === "rescan" && x.status === "completed");
+  const open = cs?.impact?.open ?? 0;
+  if (!cs || open <= 0) return null;
+  const sig = cs.summary.by_significance ?? { structural: 0, behavioural: 0, cosmetic: 0 };
+  const when = (s: ChangeScanRef) => fmt(s.started_at ?? s.created_at);
+  const text =
+    `The application changed. ${cs.key} found ${plural(cs.summary.total ?? 0, "change")} between Scan ${cs.base.number} (${when(cs.base)}) and Scan ${cs.target.number} (${when(cs.target)}): ` +
+    `${sig.structural ?? 0} structural, ${sig.behavioural ?? 0} behavioural, ${sig.cosmetic ?? 0} cosmetic. ${plural(open, "impact item")} ${open === 1 ? "is" : "are"} open.`;
+  return { key: cs.key, text, rebaseline: cs.rebaseline_suggested ? REBASELINE_LINE(cs.target.number) : null };
+}

@@ -5,6 +5,14 @@ export function fmtDate(iso: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** "13 Nov": day and month only, for sentences where the year is clear (design P6 §4.5). */
+export function fmtShortDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
 export function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);

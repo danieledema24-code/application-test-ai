@@ -586,7 +586,7 @@ test.describe("Phase 5 · defects, traceability, assistant and settings", () => 
     expect(await axe(page)).toEqual([]);
   });
 
-  test("assistant v4: non-functional chips work without AI, Later phases are Phase 6 only, load test proposal is a request (check 32)", async ({ page }) => {
+  test("assistant v4: non-functional chips work without AI, Later phases are phase 7+ only, load test proposal is a request (check 32)", async ({ page }) => {
     await setup(page);
     const messages: unknown[] = [];
     // The thread is read with ?limit=50: match on the path so every reload returns the posted turn.
@@ -625,9 +625,10 @@ test.describe("Phase 5 · defects, traceability, assistant and settings", () => 
     for (const label of ["Is the site fast enough?", "Can everyone use the site?", "Is the site missing basic protections?", "Explain a finding", "Plan a load test"])
       await expect(noAi.getByRole("button", { name: new RegExp(label.replace(/[?]/g, "\\?")) })).toBeVisible();
     const later = tasks.locator("section").filter({ has: page.getByRole("heading", { name: "Later phases" }) });
-    await expect(later.getByText("Release readiness and Test Completion Report")).toBeVisible();
-    await expect(later.getByText("What changed since the last scan")).toBeVisible();
-    await expect(later.getByText(/Phase [2-5]/)).toHaveCount(0);
+    // P6-06 built the Phase 6 tasks; only phase 7+ items remain.
+    await expect(later.getByText("API testing")).toBeVisible();
+    await expect(later.getByText("What changed since the last scan")).toHaveCount(0);
+    await expect(later.getByText(/Phase [2-6]/)).toHaveCount(0);
     await noAi.getByRole("button", { name: /Plan a load test/ }).click();
     await noAi.getByRole("button", { name: "Propose a load test" }).click();
     const card = page.getByRole("region", { name: /Proposal · Create load test request/ });

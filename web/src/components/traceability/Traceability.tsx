@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Clock, TriangleAlert } from "lucide-react";
 import type { ArtefactRef, BackwardRow, CaseExec, Coverage, ForwardRow, Gaps } from "@/lib/contract";
 import { CASE_STATUS_TEXT, PRIORITY_TEXT, techniqueInfo } from "@/lib/testcases";
-import { GAP_EMPTY, PHASE4_SR, PHASE4_TEXT, a11yCellText, coverageTiles, defectText, execLine, gapCounts, isAvailable, keyHref, perfCellText, resultText, scriptText, secCellText } from "@/lib/traceability";
+import { GAP_EMPTY, PHASE4_SR, PHASE4_TEXT, a11yCellText, changeCellText, changeLine, changeSr, coverageTiles, defectText, execLine, gapCounts, isAvailable, keyHref, perfCellText, resultText, scriptText, secCellText } from "@/lib/traceability";
 import { Card, Disclosure, StatTile, StatusPill } from "@/components/ui";
 
 // ---- Coverage tiles and gap lists (§14.2) ---------------------------------------------------------------
@@ -320,6 +320,9 @@ function ExecutionGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: st
           {flaky.length ? <ul className="mt-1 space-y-1">{flaky.map(failedRow)}</ul> : <p className="text-body text-fg-muted">{GAP_EMPTY.flaky}</p>}
         </div>
       </GapCard>
+      {gaps.scripts_outdated ? (
+        <ChangeGaps gaps={gaps} projectId={projectId} canEdit={canEdit} />
+      ) : (
       <GapCard id="gap-outdated" title="Outdated automation scripts" count={n.outdated}>
         {gaps.outdated_automation_scripts.length ? (
           <>
@@ -343,6 +346,7 @@ function ExecutionGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: st
           <p className="text-body text-fg-muted">{GAP_EMPTY.outdated}</p>
         )}
       </GapCard>
+      )}
       <GapCard id="gap-regression" title="Defects without regression coverage" count={n.regression}>
         {gaps.defects_without_regression_coverage.length ? (
           <ul className="space-y-1">
@@ -363,6 +367,79 @@ function ExecutionGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: st
           </ul>
         ) : (
           <p className="text-body text-fg-muted">{GAP_EMPTY.regression}</p>
+        )}
+      </GapCard>
+    </>
+  );
+}
+
+/** Phase 6 gap lists (design P6 §12.1); counts equal the coverage `changes` tiles. */
+function ChangeGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: string; canEdit: boolean }) {
+  const outdated = gaps.scripts_outdated ?? [];
+  const impacted = gaps.impacted_not_rerun ?? [];
+  const pages = gaps.new_pages_without_requirements ?? [];
+  const link = "text-small font-medium text-navy-700 underline underline-offset-2";
+  return (
+    <>
+      <GapCard id="gap-outdated" title="Scripts that are outdated" count={outdated.length}>
+        {outdated.length ? (
+          <ul className="space-y-1">
+            {outdated.map((x) => (
+              <li key={x.case.key} className="flex flex-wrap items-baseline gap-x-2 text-body">
+                <span className="break-all font-mono">{x.path}</span>
+                <span className="[overflow-wrap:anywhere]">· {x.reason || "Outdated"}</span>
+                <Link href={keyHref(projectId, x.case.key)} className={link}>
+                  {x.case.key}
+                </Link>
+                {x.heal_suggestions.map((h) => (
+                  <Link key={h.key} href={h.path} className={link}>
+                    Review {h.key}
+                  </Link>
+                ))}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.scripts_outdated}</p>
+        )}
+      </GapCard>
+      <GapCard id="gap-impacted" title="Impacted tests not re-run" count={impacted.length}>
+        {impacted.length ? (
+          <ul className="space-y-1">
+            {impacted.map((x) => (
+              <li key={`${x.change_set.key}-${x.case.key}`} className="flex flex-wrap items-baseline gap-x-2 text-body">
+                <Link href={keyHref(projectId, x.case.key)} className="font-mono text-navy-700 underline underline-offset-2">
+                  {x.case.key}
+                </Link>
+                <span>
+                  · {x.level} · {x.change_set.key}
+                </span>
+                <Link href={`/projects/${projectId}/discovery/changes/${x.change_set.key}?tab=regression`} className={link}>
+                  Open regression run<span className="sr-only"> for {x.change_set.key}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.impacted}</p>
+        )}
+      </GapCard>
+      <GapCard id="gap-new-pages" title="New pages without requirements" count={pages.length}>
+        {pages.length ? (
+          <ul className="space-y-1">
+            {pages.map((x) => (
+              <li key={x.impact_item_id} className="flex flex-wrap items-baseline gap-x-2 text-body">
+                <span className="[overflow-wrap:anywhere]">{x.label}</span>
+                {canEdit && (
+                  <Link href={`/projects/${projectId}/requirements/new?${new URLSearchParams({ from: x.change_set.key, page: x.page })}`} className={link} aria-label={`Write a requirement for ${x.page}`}>
+                    Write a requirement
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-body text-fg-muted">{GAP_EMPTY.new_pages}</p>
         )}
       </GapCard>
     </>
@@ -434,6 +511,24 @@ function ExecCells({ items, projectId, kind }: { items: ({ case: ArtefactRef } &
   );
 }
 
+/** The Change column (design P6 §12.1): one line per case, text with a full sentence for screen readers. */
+function ChangeCells({ items }: { items: ({ case: ArtefactRef } & Partial<CaseExec>)[] }) {
+  if (!items.length) return <span className="text-fg-muted">None</span>;
+  return (
+    <Chips>
+      {items.map((t) => (
+        <li key={t.case.key} className="whitespace-nowrap">
+          <span aria-hidden>
+            {changeCellText(t.impacted)}
+            {t.script?.state === "outdated" && " · ✗ Outdated"}
+          </span>
+          <span className="sr-only">{changeSr(t.case.key, t.impacted, t.script?.state)}</span>
+        </li>
+      ))}
+    </Chips>
+  );
+}
+
 function forwardCells(r: ForwardRow, projectId: string) {
   return {
     risk: r.risk ? (
@@ -487,6 +582,8 @@ function forwardCells(r: ForwardRow, projectId: string) {
 export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Traceability matrix, scrolls sideways" }: { rows: ForwardRow[]; projectId: string; more?: boolean; regionLabel?: string }) {
   const phase4 = rows.some((r) => isAvailable(r.automation));
   const phase5 = rows.some((r) => "accessibility" in r);
+  // Phase 6 (design P6 §12.1): "Change" after Scripts once rows carry the impact of a rescan.
+  const phase6 = rows.some((r) => "impacted" in r);
   return (
     <>
       <div className="hidden rounded-lg border border-line bg-surface md:block">
@@ -494,12 +591,12 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
           <table className="min-w-full divide-y divide-line text-small">
             <caption className="px-3 py-2 text-left text-body font-semibold text-fg-strong">Forward traceability: requirements to test cases, {rows.length} requirements{more ? " on this page" : ""}</caption>
             <colgroup span={5} />
-            <colgroup span={3} />
+            <colgroup span={phase6 ? 4 : 3} />
             {phase5 && <colgroup span={3} />}
             <thead className="bg-elevated">
               <tr>
                 <td colSpan={5} />
-                <th scope="colgroup" colSpan={3} className="px-3 py-1.5 text-left text-caption font-semibold text-fg-muted">
+                <th scope="colgroup" colSpan={phase6 ? 4 : 3} className="px-3 py-1.5 text-left text-caption font-semibold text-fg-muted">
                   {phase4 ? "Execution" : "Execution · not recorded"}
                 </th>
                 {phase5 && (
@@ -509,7 +606,7 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
                 )}
               </tr>
               <tr>
-                {["Requirement", "Risk", "Acceptance criteria", "Conditions", "Test cases", "Scripts", "Results", "Defects", ...(phase5 ? ["Accessibility", "Security", "Performance"] : [])].map((h) => (
+                {["Requirement", "Risk", "Acceptance criteria", "Conditions", "Test cases", "Scripts", ...(phase6 ? ["Change"] : []), "Results", "Defects", ...(phase5 ? ["Accessibility", "Security", "Performance"] : [])].map((h) => (
                   <th key={h} scope="col" className={`whitespace-nowrap px-3 py-2 text-left text-caption font-semibold uppercase tracking-[0.04em] text-fg-muted ${h === "Requirement" ? "sticky left-0 bg-elevated" : ""}`}>
                     {h}
                   </th>
@@ -534,6 +631,11 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
                         <td className="px-3 py-2">
                           <ExecCells items={r.test_cases ?? []} projectId={projectId} kind="script" />
                         </td>
+                        {phase6 && (
+                          <td className="px-3 py-2">
+                            <ChangeCells items={r.test_cases ?? []} />
+                          </td>
+                        )}
                         <td className="px-3 py-2">
                           <ExecCells items={r.test_cases ?? []} projectId={projectId} kind="result" />
                         </td>
@@ -546,6 +648,11 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
                         <td className="px-3 py-2">
                           <Later />
                         </td>
+                        {phase6 && (
+                          <td className="px-3 py-2">
+                            <ChangeCells items={r.test_cases ?? []} />
+                          </td>
+                        )}
                         <td className="px-3 py-2">
                           <Later />
                         </td>
@@ -604,6 +711,7 @@ export function ForwardMatrix({ rows, projectId, more = false, regionLabel = "Tr
                   {(r.test_cases ?? []).map((t) => (
                     <li key={t.case.key}>
                       <span className="font-mono">{t.case.key}</span>: {execLine(t)}
+                      {changeLine(t) && <span className="block">{changeLine(t)}</span>}
                     </li>
                   ))}
                 </ul>

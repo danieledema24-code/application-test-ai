@@ -16,6 +16,7 @@ import contextlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from playwright.async_api import BrowserContext, Error, Route, WebSocketRoute
@@ -181,6 +182,11 @@ class ExplorationPolicy(NetworkPolicy):
     skip_loads_allowed: frozenset[str] = frozenset()
     writes: list[dict[str, str]] = field(default_factory=list)
     navs: list[dict[str, str]] = field(default_factory=list)
+    # Set to the explorer's tab once it exists: requests from any other page are aborted (see `handle`).
+    only_page: Any = None
+    # Windows the page tried to open ({method, url, via}): stopped by the init script (`window.open`, links and
+    # forms aimed at a new window) or, if one still appeared, by `only_page`.
+    new_windows: list[dict[str, str]] = field(default_factory=list)
 
     def _nav_block(self, url: str, reason: str, target: str | None = None) -> None:
         super()._nav_block(url, reason, target)
@@ -190,6 +196,24 @@ class ExplorationPolicy(NetworkPolicy):
     async def handle(self, route: Route) -> None:
         req = route.request
         method = (req.method or "GET").upper()
+        if self.only_page is not None:
+            # One tab only: any request from another page (a popup or new window that still appeared, from its
+            # first document request on) is aborted, so nothing it would load or run can send anything.
+            try:
+                origin_page = req.frame.page
+            except Error:
+                origin_page = None
+            try:
+                navigation = req.is_navigation_request()
+            except Error:
+                navigation = True
+            # A request with no page is a worker's (the method guard below still applies), unless it loads a
+            # document: a window that is still being created has no page yet, and gets nothing.
+            if (origin_page is not None and origin_page is not self.only_page) or (origin_page is None and navigation):
+                if len(self.new_windows) < 100:
+                    self.new_windows.append({"method": method, "url": req.url[:500], "via": "request"})
+                await _safe_abort(route)
+                return
         if method not in READ_METHODS:
             signing_in = not self.armed and method == "POST" and _origin(req.url) in self.approved_origins
             if not signing_in:

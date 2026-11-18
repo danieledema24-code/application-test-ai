@@ -358,9 +358,9 @@ async def _dod(s: AsyncSession, project_id: uuid.UUID, facts: Any) -> list[rc.Do
             continue
         rule = r.check_rule_id
         if rule is None:
-            from app.agents.readiness.rules import nf_rule_for
+            from app.agents.readiness.rules import text_rule_for
 
-            rule = nf_rule_for(r.kind, r.text)
+            rule = text_rule_for(r.kind, r.text)
         found.append(rc.DodResult(r.key, r.text, status, str(ev.get("detail") or ""), rule, str(r.id)))
     return found
 

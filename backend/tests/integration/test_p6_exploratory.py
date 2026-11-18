@@ -189,6 +189,27 @@ async def test_lab_oracles_blocked_write_not_tried_and_budget(env: Any) -> None:
     assert (await client.get(f"{API}/evidence/{evid}", headers=other.headers)).status_code == 404
 
 
+async def test_no_new_window_is_ever_opened(env: Any) -> None:
+    """Exploration stays in one tab: no window the page tries to open loads anything or sends anything; each attempt
+    is a blocked step and its control is listed under Not tried ("Opens a new window")."""
+    ctx, client, owner, _other, base, site = env
+    project = await seed_site(ctx, client, owner, base, ["/windows"])
+    started = await _start(client, owner.headers, project["id"], {"charter": "chosen",
+                           "pages": [project["pages"]["/windows"]], "budget": {"actions": 4}})  # fmt: skip
+    await worker_for(ctx).run_until_idle(timeout=120)
+    sess = await _session(client, owner.headers, started["id"])
+    assert sess["status"] == "completed", sess
+    assert _writes(site) == set() and not [p for _, p in site.requests if p.startswith("/popup")], site.requests
+    not_tried = {n["name"]: n for n in sess["not_tried"] if n["reason"] == "Opens a new window"}
+    assert set(not_tried) == {"Open window", "Scripted tab", "Form tab", "Blank window"}, sess["not_tried"]
+    assert not_tried["Open window"]["destination"] == "/popup-open"
+    steps = (await client.get(f"{API}/quality-scans/{sess['id']}/steps", headers=owner.headers)).json()["items"]
+    first = next(x for x in steps if x["action"]["target"]["name"] == "Open window")
+    assert first["outcome"] == "blocked" and first["observations"][0]["text"] == (
+        "The page tried to open /popup-open in a new window. Blocked: exploration stays in one tab."
+    )
+
+
 async def test_chain_ends_at_exactly_the_budget(env: Any) -> None:
     ctx, client, owner, _other, base, site = env
     project = await seed_site(ctx, client, owner, base, ["/chain/1"])

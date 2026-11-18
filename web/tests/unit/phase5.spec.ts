@@ -209,9 +209,9 @@ test.describe("Phase 5 · overview, lifecycle, traceability and settings words (
     expect(tiles.map((t) => t.value)).toEqual(["1", "2", "0"]);
   });
 
-  test("assistant: citations link A11Y/SEC/PERF/PRF keys; Later phases fallback is Phase 6 only (check 32)", () => {
+  test("assistant: citations link A11Y/SEC/PERF/PRF keys; Later phases fallback lists phase 7+ items only (check 32; P6-06)", () => {
     expect("See A11Y-0001-02, SEC-0001, PERF-0003, PRF-01 and APR-0005.".match(CITATION_TOKEN)).toEqual(["A11Y-0001-02", "SEC-0001", "PERF-0003", "PRF-01", "APR-0005"]);
-    expect(LATER_TASKS_FALLBACK.map((t) => t.needs)).toEqual(["Phase 6", "Phase 6"]);
+    expect(LATER_TASKS_FALLBACK.every((t) => t.available_from_phase > 6)).toBe(true);
   });
 
   test("defect detail: environment and occurrences of non-functional drafts (§10)", () => {

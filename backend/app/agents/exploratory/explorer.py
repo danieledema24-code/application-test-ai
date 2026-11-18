@@ -111,6 +111,31 @@ ELEMENTS_JS = r"""() => {
   return out;
 }"""
 DIALOGS = "dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true]"
+# Runs in every frame of every page before the page's own scripts: exploration stays in one tab, so `window.open`
+# returns null and links and forms aimed at a new window do nothing. Each attempt is reported to the explorer.
+NO_NEW_WINDOWS_JS = r"""(() => {
+  const report = (url) => {
+    let href = String(url || '');
+    try { href = new URL(href || 'about:blank', location.href).href; } catch (e) {}
+    try { window.__exploreNewWindow(href); } catch (e) {}
+  };
+  const isNew = (t) => { t = (t || '').trim().toLowerCase(); return !!t && !['_self', '_top', '_parent'].includes(t); };
+  Object.defineProperty(window, 'open', { configurable: false, writable: false,
+    value: function (url) { report(url); return null; } });
+  document.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('a[href], area[href]') : null;
+    if (a && isNew(a.getAttribute('target'))) { e.preventDefault(); report(a.href); }
+  }, true);
+  const submit = HTMLFormElement.prototype.submit;  // form.submit() fires no submit event
+  HTMLFormElement.prototype.submit = function () {
+    if (isNew(this.getAttribute('target'))) { report(this.action); return; }
+    return submit.call(this);
+  };
+  document.addEventListener('submit', (e) => {
+    const f = e.target;
+    if (f && isNew(f.getAttribute('target'))) { e.preventDefault(); report(f.action); }
+  }, true);
+})();"""
 STATE_JS = (
     """() => {
   const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };
@@ -372,10 +397,19 @@ class ExploreJob:
         if cfg.get("signed_in") and sign_in is None:
             raise RuntimeError("the saved test login has no sign-in page")
         async with self.ctx.browser_pool.isolated_context(policy) as context:
+            # Before any page exists: no page may open another window (the init script), and every attempt is
+            # recorded. A window that still appears gets nothing through the network guard (`only_page`) and is
+            # closed at once.
+            def new_window(_source: Any, url: Any) -> None:
+                if len(policy.new_windows) < 100:
+                    policy.new_windows.append({"method": "GET", "url": str(url)[:500], "via": "script"})
+
+            await context.expose_binding("__exploreNewWindow", new_window)
+            await context.add_init_script(NO_NEW_WINDOWS_JS)
             if sign_in is not None:
                 await self._sign_in(context, policy, sign_in, timeout_s)
             page = await context.new_page()
-            # New tabs and windows the page opens are closed at once: exploration stays on its one tab.
+            policy.only_page = page
             context.on("page", lambda pg: None if pg is page else self._spawn(_close_quietly(pg)))
             page.set_default_timeout(timeout_s * 1000)
             self._listen(page)
@@ -595,7 +629,7 @@ class ExploreJob:
         before = await self._state(page)
         before_shot = await _screenshot(page)
         self.col.clear()
-        writes_from, navs_from = len(policy.writes), len(policy.navs)
+        writes_from, navs_from, windows_from = len(policy.writes), len(policy.navs), len(policy.new_windows)
         redirects_before = set(policy.nav_redirects)
         nav_error: str | None = None
         try:
@@ -622,6 +656,7 @@ class ExploreJob:
             self.col.nav_status = status if status is not None else self.col.nav_status
             await asyncio.sleep(SETTLE_MS / 1000)
         stopped = policy.navs[navs_from:]
+        windows = self._windows(policy, windows_from)
         if act.page_key(page.url) != act.page_key(url):
             with contextlib.suppress(PwTimeout, Error):
                 await page.wait_for_load_state("load", timeout=5000)
@@ -639,7 +674,9 @@ class ExploreJob:
             blocked=self._writes(policy, writes_from), dialog_closable=closable,
         )  # fmt: skip
         problems = orc.evaluate(obs)
-        outcome = orc.outcome(problems, bool(obs.blocked) or bool(stopped), navigated, orc.changed(before, after))
+        outcome = orc.outcome(
+            problems, bool(obs.blocked) or bool(stopped) or bool(windows), navigated, orc.changed(before, after)
+        )
         observations: list[dict[str, Any]] = []
         for method, wurl, line, why in self._blocks(policy, writes_from):
             observations.append({"kind": "blocked", "text": line})
@@ -654,6 +691,12 @@ class ExploreJob:
             nt = act.NotTried(a.role, a.name, path, reason, a.fingerprint)
             if nt.fingerprint not in self.not_tried:
                 self.not_tried[nt.fingerprint] = {**nt.as_dict(), "destination": self._nav_where(nav)}
+                self.coverage[path]["not_tried"] += 1
+        for w in windows:
+            observations.append({"kind": "blocked", "text": orc.new_window_line(self._window_where(w))})
+            nt = act.NotTried(a.role, a.name, path, act.NEW_WINDOW, a.fingerprint)
+            if nt.fingerprint not in self.not_tried:
+                self.not_tried[nt.fingerprint] = {**nt.as_dict(), "destination": self._window_where(w)}
                 self.coverage[path]["not_tried"] += 1
         if navigated:
             observations.append({"kind": "navigated", "text": f"Opened {act.path_of(after.url)}"})
@@ -688,6 +731,20 @@ class ExploreJob:
                 self.queue.append(nxt)
                 self.pages_added += 1
         return outcome != StepOutcome.no_effect.value or a.kind != "click" or not real
+
+    def _windows(self, policy: ExplorationPolicy, since: int) -> list[dict[str, str]]:
+        """New windows the page tried to open since `since`, once per address (the script report and the requests
+        of a window that still appeared describe the same attempt)."""
+        out: dict[str, dict[str, str]] = {}
+        for w in policy.new_windows[since:]:
+            out.setdefault(self._window_where(w), w)
+        return list(out.values())
+
+    def _window_where(self, w: dict[str, str]) -> str:
+        url = w.get("url") or ""
+        if not urlsplit(url).scheme.lower().startswith("http"):
+            return "a blank window"
+        return act.path_of(url) if act.origin_of(url) == self.origin else redact_url_tokens(url)[:300]
 
     def _nav_where(self, nav: dict[str, str]) -> str:
         target = nav.get("target") or nav["url"]

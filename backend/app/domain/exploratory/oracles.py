@@ -69,6 +69,12 @@ def skipped_line(url: str, reason: str) -> str:
     return f"The page tried to open {path_of(url)}. Blocked: {reason[:1].lower()}{reason[1:]}."
 
 
+def new_window_line(where: str) -> str:
+    """A window the page tried to open ('The page tried to open /popup in a new window. Blocked: exploration stays in
+    one tab.')."""
+    return f"The page tried to open {where} in a new window. Blocked: exploration stays in one tab."
+
+
 def broken_tokens(text: str) -> Counter[str]:
     return Counter(m.group(0) for m in BROKEN_TEXT.finditer(text or ""))
 

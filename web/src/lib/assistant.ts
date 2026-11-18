@@ -104,3 +104,42 @@ export function splitCitations(text: string): ContentPart[] {
   if (last < text.length) out.push({ kind: "text", text: text.slice(last) });
   return out;
 }
+
+// ---- Phase 6 action proposals (design P6 §12.3) ----------------------------------------------------------------
+
+export const REGRESSION_FOOTER = "Creates a run request. Someone who can approve must still authorise it at Gate 7; the assistant can't start runs.";
+export const EXPLORE_FOOTER = "Only clicks things that can't change data and blocks anything the page tries to send.";
+export const EXPLORE_APPROVAL = "Needs approval by someone who can approve.";
+export const ASSESS_FOOTER = "Starts an assessment from the evidence recorded now. Someone who can approve still decides at Gate 9.";
+
+type ActionKind = "request_regression_run" | "start_exploration" | "assess_release";
+const ACTION_KINDS = new Set<string>(["request_regression_run", "start_exploration", "assess_release"]);
+
+export function isActionProposal(kind: string | undefined): kind is ActionKind {
+  return !!kind && ACTION_KINDS.has(kind);
+}
+
+/** The footer and the single button of a Phase 6 action proposal; null for other kinds. */
+export function actionProposal(kind: string | undefined, payload: Record<string, unknown> | undefined): { footer: string; applyLabel: string } | null {
+  if (kind === "request_regression_run") return { footer: REGRESSION_FOOTER, applyLabel: "Create run request" };
+  if (kind === "start_exploration")
+    return payload?.signed_in ? { footer: `${EXPLORE_FOOTER} ${EXPLORE_APPROVAL}`, applyLabel: "Request approval" } : { footer: EXPLORE_FOOTER, applyLabel: "Start exploring" };
+  if (kind === "assess_release") return { footer: ASSESS_FOOTER, applyLabel: "Assess" };
+  return null;
+}
+
+/** The toast's [Open RUN-0005] / [Open EXP-0002] action (design P6 §12.3); null when nothing was created. */
+export function actionToastLink(kind: string | undefined, projectId: string, key: string | undefined): { label: string; href: string } | null {
+  if (!key) return null;
+  if (kind === "request_regression_run" && /^RUN-\d+$/.test(key)) return { label: `Open ${key}`, href: `/projects/${projectId}/execution/${key}` };
+  if (kind === "start_exploration" && /^EXP-\d+$/.test(key)) return { label: `Open ${key}`, href: `/projects/${projectId}/execution/exploratory/${key}` };
+  return null;
+}
+
+/** Toast after accepting (design P6 §18): names the run or session it created. */
+export function actionToast(kind: string | undefined, payload: Record<string, unknown> | undefined, key: string | undefined): string | null {
+  if (kind === "request_regression_run") return `${key ?? "The run"} requested. Someone who can approve must authorise it (Gate 7).`;
+  if (kind === "start_exploration") return payload?.signed_in ? `${key ?? "The session"} requested. Someone who can approve must approve it.` : `${key ?? "The session"} started.`;
+  if (kind === "assess_release") return "Assessing release readiness. The recommendation appears on Release readiness.";
+  return null;
+}
