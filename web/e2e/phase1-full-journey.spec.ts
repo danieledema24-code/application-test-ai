@@ -8,6 +8,7 @@
 //               "2" = continue as account A from P1_ACCOUNTS (no new sign-up; needs user B in the file for the
 //                     cross-organisation UI check), unset = both.
 //   P1_SHOTS, P1_DOWNLOADS, P1_ACCOUNTS (credentials file, *.local.txt; never printed)
+//   E2E_API_URL the backend. Default http://localhost:8200 (set it to run on a private stack).
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -21,7 +22,9 @@ const SHOTS = process.env.P1_SHOTS ?? `${SCRATCH}/p1-shots`;
 const DOWNLOADS = process.env.P1_DOWNLOADS ?? `${SCRATCH}/p1-downloads`;
 const ACCOUNTS = process.env.P1_ACCOUNTS ?? `${SCRATCH}/p1-accounts.local.txt`;
 const RESULTS = `${SCRATCH}/p1-results-part${PART ?? "all"}.json`;
-const API = "http://localhost:8200/api/v1";
+const API_BASE = (process.env.E2E_API_URL ?? "http://localhost:8200").replace(/\/+$/, "");
+const API = `${API_BASE}/api/v1`;
+const API_PORT = new URL(API_BASE).port || (new URL(API_BASE).protocol === "https:" ? "443" : "80");
 
 const results: Record<string, unknown> = {};
 async function note(k: string, v: unknown) {
@@ -359,16 +362,23 @@ test("part 2: results, evidence, report, re-scan, Gate 2, downloads, isolation, 
   const before = await ovFeed.getByRole("listitem").count();
   await note("feed_rows_before_rescan", before);
   await page.getByRole("button", { name: "More project actions" }).click();
-  await page.getByRole("menuitem", { name: /Re-scan site/ }).click();
+  // Since P6-01 a project with a finished scan offers "Rescan and compare…" (Scan 2 is compared with Scan 1) and the
+  // dialog then opens the live discovery view; before Phase 6 it was "Re-scan site" and the Overview stayed open.
+  await page.getByRole("menuitem", { name: /^(Re-scan site|Rescan and compare…)$/ }).click({ timeout: 30_000 });
   const dlg = page.getByRole("dialog");
   await expect(dlg).toBeVisible();
   await note("rescan_dialog", (await dlg.innerText()).slice(0, 1500));
   await shot(page, "24-rescan-dialog");
-  await dlg.getByRole("button", { name: "Start re-scan" }).click();
-  await expect.soft(page.getByText("Re-scan started.")).toBeVisible({ timeout: 30_000 });
-  // Without reloading, new rows must stream in (SSE through CORS).
+  await dlg.getByRole("button", { name: /^(Start re-scan|Start rescan)$/ }).click({ timeout: 30_000 });
+  await expect.soft(page.getByText(/^(Re-scan started\.|Scan \d+ started\. It will be compared with Scan \d+\.)$/).first()).toBeVisible({ timeout: 30_000 });
+  // Without reloading, new rows must stream in (SSE through CORS): on the Overview, opened right after the start.
+  let feedBase = before;
+  if (new URL(page.url()).pathname !== projectUrl) {
+    await page.goto(projectUrl);
+    feedBase = await ovFeed.getByRole("listitem").count();
+  }
   const t0 = Date.now();
-  await expect.soft.poll(async () => ovFeed.getByRole("listitem").count(), { timeout: 60_000, message: "feed streams new rows" }).toBeGreaterThan(before + 5);
+  await expect.soft.poll(async () => ovFeed.getByRole("listitem").count(), { timeout: 60_000, message: "feed streams new rows" }).toBeGreaterThan(feedBase + 5);
   await note("feed_stream", { before, after: await ovFeed.getByRole("listitem").count(), ms: Date.now() - t0, top: (await ovFeed.getByRole("listitem").allInnerTexts()).slice(0, 6) });
   await note("feed_indicator", await page.getByText(/^(Live|Connecting…|Reconnecting… Missed events will catch up\.|Live updates stopped\.)$/).allInnerTexts());
   await shot(page, "25-rescan-live-feed");
@@ -515,7 +525,7 @@ test("part 2: results, evidence, report, re-scan, Gate 2, downloads, isolation, 
   const leaks = requests.filter((u) => (token && u.includes(token)) || (newToken && u.includes(newToken)) || /[?&](token|access_token|auth|bearer)=/i.test(u));
   await note("token_in_url", leaks);
   expect.soft(leaks).toEqual([]);
-  await note("distinct_api_paths", [...new Set(requests.filter((u) => u.includes(":8200/")).map((u) => u.replace(/\?.*$/, "").replace(/[0-9a-f-]{36}/g, "{id}")))]);
+  await note("distinct_api_paths", [...new Set(requests.filter((u) => u.includes(`:${API_PORT}/`)).map((u) => u.replace(/\?.*$/, "").replace(/[0-9a-f-]{36}/g, "{id}")))]);
   await note("console_errors", consoleErrors);
   await note("console_cors_errors", consoleErrors.filter((e) => /CORS/.test(e)).length);
   expect.soft(consoleErrors.filter((e) => /CORS/.test(e)), "no CORS errors").toEqual([]);

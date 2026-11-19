@@ -2948,6 +2948,8 @@ Web stories implement it, and section references ("design P6 §n") point to it.
 
 As specified in P5-05a, unchanged: an in-worker resolve-once forward proxy for every platform browser, including exploratory sessions, locator re-checks and heal verification. Its acceptance criteria are those of P5-05a, plus: **given** an exploratory session on the fixture with the proxy on, **then** the network guard (non-GET abort) still applies, and the session's findings are unchanged. If cut, `security-risks.md` T3 stays as stated, and P6-08 records it.
 
+*As built (P6-08, 2026-11-18):* **cut** by the user on 2026-11-18, with P6-03b, to finish the phase sooner. Nothing was built: `/health` still reports `egress_proxy: "off"`, and `security-risks.md` T3 records that it stays open after Phase 6 (rescans, locator re-checks, heal verification and exploration all use the same context-wide network policy as discovery, so they add no new DNS-rebinding exposure). It goes back to the hardening pool; the production egress firewall stays with the Hosted deployment phase (D23).
+
 ---
 
 ### P6-08 End-to-end verification and phase close (Test + docs, M)
@@ -2974,6 +2976,14 @@ As specified in P5-05a, unchanged: an in-worker resolve-once forward proxy for e
 - **Given** a clean environment with AI off, **when** the Phase 6 e2e suite runs, **then** the full journey passes and yields no-go, then conditional, on the demo, and go on the fixture.
 - **Given** the closing checks, **when** `scripts/check.sh` and the e2e suites run, **then** all pass, and every acceptance criterion above maps to at least one test (a traceability table in the verification doc).
 - **Given** the run, **then** no row or file from an earlier scan was deleted (before/after inventory of `scan_sessions`, `discovered_pages`, `evidence` and storage).
+
+*As built (P6-08, 2026-11-18):*
+- `web/e2e/phase6-journey.spec.ts` is the real-stack journey (AI off) on a **private** stack: its own backend, database and storage, its own `next dev` and its own copy of the demo shop with `DEMO_VERSION_FILE` and `DEMO_ACCESS_LOG` (never the shared :8200/:3002/:4100). It needs `E2E_API_URL`, `E2E_SITE_URL`, `DEMO_VERSION_FILE`, `DEMO_ACCESS_LOG`, `P6_DB` and `P6_STORAGE_DIR`. Step 1 (the Phase 4 chain to DEF-0001 at G8) goes through the API, because `phase4-journey.spec.ts` already drives the same chain through the UI; steps 2–9 use the UI wherever a person acts (the change set, the repairs accepted one at a time by the member, G7, starting EXP-0001, G8, G9 approve and override, report downloads, the assistant) and the API for exact values. The harness assertions (no non-GET at the shop during exploration, no 5432/6379, the demo left on v1, the before/after inventory) are in the spec.
+- The roadmap's REL-0002 conditions are met on the demo: the minor exploratory defect (the grouped "/offers: \"Show details\" throws an error and shows NaN" draft, confirmed at G8 as minor) and the "Page removed: /products/1" reviews are listed; the open serious accessibility finding and the `/products/2` p95 apply only if the Phase 5 chain ran on the project, which the journey doesn't do.
+- **Go** on the fixture is the backend test `test_p6_release.py::test_fixture_project_with_every_criterion_met_is_go` (seeded evidence); there is no UI path that produces it on a real site without running every check.
+- Cross-tenant and credential-absence suites: `backend/tests/integration/test_p6_close.py`, on one demo project with every kind of Phase 6 artefact. The Phase 6 route list is compared with the app's OpenAPI paths, so a new endpoint fails the test until it is added to the sweep. Signed evidence URLs are refused with 403 for a signature made for another organisation (as since Phase 1); the metadata endpoint is 404.
+- The P6-07 egress proxy was cut (above): T3 stays open. P6-03b was cut: with AI on, the rule explorer still drives every session.
+- Results, limitations and the hand-off to the Hosted deployment phase: `docs/qa/phase6-verification.md`.
 
 ### Phase 6 non-goals (deliberate)
 

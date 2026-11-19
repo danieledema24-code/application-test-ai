@@ -21,6 +21,8 @@ import { LONG, a11y, appears, noSideways, reloadUntil, signInMember } from "./jo
 test.describe.configure({ mode: "serial" });
 test.use({ actionTimeout: 60_000 });
 
+// The demo shop's host as the load-test dialog names it (default localhost:4100; follows E2E_SITE_URL).
+const SITE_HOST = new URL(SITE_URL).host;
 const API = `${(process.env.E2E_API_URL ?? "http://localhost:8200").replace(/\/+$/, "")}/api/v1`;
 const SECURITY_STATEMENT =
   "This is a passive check of what a normal visitor's browser receives. It is not a security audit or a penetration test, and no findings does not mean the site is secure.";
@@ -312,7 +314,7 @@ test("§16.3 Performance: member requests, approver types the host, live tiles, 
   const dlg = member.getByRole("dialog", { name: /^Request a load test/ });
   const summary = await dlg.getByTestId("load-summary").innerText();
   console.log(`[p5] request summary: ${summary}`);
-  expect.soft(summary).toBe("Up to 10 virtual users, at most 20 requests a second, for 45 seconds, against localhost:4100; GET only; not signed in.");
+  expect.soft(summary).toBe(`Up to 10 virtual users, at most 20 requests a second, for 45 seconds, against ${SITE_HOST}; GET only; not signed in.`);
   await expect.soft(dlg.getByRole("table", { name: "Limits" })).toBeVisible();
   await expect(dlg.getByRole("button", { name: "Approve and start load test" })).toHaveCount(0);
   await a11y(member, "Load test request dialog");
@@ -335,7 +337,7 @@ test("§16.3 Performance: member requests, approver types the host, live tiles, 
   await expect(approve).toBeVisible({ timeout: 30_000 });
   await expect(approve).toHaveAttribute("aria-disabled", "true");
   await expect.soft(page.getByText("Type localhost to approve.").first()).toBeVisible();
-  await page.getByLabel("Type localhost to approve").fill("localhost:4100");
+  await page.getByLabel("Type localhost to approve").fill(SITE_HOST); // the host with its port is not the host
   // aria-disabled: Playwright won't click it, a keyboard user can still press it (and must get the error).
   await approve.focus();
   await page.keyboard.press("Enter");

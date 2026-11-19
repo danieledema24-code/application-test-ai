@@ -79,3 +79,17 @@ DEMO_VERSION=2 DEMO_ACCESS_LOG=/tmp/demo-access.log npm start
 
 The test login and API token live in `demo-login.mjs`. Tests read them from there or from `DEMO_LOGIN_USER` /
 `DEMO_LOGIN_PASSWORD`; docs never copy them.
+
+### Phase 6 journey (P6-08)
+
+`web/e2e/phase6-journey.spec.ts` takes a fresh project through release 1 and release 2 of a **private** copy of the
+shop: it writes `1` or `2` into the shop's `DEMO_VERSION_FILE` (and always leaves `1`), and reads `DEMO_ACCESS_LOG` to
+check that only `GET`/`HEAD` reached the shop while the exploratory session ran. Never point it at the shared shop on
+:4100. A private stack, for example:
+
+```sh
+DEMO_PORT=4130 DEMO_VERSION_FILE=$TMP/version DEMO_ACCESS_LOG=$TMP/access.log npm start
+```
+
+The backend closing suite (`backend/tests/integration/test_p6_close.py`) starts its own copy the same way, saves the
+shop's test account to the project, and checks it never appears in a Phase 6 artefact, report or log.

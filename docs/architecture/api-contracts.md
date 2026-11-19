@@ -1674,6 +1674,11 @@ No migration: `report_type`s `completion` and `release_readiness` were in the en
 - File names: `{host}-release-readiness-REL-0002-{yyyy-mm-dd}.{ext}`, `{host}-test-completion-REL-0002-{yyyy-mm-dd}.{ext}`, `{host}-test-completion-current-{yyyy-mm-dd}.{ext}`. Every CSV/XLSX cell goes through the formula guard; people by name only; no credentials. Event `report.ready` (stage `release_readiness`).
 - Known limitations: the AI lessons check refuses digits and unknown keys only, so spelled-out numbers ("three of the four tests") pass. Report version numbers are the next number at creation time: two requests at the same moment can race (as for the other report types).
 
+### Phase 6 close (as built, P6-08)
+
+- No new endpoints. Every Phase 6 route is listed in `backend/tests/integration/test_p6_close.py` (`PHASE6_ROUTES`) and compared with the OpenAPI paths: another organisation gets 404 on each of them and on the earlier endpoints that serve Phase 6 objects (exploratory sessions as `quality-scans`, their findings, the drafts, scan 2, the regression run, both report types and their downloads, chains by CHG/EXP/HEAL/REL key). A signed evidence URL whose signature was made for another organisation, or whose expiry was changed or has passed, answers 403 "This link is invalid or has expired".
+- Not built in Phase 6: the egress proxy (P6-07, cut 2026-11-18), so `/health` keeps reporting `egress_proxy: "off"`; AI-guided exploration (P6-03b, cut 2026-11-18), so `exploratory_steps.chosen_by` is always `rules`; the Overview "Changes" glance card and the Discovery "Changed" badge (P6-06 web deviations).
+
 ## Later phases (outline)
 
 | Phase | Endpoints |
