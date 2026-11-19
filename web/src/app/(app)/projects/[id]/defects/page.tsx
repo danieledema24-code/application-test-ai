@@ -37,6 +37,7 @@ const SOURCE = [
   { value: "accessibility", label: "Accessibility" },
   { value: "security", label: "Security" },
   { value: "performance", label: "Performance" },
+  { value: "exploratory", label: "Exploratory" },
 ];
 const PRIORITY = [{ value: "", label: "Any" }, ...["critical", "high", "medium", "low"].map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }))];
 

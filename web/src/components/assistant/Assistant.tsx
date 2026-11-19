@@ -50,6 +50,13 @@ export const TASKS: TaskDef[] = [
   { id: "tests_pass", label: "Did the tests pass?", hint: "The latest run, its failures and their likely causes", intent: "execution_results", group: "no_ai" },
   { id: "explain_failed", label: "Explain a failed test", hint: "Cause, signals, expected vs actual, defect", intent: "explain_failed_test", group: "no_ai" },
   { id: "analyse_defect", label: "Analyse a defect", hint: "Fields, occurrences, links and what's needed to verify it", intent: "analyse_defect", group: "no_ai" },
+  // Phase 6 (design P6 §12.3): changes, repairs, exploration and release readiness, all from stored rows.
+  { id: "changed", label: "What changed?", hint: "The latest change set", intent: "what_changed", group: "no_ai" },
+  { id: "impact", label: "What does the change affect?", intent: "impact_summary", group: "no_ai" },
+  { id: "regression_run", label: "Propose a regression run", hint: "Creates a run request; Gate 7 still decides", intent: "propose_regression_run", group: "no_ai" },
+  { id: "explain_heal", label: "Explain a repair suggestion", hint: "Its signals in words; accept it on the repair card", intent: "explain_heal", group: "no_ai" },
+  { id: "explore", label: "Explore new and changed pages", hint: "Safe clicks only; signed-in needs approval", intent: "propose_exploration", group: "no_ai" },
+  { id: "release", label: "Can we release?", hint: "The latest assessment, with its evidence", intent: "release_readiness_summary", group: "no_ai" },
   { id: "rerun", label: "Re-run failed tests", hint: "Creates a run request; Gate 7 still decides", intent: "propose_rerun", group: "no_ai" },
   { id: "nf_perf", label: "Is the site fast enough?", hint: "The latest load test against its thresholds", intent: "performance_summary", group: "no_ai" },
   { id: "nf_a11y", label: "Can everyone use the site?", hint: "Open accessibility findings from the latest check", intent: "accessibility_summary", group: "no_ai" },
@@ -73,9 +80,11 @@ export const TASKS: TaskDef[] = [
   { id: "ask", label: "Ask anything about this project", intent: null, group: "ai" },
 ];
 
+/** Design P6 §4.6 / §12.3: what is left after Phase 6 (the API sends the same list). */
 export const LATER_TASKS_FALLBACK: { label: string; available_from_phase: number; needs: string }[] = [
-  { label: "Release readiness and Test Completion Report", available_from_phase: 6, needs: "Phase 6" },
-  { label: "What changed since the last scan", available_from_phase: 6, needs: "Phase 6" },
+  { label: "Hosted deployment (Postgres, Redis, file storage, container sandbox)", available_from_phase: 7, needs: "the Hosted deployment phase" },
+  { label: "API testing", available_from_phase: 7, needs: "a later phase" },
+  { label: "Word (DOCX) reports", available_from_phase: 7, needs: "a later phase" },
 ];
 
 type TaskData = {
@@ -103,6 +112,8 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
   const [failedKey, setFailedKey] = useState(ctxFailed);
   const [defectKey, setDefectKey] = useState(ctxDefect);
   const [findingKey, setFindingKey] = useState(data.context?.type === "quality_finding" ? data.context.key : "");
+  const [healKey, setHealKey] = useState("");
+  const [signedIn, setSignedIn] = useState(false);
   const [caseKey, setCaseKey] = useState(ctxCase);
   const [caseKeys, setCaseKeys] = useState<string[]>(ctxCase ? [ctxCase] : []);
   const [target, setTarget] = useState(ctxReq ? `req:${ctxReq}` : "");
@@ -188,6 +199,28 @@ function TaskForm({ task, data, onRun, busy, aiOn, onAsk }: { task: TaskDef; dat
       );
     case "rerun":
       return runBtn("Propose a run request", () => run("propose_rerun", { only_failed: true }, "Re-run the failed tests"));
+    case "changed":
+      return runBtn("Check now", () => run("what_changed", {}, "What changed?"));
+    case "impact":
+      return runBtn("Check now", () => run("impact_summary", {}, "What does the change affect?"));
+    case "regression_run":
+      return runBtn("Propose a run request", () => run("propose_regression_run", {}, "Propose a regression run"));
+    case "release":
+      return runBtn("Check now", () => run("release_readiness_summary", {}, "Can we release?"));
+    case "explain_heal":
+      return (
+        <div className="space-y-2">
+          <TextField id={`task-${task.id}-first`} label="Repair suggestion" hint="For example HEAL-0001" value={healKey} onChange={(e) => setHealKey(e.target.value.toUpperCase())} />
+          {runBtn("Explain", () => run("explain_heal", { key: healKey.trim() }, `Explain ${healKey.trim()}`), !/^HEAL-\d{2,}$/.test(healKey.trim()))}
+        </div>
+      );
+    case "explore":
+      return (
+        <div className="space-y-2">
+          <Checkbox id={`task-${task.id}-first`} label="Explore signed in" description="Uses the saved test account; someone who can approve must approve it" checked={signedIn} onChange={(e) => setSignedIn(e.target.checked)} />
+          {runBtn("Propose exploring", () => run("propose_exploration", signedIn ? { signed_in: true } : {}, signedIn ? "Explore new and changed pages signed in" : "Explore new and changed pages"))}
+        </div>
+      );
     case "nf_perf":
       return runBtn("Check now", () => run("performance_summary", {}, "Is the site fast enough?"));
     case "nf_a11y":
@@ -546,9 +579,7 @@ export function AssistantTaskList({
               <Circle className="mt-1 h-3 w-3 shrink-0" aria-hidden />
               <span>
                 <span className="block text-fg">{t.label}</span>
-                <span className="block text-small">
-                  Available in Phase {t.available_from_phase}: needs {t.needs}
-                </span>
+                <span className="block text-small">Not available yet: needs {t.needs}</span>
               </span>
             </li>
           ))}

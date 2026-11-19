@@ -451,18 +451,19 @@ test.describe("Phase 5 · overview, lifecycle and header", () => {
     await expect(row.getByRole("link")).toHaveCount(0);
   });
 
-  test("before Gate 2 the optional rows read 'Available after Gate 2'; after it, 'Not run yet' and Reporting is Phase 6 (checks 2, 3)", async ({ page }) => {
+  test("before Gate 2 the optional rows read 'Available after Gate 2'; after it, 'Not run yet' and Reporting is available after the first test run (checks 2, 3; P6-05b)", async ({ page }) => {
     await setup(page, { g2: false, g4: false, scans: [], findings: [], runs: [] });
     await page.goto("/projects/p1");
     const optional = page.getByRole("region", { name: "Optional checks · any time after Gate 2" });
-    await expect(optional.getByText("Available after Gate 2")).toHaveCount(3);
+    // P6-03c adds the Exploratory testing row (design P6 §4.3).
+    await expect(optional.getByText("Available after Gate 2")).toHaveCount(4);
     await expect(optional.getByRole("link")).toHaveCount(0);
     await expect(page.getByText("Available after Gate 2.")).toBeVisible();
     await setup(page, { scans: [], findings: [], runs: [] });
     await page.goto("/projects/p1");
     await expect(page.getByRole("region", { name: "Optional checks · any time after Gate 2" }).getByText("Not run yet")).toHaveCount(3);
     await expect(page.getByText("Not checked yet.")).toHaveCount(3);
-    await expect(page.getByRole("list", { name: "QA lifecycle" }).getByText("Phase 6").first()).toBeVisible();
+    await expect(page.getByRole("list", { name: "QA lifecycle" }).getByText("Available after the first test run").first()).toBeVisible();
   });
 });
 
@@ -501,7 +502,8 @@ test.describe("Phase 5 · defects, traceability, assistant and settings", () => 
     await setup(page);
     await page.goto("/projects/p1/defects");
     const source = page.getByLabel("Source");
-    await expect(source.locator("option")).toHaveText(["Any", "Functional", "Accessibility", "Security", "Performance"]);
+    // P6-03c (design P6 §9.8) adds Exploratory.
+    await expect(source.locator("option")).toHaveText(["Any", "Functional", "Accessibility", "Security", "Performance", "Exploratory"]);
     await expect(page.getByRole("table", { name: "Defects" }).getByText("Accessibility", { exact: true }).first()).toBeVisible();
     const req = page.waitForRequest((r) => r.url().includes("/projects/p1/defects?") && r.url().includes("source=accessibility"));
     await source.selectOption("accessibility");
@@ -584,7 +586,7 @@ test.describe("Phase 5 · defects, traceability, assistant and settings", () => 
     expect(await axe(page)).toEqual([]);
   });
 
-  test("assistant v4: non-functional chips work without AI, Later phases are Phase 6 only, load test proposal is a request (check 32)", async ({ page }) => {
+  test("assistant v4: non-functional chips work without AI, Later phases are phase 7+ only, load test proposal is a request (check 32)", async ({ page }) => {
     await setup(page);
     const messages: unknown[] = [];
     // The thread is read with ?limit=50: match on the path so every reload returns the posted turn.
@@ -623,9 +625,10 @@ test.describe("Phase 5 · defects, traceability, assistant and settings", () => 
     for (const label of ["Is the site fast enough?", "Can everyone use the site?", "Is the site missing basic protections?", "Explain a finding", "Plan a load test"])
       await expect(noAi.getByRole("button", { name: new RegExp(label.replace(/[?]/g, "\\?")) })).toBeVisible();
     const later = tasks.locator("section").filter({ has: page.getByRole("heading", { name: "Later phases" }) });
-    await expect(later.getByText("Release readiness and Test Completion Report")).toBeVisible();
-    await expect(later.getByText("What changed since the last scan")).toBeVisible();
-    await expect(later.getByText(/Phase [2-5]/)).toHaveCount(0);
+    // P6-06 built the Phase 6 tasks; only phase 7+ items remain.
+    await expect(later.getByText("API testing")).toBeVisible();
+    await expect(later.getByText("What changed since the last scan")).toHaveCount(0);
+    await expect(later.getByText(/Phase [2-6]/)).toHaveCount(0);
     await noAi.getByRole("button", { name: /Plan a load test/ }).click();
     await noAi.getByRole("button", { name: "Propose a load test" }).click();
     const card = page.getByRole("region", { name: /Proposal · Create load test request/ });

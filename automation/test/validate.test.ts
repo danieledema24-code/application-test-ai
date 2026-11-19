@@ -55,6 +55,16 @@ test("a clean bundle passes guard, tsc, eslint and tags", async () => {
   assert.deepEqual(spec.tags.keys, ["TC-0007"]);
 });
 
+test("D36: a field check through the page object's locator is valid, like the label form older scripts use", async () => {
+  const spec = CLEAN_SPEC.replace('qa.expectFieldFlagged("Message")', 'qa.expectFieldFlagged(contact.message, "Message")');
+  const dir = await workspace("d36", { "pages/ContactPage.ts": CONTACT_PAGE, "tests/contact/TC-0007.spec.ts": spec });
+  dirs.push(dir);
+  const r = await cli(["validate", "--dir", dir]);
+  assert.equal(r.code, 0, r.stdout);
+  const out = r.json.files["tests/contact/TC-0007.spec.ts"];
+  for (const check of ["guard", "tsc", "eslint", "tags"]) assert.equal(out[check].ok, true, `${check}: ${JSON.stringify(out[check])}`);
+});
+
 test("waitForTimeout is an eslint error and makes the file invalid", async () => {
   const waits = CLEAN_SPEC.replace('await contact.message.fill("");', 'await contact.message.fill("");\n    await page.waitForTimeout(500);');
   const dir = await workspace("waits", { "pages/ContactPage.ts": CONTACT_PAGE, "tests/contact/TC-0007.spec.ts": waits });

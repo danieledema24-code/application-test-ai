@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.readiness.rules import Facts, evaluate, nf_rule_for, stamp
+from app.agents.readiness.rules import Facts, evaluate, stamp, text_rule_for
 from app.db.models import (
     AcceptanceCriterion,
     ProjectSecret,
@@ -90,7 +90,61 @@ async def load_facts(s: AsyncSession, project_id: uuid.UUID) -> Facts:
     ]
     await _phase3_facts(s, project_id, reqs, acs, facts)
     await _nf_facts(s, project_id, facts)
+    await _regression_facts(s, project_id, facts)
     return facts
+
+
+async def _regression_facts(s: AsyncSession, project_id: uuid.UUID, facts: Facts) -> None:
+    """P6-06: the latest rescan change set's must-run tests and whether each has a result from a run created after the
+    change (or, for a manual test, a recorded re-test; D37). The same rule as `rr.impacted_rerun`."""
+    from app.db.models import ExecutionResult, ExecutionRun
+    from app.services import impact as impact_svc
+    from app.services import release as rsvc
+    from app.services.execution import NOT_RESULTS
+    from app.services.traceability import rescan_sets
+
+    sets = await rescan_sets(s, project_id)
+    if not sets:
+        return
+    cs = sets[-1]
+    rec = await impact_svc.recommendation_view(s, cs, can_request=False)
+    data: dict[str, Any] = {"change_set": cs.key, "reason": None, "must": [], "pending": [], "manual_pending": [],
+                            "runs": []}  # fmt: skip
+    facts.regression = data
+    if not rec.get("available"):
+        data["reason"] = str(rec.get("reason") or "the comparison has no recommendation yet")
+        return
+    musts = list(rec.get("must") or [])
+    data["must"] = [str(p["key"]) for p in musts]
+    lineages = [uuid.UUID(str(p["case_lineage_id"])) for p in musts]
+    ran: dict[str, set[str]] = {}
+    if lineages:
+        rows = (
+            await s.execute(
+                select(ExecutionResult.case_lineage_id, ExecutionResult.status, ExecutionResult.error, ExecutionRun.key)
+                .join(ExecutionRun, ExecutionRun.id == ExecutionResult.execution_run_id)
+                .where(
+                    ExecutionResult.project_id == project_id,
+                    ExecutionResult.case_lineage_id.in_(lineages),
+                    ExecutionRun.created_at >= cs.created_at,
+                )
+            )
+        ).all()
+        for row_lin, st, err, run_key in rows:
+            if st in rsvc.RAN_STATUSES and (err or "") not in NOT_RESULTS:
+                ran.setdefault(str(row_lin), set()).add(str(run_key))
+    by_hand = {str(k) for k in (await rsvc.latest_manual_retests(s, cs.id))}
+    runs: set[str] = set()
+    for p in musts:
+        must_lin = str(p["case_lineage_id"])
+        if must_lin in ran:
+            runs |= ran[must_lin]
+        elif p.get("not_runnable_reason") == impact_svc.MUST_MANUAL:
+            if must_lin not in by_hand:
+                data["manual_pending"].append(str(p["key"]))
+        else:
+            data["pending"].append(str(p["key"]))
+    data["runs"] = sorted(runs)
 
 
 async def _nf_facts(s: AsyncSession, project_id: uuid.UUID, facts: Facts) -> None:
@@ -205,8 +259,8 @@ async def _phase3_facts(
 
 def evaluate_row(row: ReadinessCriterion, facts: Facts, *, requirement_id: str | None = None) -> dict[str, Any] | None:
     # P5-07: a DoD item about accessibility, security or performance is evaluated from the latest checks even
-    # without a coded rule (a person wrote it, or a template mentions it).
+    # without a coded rule (a person wrote it, or a template mentions it). P6-06: so is one about regression.
     rule = row.check_rule_id
     if rule is None:
-        rule = nf_rule_for(row.kind, row.text)
+        rule = text_rule_for(row.kind, row.text)
     return stamp(evaluate(rule, facts, requirement_id=requirement_id), row.key)

@@ -11,6 +11,9 @@ from typing import Literal
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.exploratory.limits import COMPILED_MAX as EXPLORE_COMPILED_MAX
+from app.domain.exploratory.limits import Budget
+from app.domain.exploratory.limits import cap_violations as explore_cap_violations
 from app.domain.performance.limits import DEFAULT_HARD_CAP, LoadLimits, cap_violations
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -60,6 +63,10 @@ class Settings(BaseSettings):
     load_hard_cap_vus: int = DEFAULT_HARD_CAP.vus
     load_hard_cap_rps: int = DEFAULT_HARD_CAP.rps
     load_hard_cap_duration_s: int = DEFAULT_HARD_CAP.duration_s
+    # Phase 6 (P6-03a, decision D30): platform cap on one exploratory session. Startup is refused above the compiled
+    # maximum (app.domain.exploratory.limits.COMPILED_MAX, 200 actions / 20 minutes).
+    explore_max_actions: int = EXPLORE_COMPILED_MAX.actions
+    explore_max_minutes: int = EXPLORE_COMPILED_MAX.minutes
 
     # Discovery limits (lead decisions: default 30 / max 100 pages, 20 min, 2 concurrent per org).
     scan_default_max_pages: int = 30
@@ -109,6 +116,9 @@ class Settings(BaseSettings):
         issues = cap_violations(self.load_hard_cap)
         if issues:
             raise ValueError("; ".join(v.message for v in issues))
+        explore = explore_cap_violations(self.explore_cap)
+        if explore:
+            raise ValueError("; ".join(explore))
         return self
 
     @property
@@ -116,6 +126,10 @@ class Settings(BaseSettings):
         return LoadLimits(
             vus=self.load_hard_cap_vus, rps=self.load_hard_cap_rps, duration_s=self.load_hard_cap_duration_s
         )
+
+    @property
+    def explore_cap(self) -> Budget:
+        return Budget(actions=self.explore_max_actions, minutes=self.explore_max_minutes)
 
     def encryption_key_bytes(self) -> bytes:
         if self.encryption_key is not None:

@@ -100,6 +100,10 @@ def path(project_id: uuid.UUID, kind: str, key: str) -> str:
         "performance_profile": f"{base}/non-functional/profiles/{key}",
         "performance_run": f"{base}/non-functional/load-tests/{key}",
         "threshold_result": f"{base}/non-functional/load-tests/{key.split('·')[0].strip()}",
+        # Phase 6 (P6-06): change sets, exploratory sessions and release assessments.
+        "change_set": f"{base}/discovery/changes/{key}",
+        "exploratory_session": f"{base}/execution/exploratory/{key}",
+        "release_assessment": f"{base}/release-readiness/{key}",
     }.get(kind, base)
 
 

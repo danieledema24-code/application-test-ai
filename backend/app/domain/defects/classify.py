@@ -72,6 +72,15 @@ class FailureInput:
     history: list[tuple[int | None, str]] = field(default_factory=list)  # (script version, status), newest first
     script_version: int | None = None
     page_path: str | None = None  # the page the failed step is on, when known
+    # P6-04 (QA): repair suggestions that concern this script now, in words ("HEAL-0001 accepted: getByLabel(…) →
+    # getByLabel(…)"), shown as context; `repaired` holds those whose element the failed check itself goes through.
+    # `proven`: repairs the failed check goes through but that the case has passed with since (QA P6-04 R3): the
+    # repair works, so a failure through it is read like any other. `repairs` holds the rest (not in this check).
+    # `page_changed_by`: the rescan change set that changed the failed page ("CHG-0001 changed /contact").
+    repairs: list[str] = field(default_factory=list)
+    repaired: list[str] = field(default_factory=list)
+    proven: list[str] = field(default_factory=list)
+    page_changed_by: str | None = None
 
 
 @dataclass
@@ -320,6 +329,41 @@ def classify(f: FailureInput) -> Analysis:
                     ["screenshot", "video"],
                 )
             )
+        # 7a. Test maintenance (P6-04): the failed check goes through an element a repair just changed (or one still
+        # waiting) and the case hasn't passed since, and the page doesn't show the opposite outcome (a confirmation
+        # where a block was expected): the repair, not the application, is the likely cause. Repairs elsewhere in the
+        # script, and repairs the case has passed with since, are context only.
+        success_shown = bool(
+            re.search(r"block the submission|still be shown|not be accepted", first, re.I)
+            and (
+                SUCCESS.search(shown)
+                or SUCCESS.search(shown_msgs)
+                or ("but the page shows" in first and SUCCESS.search(first.split("but the page shows", 1)[1]))
+            )
+        )
+        if f.repaired and not success_shown:
+            return Analysis(
+                "script_defect",
+                "medium",
+                [_sig("repair_context", r) for r in f.repaired[:3]]
+                + [_sig("assertion_failed", first or "A check failed")],
+                "The check that failed goes through an element a repair just changed, or one still waiting for a "
+                "repair. The test may need maintenance; this is not read as a bug in the application.",
+                [
+                    "The repair found an element that looks right but isn't",
+                    "The application changed on purpose, so the test case's expected result is out of date",
+                ],
+                ["Review the repair suggestions listed above", "Check the test case's expected result, then re-run"],
+            )
+        for r in f.repaired[:3] if success_shown else []:
+            signals.append(_sig("repair_context", f"The page shows the confirmation the check expected blocked: {r}"))
+        for r in f.proven[:3]:
+            signals.append(_sig("repair_context", f"The test passed after this repair: {r}"))
+        for r in f.repairs[:3]:
+            signals.append(_sig("repair_context", f"Not involved in this check: {r}"))
+        if f.page_changed_by:
+            # Context for a person; a defect that is still there keeps being linked (QA P6-04 R2).
+            signals.append(_sig("page_changed", f.page_changed_by, ["change_set"]))
         if every and len(attempts) > 1:
             signals.append(_sig("failed_every_attempt", f"It failed on all {len(attempts)} attempts"))
         elif every:

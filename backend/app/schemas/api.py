@@ -28,6 +28,8 @@ StageKeyT = Literal[
     "performance",
     "accessibility",
     "security_assessment",
+    "change_analysis",
+    "exploratory",
 ]
 StageStatusT = Literal[
     "not_started",
@@ -379,6 +381,8 @@ class GateState(BaseModel):
     preconditions: list[dict[str, Any]] = []
     # G3/G4: items added, changed or removed since the last approval (0 when never approved).
     changes_since_approval: int = 0
+    # P6-01 (G2 only): any scan of the project was approved at G2, so a rescan is compared with it.
+    ever_approved: bool = False
 
 
 class StageProgress(BaseModel):
@@ -550,6 +554,10 @@ class ScanSummary(BaseModel):
     stage_run_version: int | None = None
     created_at: datetime | None = None
     is_latest: bool = False
+    # P6-01: a rescan, the scan it is compared with (D25), and whether this scan was approved at G2.
+    is_rescan: bool = False
+    baseline_number: int | None = None
+    g2_approved: bool = False
 
 
 class InjectionFlag(BaseModel):
@@ -761,19 +769,27 @@ class KnowledgeItemOut(BaseModel):
 class ReportCreate(Req):
     report_type: Literal[
         "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect",
-        "performance", "accessibility", "security",
+        "performance", "accessibility", "security", "completion", "release_readiness",
     ]  # fmt: skip
     scan_id: uuid.UUID | None = None
     stage_run_version: int | None = None
     # P4-11: the run a Test Execution Report covers; omitted = "latest result per test case".
     # P5-04a: also the load test (PERF-…) or check (A11Y-…, SEC-…) of a non-functional report; omitted = the latest.
+    # P6-05c: the release assessment (REL-…) of a Release Readiness or Test Completion Report; omitted = the latest.
     run_key: str | None = Field(default=None, max_length=40)
+    # P6-05c, Test Completion Report only: from an assessment (default) or current data, and the lessons learned
+    # (a person's text, or AI text the person kept unedited: `lessons_generated_by` "ai").
+    basis: Literal["assessment", "current"] | None = None
+    lessons_learned: str | None = Field(default=None, max_length=4000)
+    lessons_generated_by: Literal["person", "ai"] | None = None
+    # The token the lessons-suggestion endpoint returned with its text: "ai" is only accepted with it, unedited.
+    lessons_token: str | None = Field(default=None, max_length=200)
 
     @classmethod
     def allowed_types(cls) -> set[str]:
         return {
             "discovery", "requirements_spec", "test_strategy", "test_plan", "test_case_spec", "rtm", "execution", "defect",
-            "performance", "accessibility", "security",
+            "performance", "accessibility", "security", "completion", "release_readiness",
         }  # fmt: skip
 
 

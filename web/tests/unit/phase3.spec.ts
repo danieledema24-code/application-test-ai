@@ -444,7 +444,7 @@ test.describe("traceability (design P3 §14)", () => {
     expect(tiles[0]).toMatchObject({ label: "Requirements covered", value: "18 of 22" });
     expect(tiles.find((t) => t.id === "orphans")).toMatchObject({ value: "2", warn: true, href: "/c?no_req=1" });
     expect(tiles.find((t) => t.id === "exec")).toMatchObject({ value: "Not available", unavailable: true });
-    expect(gapCounts(NO_GAPS)).toEqual({ execution: 0, failed: 0, flaky: 0, outdated: 0, regression: 0, requirements: 0, orphans: 0, risks: 0, acs: 0, features: 0, nf_open: 0, nf_pages: 0, nf_without: 0 });
+    expect(gapCounts(NO_GAPS)).toEqual({ execution: 0, failed: 0, flaky: 0, outdated: 0, regression: 0, requirements: 0, orphans: 0, risks: 0, acs: 0, features: 0, nf_open: 0, nf_pages: 0, nf_without: 0, impacted: 0, new_pages: 0 });
   });
 
   test("matrix filters round-trip and map to the API query with a page size of 50", () => {

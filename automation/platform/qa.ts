@@ -71,6 +71,12 @@ export interface NamedForm {
 }
 export type FormRef = Locator | string | NamedForm;
 
+/**
+ * A field: the page object's Locator (decision D36: the check follows the locator, so repairing the locator repairs
+ * the check; what is checked never changes), or its label (found by label, then placeholder; older scripts).
+ */
+export type FieldRef = Locator | string;
+
 function isNamed(form: FormRef): form is NamedForm {
   return typeof form === "object" && "locator" in form && "name" in form;
 }
@@ -94,6 +100,10 @@ export class Qa {
       .getByLabel(label, { exact: true })
       .or(this.page.getByPlaceholder(label, { exact: true }))
       .first();
+  }
+
+  private fieldOf(field: FieldRef): Locator {
+    return typeof field === "string" ? this.field(field) : field;
   }
 
   async fill(label: string, value: string): Promise<void> {
@@ -141,18 +151,23 @@ export class Qa {
     }
   }
 
-  /** The control has a native :invalid state, aria-invalid="true", or a visible error names its label. */
-  async expectFieldFlagged(label: string): Promise<void> {
+  /**
+   * The control has a native :invalid state, aria-invalid="true", or a visible error names it. `field` is the page
+   * object's locator (or a label); `label` is the name people read, used in the message and to match an error text.
+   */
+  async expectFieldFlagged(field: FieldRef, label?: string): Promise<void> {
     await this.settle();
-    const field = this.field(label);
+    const name = label ?? (typeof field === "string" ? field : "the field");
+    const control = this.fieldOf(field);
     await this.until(async () => {
-      const own = await field
+      const own = await control
         .evaluate((el) => el.matches(":invalid") || el.getAttribute("aria-invalid") === "true")
         .catch(() => false);
       if (own) return true;
-      const named = this.page.locator(MESSAGE_SELECTOR).filter({ hasText: new RegExp(escapeRe(label), "i") });
+      if (label === undefined && typeof field !== "string") return false;
+      const named = this.page.locator(MESSAGE_SELECTOR).filter({ hasText: new RegExp(escapeRe(name), "i") });
       return (await named.count()) > 0 && (await named.first().isVisible());
-    }, `Expected ${label} to be identified as needing attention (invalid or required)`);
+    }, `Expected ${name} to be identified as needing attention (invalid or required)`);
   }
 
   /** The submission went through: a confirmation is shown (optionally `text`), or the form went away. */
@@ -190,13 +205,14 @@ export class Qa {
     }, "Expected not to be signed in");
   }
 
-  /** The field holds exactly `n` characters (or at most `n` with `{ atMost: true }`). */
-  async expectFieldLength(label: string, n: number, options: { atMost?: boolean } = {}): Promise<void> {
-    const field = this.field(label);
+  /** The field holds exactly `n` characters (or at most `n` with `{ atMost: true }`); `field` as for expectFieldFlagged. */
+  async expectFieldLength(field: FieldRef, n: number, options: { atMost?: boolean } = {}, label?: string): Promise<void> {
+    const name = label ?? (typeof field === "string" ? field : "the field");
+    const control = this.fieldOf(field);
     await this.until(async () => {
-      const length = await field.evaluate((el) => (el as HTMLInputElement).value.length);
+      const length = await control.evaluate((el) => (el as HTMLInputElement).value.length);
       return options.atMost ? length <= n : length === n;
-    }, `Expected ${label} to hold ${options.atMost ? "at most " : ""}${n} characters`);
+    }, `Expected ${name} to hold ${options.atMost ? "at most " : ""}${n} characters`);
   }
 
   /** A button (or link) named `name` is visible and enabled. */

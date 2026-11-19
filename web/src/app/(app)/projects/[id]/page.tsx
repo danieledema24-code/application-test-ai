@@ -7,7 +7,7 @@ import { ArrowRight } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { Page, Proposal, Risk, ScanDetail, SecretMeta } from "@/lib/contract";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format";
 import { activeStage, gateReview, waitingLabel } from "@/lib/lifecycle";
 import { LEVEL_TEXT } from "@/lib/strategy";
 import { attentionRows } from "@/lib/attention";
@@ -24,6 +24,11 @@ import { useProject } from "@/components/workspace/ProjectContext";
 import { useExecSummary } from "@/components/execution/hooks";
 import { lastRunLine, type ExecSummary } from "@/lib/execution";
 import { g6StatusText, type AutomationOverview } from "@/lib/automation";
+import { releaseReachable, useReleaseOverview } from "@/components/release/hooks";
+import { ReleaseGlance } from "@/components/workspace/OverviewRelease";
+import { ChangedBanner } from "@/components/workspace/OverviewChanged";
+import { exploreAttentionRows, exploreGlanceLine, exploreReachable } from "@/lib/exploratory";
+import { useSessions } from "@/components/exploratory/hooks";
 
 /** The Automation overview, only once scripts exist (same SWR key as the Automation page). */
 function useAutomation(projectId: string, wf: ReturnType<typeof useProject>["workflow"]) {
@@ -143,6 +148,8 @@ function Attention() {
   const secrets = useApi<SecretMeta[]>(`/projects/${p.id}/secrets`, undefined, { shouldRetryOnError: false });
   const cred = secrets.data?.find((x) => x.name === "scan_credentials" || x.kind === "login_credentials");
   const nf = useNfOverview(p.id, p.workflow);
+  const release = useReleaseOverview(p.id, releaseReachable(p.workflow));
+  const sessions = useSessions(p.id, exploreReachable(p.workflow));
   const rows = attentionRows({
     projectId: p.id,
     wf: p.workflow,
@@ -156,7 +163,13 @@ function Attention() {
     scripts: automation.data?.bundle ? scriptCounts(automation.data) : null,
     viewer: role === "viewer" || role === null,
     // Phase 5 (design P5 §4.5): load tests waiting or missed, severe accessibility findings, out-of-date checks.
-    nonFunctional: nfAttentionRows(nf.overview, p.id, canApprove, role === "viewer" || role === null),
+    nonFunctional: [
+      ...nfAttentionRows(nf.overview, p.id, canApprove, role === "viewer" || role === null),
+      // Phase 6 (design P6 §4.5): a signed-in exploratory session waiting for approval, then recent findings.
+      ...exploreAttentionRows(sessions.data, `/projects/${p.id}`, canApprove, role === "viewer" || role === null),
+    ],
+    // Phase 6 (design P6 §4.5): the release assessment waiting for Gate 9 or out of date, after the run rows.
+    release: release.data?.latest ?? null,
   });
   const shown = all ? rows : rows.slice(0, 5);
   return (
@@ -391,6 +404,26 @@ function LastRunGlance({ exec }: { exec: ExecSummary | null }) {
   );
 }
 
+/** Exploratory at a glance (design P6 §4.5): the latest session's findings and blocked write attempts. */
+function ExploratoryGlance() {
+  const p = useProject();
+  const g2 = exploreReachable(p.workflow);
+  const sessions = useSessions(p.id, g2);
+  // Only after Gate 2: before it the lifecycle's optional row already says "Available after Gate 2".
+  if (!g2) return null;
+  return (
+    <Card>
+      <CardHeader title="Exploratory testing" />
+      <CardBody className="space-y-1 text-body text-fg">
+        {!sessions.data ? <p className="text-fg-muted">Loading…</p> : <p className="[overflow-wrap:anywhere]">{exploreGlanceLine(sessions.data, fmtDate)}</p>}
+        <Link href={`/projects/${p.id}/execution?tab=exploratory`} className="mt-3 inline-flex items-center gap-1 font-medium text-navy-700 hover:underline">
+          Open Exploratory <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      </CardBody>
+    </Card>
+  );
+}
+
 function DefectsGlance({ exec }: { exec: ExecSummary | null }) {
   const p = useProject();
   const g5 = gateApproved(requirementsStages(p.workflow).g5);
@@ -427,9 +460,11 @@ export default function ProjectOverviewPage() {
     "test-design": `/projects/${p.id}/test-cases?view=review`,
     automation: `/projects/${p.id}/automation?view=review`,
     defects: `/projects/${p.id}/defects?view=review`,
+    reporting: `/projects/${p.id}/release-readiness#gate-9`,
   };
   const exec = useExecSummary(p.id, p.workflow);
   const nf = useNfOverview(p.id, p.workflow);
+  const sessions = useSessions(p.id, exploreReachable(p.workflow));
   const { canApprove } = useAuth();
   if (exec?.waiting[0]) stageHref.execution = `/projects/${p.id}/execution/${exec.waiting[0]}`;
   useEffect(() => {
@@ -437,6 +472,7 @@ export default function ProjectOverviewPage() {
   }, [p.project]);
   return (
     <div className="space-y-6">
+      <ChangedBanner />
       <Card>
         <CardHeader title="QA lifecycle" />
         <CardBody>
@@ -456,7 +492,7 @@ export default function ProjectOverviewPage() {
           ) : (
             <Skeleton className="h-16" />
           )}
-          {p.workflow && <OptionalChecks projectId={p.id} g2={nf.g2} overview={nf.overview} canApprove={canApprove} />}
+          {p.workflow && <OptionalChecks projectId={p.id} g2={nf.g2} overview={nf.overview} canApprove={canApprove} explore={{ g2: exploreReachable(p.workflow), list: sessions.data }} />}
         </CardBody>
       </Card>
       <div className="grid gap-6 lg:grid-cols-3">
@@ -481,7 +517,9 @@ export default function ProjectOverviewPage() {
           <AutomationGlance />
           <LastRunGlance exec={exec} />
           <DefectsGlance exec={exec} />
+          <ReleaseGlance />
           <NonFunctionalGlance projectId={p.id} g2={nf.g2} overview={nf.overview} />
+          <ExploratoryGlance />
           <Scope />
         </div>
       </div>

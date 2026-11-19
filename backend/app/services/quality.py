@@ -57,9 +57,23 @@ from app.services.audit import audit
 from app.services.counters import next_key
 
 QUALITY_GROUP = "scan"  # checks share discovery's browser budget per organisation
-STAGE = {QualityScanKind.accessibility: StageKey.accessibility, QualityScanKind.security: StageKey.security_assessment}
-COUNTER = {QualityScanKind.accessibility: "a11y_scan", QualityScanKind.security: "security_scan"}
-WHAT = {QualityScanKind.accessibility: "An accessibility check", QualityScanKind.security: "A security check"}
+STAGE = {
+    QualityScanKind.accessibility: StageKey.accessibility,
+    QualityScanKind.security: StageKey.security_assessment,
+    QualityScanKind.exploratory: StageKey.exploratory,  # P6-00: sessions are quality scans (P6-03a)
+}
+COUNTER = {
+    QualityScanKind.accessibility: "a11y_scan",
+    QualityScanKind.security: "security_scan",
+    QualityScanKind.exploratory: "exploratory_session",
+}
+WHAT = {
+    QualityScanKind.accessibility: "An accessibility check",
+    QualityScanKind.security: "A security check",
+    QualityScanKind.exploratory: "An exploratory session",
+}
+# The two Phase 5 non-functional check kinds (the Non-functional workspace); exploration lives in Test Execution.
+NF_KINDS = (QualityScanKind.accessibility, QualityScanKind.security)
 ACTIVE = (QualityScanStatus.queued, QualityScanStatus.running)
 SECONDS_PER_PAGE = 10
 ROOT_CAUSE = "Not analysed. Automated checks measure what happens, not why."
@@ -307,6 +321,14 @@ async def add_finding(
             "category",
             "why",
             "fix",
+            # Exploratory findings (P6-03a): steps to reproduce, the step numbers, redacted console and network lines.
+            "steps",
+            "step",
+            "steps_seen",
+            "console",
+            "network",
+            "action",
+            "group",
         )
     }
     f = QualityFinding(
@@ -513,6 +535,10 @@ async def triage(s: AsyncSession, f: QualityFinding, user: User, *, status: str,
         project_id=f.project_id,
         metadata={"key": f.key, "status": new.value},
     )
+    # P6-05a: triage changes the evidence an assessment waiting for G9 was based on.
+    from app.services.release import mark_stale
+
+    await mark_stale(s, f.project_id, f"{f.key} was {TRIAGE_WORDS[new]}")
     return f"{f.key} {TRIAGE_WORDS[new]}."
 
 
@@ -522,6 +548,10 @@ async def raise_defect(s: AsyncSession, project: Project, f: QualityFinding, use
     if f.defect_id is not None:
         d = await s.get(Defect, f.defect_id)
         raise Conflict(f"{f.key} is already linked to {d.key if d else 'a defect'}")
+    if f.kind == QualityScanKind.exploratory:
+        from app.services.exploratory import raise_defect as explore_defect
+
+        return await explore_defect(s, project, f, user)
     scan = await s.get(QualityScan, f.scan_id)
     assert scan is not None
     fs = [f]
@@ -602,6 +632,10 @@ async def mark_findings_for_rejected(s: AsyncSession, d: Defect, user: User, com
 
 
 def status_label(scan: QualityScan) -> str:
+    if scan.kind == QualityScanKind.exploratory:
+        from app.services.exploratory import status_label as explore_label
+
+        return explore_label(scan, {})
     total = len((scan.config or {}).get("pages") or []) * max(1, len((scan.config or {}).get("viewports") or [1]))
     done = int((scan.summary or {}).get("visited") or 0)
     nc = len(scan.not_checked or [])

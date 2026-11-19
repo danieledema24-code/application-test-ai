@@ -103,6 +103,8 @@ class AutomationScript(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base
     )
     # AI-written scripts only (decision D10): {decision, by, at, comment}.
     review: Mapped[dict[str, Any] | None] = mapped_column(default=None)
+    # Phase 6 (P6-02): why the script became `outdated` after a change ("getByLabel('Message') not found after CHG-0001").
+    outdated_reason: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class ExecutionRun(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base):
@@ -194,6 +196,11 @@ class Approval(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base):
     # Phase 5 (P5-00, migration 0017): the performance run a `load_test` approval authorises (decision D18).
     performance_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("performance_runs.id", ondelete="RESTRICT"), default=None, index=True
+    )
+    # Phase 6 (P6-00, migration 0019): the signed-in exploratory session an `exploratory_session` approval authorises
+    # (decision D30).
+    quality_scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("quality_scans.id", ondelete="RESTRICT"), default=None, index=True
     )
     scope: Mapped[dict[str, Any]] = mapped_column(default=json_default_dict)
     requested_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)

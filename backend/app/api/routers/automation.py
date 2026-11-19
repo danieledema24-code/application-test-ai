@@ -704,6 +704,13 @@ async def decide_approval(
         _require_approver(p, "Approving load tests needs approval permission")
         return await decide_load_test(ctx, s, p, a, decision=body.decision, comment=body.comment,
                                       confirm_text=body.confirm_text)  # fmt: skip
+    if a.kind == ApprovalKind.exploratory_session:
+        # P6-03a (decision D30): a signed-in exploratory session's approval; the response is the session.
+        from app.api.routers.exploratory import decide_session
+
+        _require_approver(p, "Approving signed-in exploration needs approval permission")
+        return await decide_session(ctx, s, p, a, decision=body.decision, comment=body.comment,
+                                    confirm_text=body.confirm_text)  # fmt: skip
     _require_approver(p, "Deciding approvals needs gate-approval permission")
     try:
         await apr.decide(s, a, decision=body.decision, comment=body.comment, confirm_text=body.confirm_text,

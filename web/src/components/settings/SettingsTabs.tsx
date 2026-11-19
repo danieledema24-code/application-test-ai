@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 
 type Section = "profile" | "members" | "load-limits" | "retention" | "audit-log";
 
-/** Settings sections (design P3 §17.1, P5 §13.1): links with aria-current, not ARIA tabs. Load limits, Retention and Audit log are owner/admin only. */
+/** Settings sections (design P3 §17.1, P5 §13.1): links with aria-current, not ARIA tabs. Limits (load tests and exploration, design P6 §9.9), Retention and Audit log are owner/admin only. */
 export function SettingsTabs({ current }: { current: Section }) {
   const { role } = useAuth();
   const admin = role === "owner" || role === "admin";
@@ -22,7 +22,7 @@ export function SettingsTabs({ current }: { current: Section }) {
     <nav aria-label="Settings sections" className="mb-6 flex flex-wrap border-b border-line">
       {item("profile", "/settings", "Profile & organisation")}
       {item("members", "/settings/members", "Members")}
-      {admin && item("load-limits", "/settings/load-limits", "Load limits")}
+      {admin && item("load-limits", "/settings/load-limits", "Limits")}
       {admin && item("retention", "/settings/retention", "Retention")}
       {admin && item("audit-log", "/settings/audit-log", "Audit log")}
     </nav>

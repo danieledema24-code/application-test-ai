@@ -42,7 +42,9 @@ export type StageKey =
   | "release_readiness"
   | "performance"
   | "accessibility"
-  | "security_assessment";
+  | "security_assessment"
+  | "change_analysis"
+  | "exploratory";
 
 export type StageStatus =
   | "not_started"
@@ -240,6 +242,8 @@ export type StageGate = {
   preconditions?: GatePrecondition[];
   /** Phase 2 (G3/G4): items new or changed since the last approval; 0 if never approved. */
   changes_since_approval?: number;
+  /** P6-01 (G2 only): a scan of this project was approved at Gate 2, so rescans are compared with it. */
+  ever_approved?: boolean;
 };
 
 export type StageState = {
@@ -299,6 +303,12 @@ export type ScanSummary = {
   pages_found: number;
   started_at: IsoDate | null;
   finished_at: IsoDate | null;
+  number?: number;
+  created_at?: IsoDate | null;
+  /** P6-01: a rescan, the scan it is compared with (D25), and whether this scan was approved at Gate 2. */
+  is_rescan?: boolean;
+  baseline_number?: number | null;
+  g2_approved?: boolean;
 };
 
 export type ScanStats = {
@@ -599,7 +609,16 @@ export type ArtefactType =
   | "performance_profile"
   | "performance_run"
   | "threshold_result"
-  | "approval";
+  | "approval"
+  // Phase 6 (P6-06)
+  | "change_set"
+  | "change_item"
+  | "impact_item"
+  | "page_object"
+  | "heal_suggestion"
+  | "exploratory_session"
+  | "release_assessment"
+  | "release_criterion";
 
 export type ArtefactRef = { type: ArtefactType; id: Uuid | null; key: string; label: string; path: string };
 
@@ -1023,7 +1042,14 @@ export type AssistantIntent =
   | "security_summary"
   | "explain_finding"
   | "propose_scan"
-  | "propose_performance_run";
+  | "propose_performance_run"
+  // Phase 6 (P6-06)
+  | "what_changed"
+  | "impact_summary"
+  | "propose_regression_run"
+  | "explain_heal"
+  | "propose_exploration"
+  | "release_readiness_summary";
 
 export type AssistantMessageCreate = { content?: string | null; intent?: AssistantIntent | null; params?: Record<string, unknown>; context?: ArtefactRef | null };
 
@@ -1067,7 +1093,12 @@ export type Proposal = {
     | "request_run"
     // Phase 5 (P5-07): starts a check now (no approval), or creates a load test request waiting for approval
     | "start_check"
-    | "request_load_test";
+    | "request_load_test"
+    // Phase 6 (P6-06): a regression run request (Gate 7 still decides), an exploratory session (a signed-in one waits
+    // for its approval) and a release readiness assessment (Gate 9 still decides)
+    | "request_regression_run"
+    | "start_exploration"
+    | "assess_release";
   target: ArtefactRef | null;
   summary: string;
   payload: Record<string, unknown>;
@@ -1399,10 +1430,15 @@ export type TestDesignRunOutput = {
 // ---- Traceability (P3-04) -------------------------------------------------------------
 
 /** Script · Result · Defects of one test case (P4-12). Absent in content stored before Phase 4. */
+/** P6-06: the latest rescan change set's impact on a case or requirement (null = not affected). */
+export type ImpactCell = { change_set: string; level: "direct" | "indirect" | "gap"; status: "open" | "resolved" | "no_action"; action: string };
+
 export type CaseExec = {
-  script: { file: string; version: number; state: string } | null;
+  script: { file: string; version: number; state: string; outdated_reason?: string | null } | null;
   result: { status: string; run_key: string; result_key: string; at: IsoDate } | null;
   defects: (ArtefactRef & { status: string; severity: string })[];
+  /** Phase 6 (P6-06); absent in content stored before it. */
+  impacted?: ImpactCell | null;
 };
 
 export type ForwardRow = {
@@ -1420,6 +1456,8 @@ export type ForwardRow = {
   accessibility?: NfA11yCell | null;
   security?: NfSecCell | null;
   performance?: NfPerfCell | null;
+  /** Phase 6 (P6-06): the requirement's impact from the latest rescan. */
+  impacted?: ImpactCell | null;
 };
 
 export type NfA11yCell = { open: number; by_severity: Partial<Record<string, number>>; findings: string[]; scan_key: string };
@@ -1455,6 +1493,8 @@ export type Coverage = {
   execution: ExecutionCoverage | Unavailable;
   /** Phase 5 (P5-07): counts equal to the three non-functional gap lists. */
   non_functional?: Record<keyof NfGaps, number>;
+  /** Phase 6 (P6-06): counts equal to the three change gap lists. */
+  changes?: Record<keyof ChangeGaps, number>;
   /** Assumed: when basis=approved, the G5 approval date. */
   approved_at?: IsoDate | null;
 };
@@ -1471,7 +1511,23 @@ export type Gaps = {
   flaky_tests?: FailedTest[];
   outdated_automation_scripts: { case: ArtefactRef; file: string; version: number }[] | Unavailable;
   defects_without_regression_coverage: { defect: ArtefactRef & { status: string; severity: string }; case: ArtefactRef | null }[] | Unavailable;
-} & Partial<NfGaps>;
+} & Partial<NfGaps> &
+  Partial<ChangeGaps>;
+
+/** Phase 6 (P6-06) gap lists (design P6 §12.1). */
+export type ChangeGaps = {
+  scripts_outdated: {
+    case: ArtefactRef;
+    file: string;
+    path: string;
+    version: number;
+    reason: string;
+    change_set: ArtefactRef | null;
+    heal_suggestions: { key: string; id: string; status: string | null; path: string }[];
+  }[];
+  impacted_not_rerun: { case: ArtefactRef; level: string; change_set: ArtefactRef; reason: string }[];
+  new_pages_without_requirements: { page: string; url: string; change_set: ArtefactRef; impact_item_id: string; label: string; path: string }[];
+};
 
 export type FailedTest = { case: ArtefactRef; status: string; run_key: string; result_key: string; classification: string | null; label: string | null };
 

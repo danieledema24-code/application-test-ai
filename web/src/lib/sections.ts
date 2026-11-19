@@ -115,7 +115,7 @@ export function comingLabel(phase: number | null): string {
 }
 
 /** The phase the product has reached: sections up to it are real screens (design P2 §3.2). */
-export const CURRENT_PHASE = 5;
+export const CURRENT_PHASE = 6;
 
 export function isBuilt(s: ProjectSection): boolean {
   return s.built === true || (s.phase !== null && s.phase <= CURRENT_PHASE);
@@ -123,8 +123,8 @@ export function isBuilt(s: ProjectSection): boolean {
 
 export type SectionBadge = { text: string; srText: string };
 
-/** Run and defect counts behind the Test Execution and Defects badges (design P4 §4.2). */
-export type ExecutionCounts = { runsWaiting: number; running: boolean; drafts: number };
+/** Run and defect counts behind the Test Execution and Defects badges (design P4 §4.2), plus exploratory sessions (P6 §4.2). */
+export type ExecutionCounts = { runsWaiting: number; running: boolean; drafts: number; canApprove?: boolean; exploreWaiting?: number; exploring?: boolean };
 
 /**
  * One attention badge per built section, in priority order: gate waiting → out of date → proposals
@@ -161,7 +161,10 @@ export function sectionBadge(
   if (slug === "execution" && execution) {
     const n = execution.runsWaiting;
     if (n > 0) return { text: "Authorise", srText: `${n} run${n === 1 ? "" : "s"} waiting for authorisation` };
-    if (execution.running) return { text: "Running", srText: "a run is in progress" };
+    // Design P6 §4.2: a signed-in exploratory session waiting for someone who can approve, after "Authorise".
+    const w = execution.exploreWaiting ?? 0;
+    if (w > 0 && execution.canApprove) return { text: "Approve", srText: `${w} exploratory session${w === 1 ? "" : "s"} waiting for your approval` };
+    if (execution.running || execution.exploring) return { text: "Running", srText: "a run or exploratory session is in progress" };
   }
   if (slug === "defects" && execution && execution.drafts > 0) {
     const n = execution.drafts;
@@ -175,15 +178,26 @@ export function sectionBadge(
     if (nonFunctional.running) return { text: "Running", srText: "a check is in progress" };
     if (nonFunctional.stale) return { text: "Out of date", srText: "checks are out of date" };
   }
+  if (slug === "reports") {
+    // Release readiness (design P6 §4.2): the assessment waiting for Gate 9, or out of date.
+    const rr = by("release_readiness");
+    if (rr?.status === "awaiting_approval")
+      return execution?.canApprove ? { text: "Decide", srText: "release readiness waiting for your decision" } : { text: "Waiting", srText: "release readiness waiting for a decision" };
+    if (rr?.status === "stale") return { text: "Out of date", srText: "release readiness is out of date" };
+  }
   if (slug === "traceability" && (by("traceability")?.status === "stale" || by("test_design")?.status === "stale")) return { text: "Out of date", srText: "out of date" };
   if (slug === "assistant" && pendingProposals > 0)
     return { text: String(pendingProposals), srText: `${pendingProposals} proposal${pendingProposals === 1 ? "" : "s"} to review` };
   return null;
 }
 
+/** Routes that aren't one of the 12 sections, highlighted as the section they belong to (design P6 §4.1). */
+export const SECTION_ALIASES: Record<string, string> = { "release-readiness": "reports" };
+
 /** "/projects/abc/discovery" → { id: "abc", section: "discovery" }. `/projects/new` is not a project. */
 export function projectRoute(pathname: string): { id: string; section: string } | null {
   const m = pathname.match(/^\/projects\/([^/]+)(?:\/([^/]+))?/);
   if (!m || m[1] === "new") return null;
-  return { id: decodeURIComponent(m[1]), section: m[2] ?? "" };
+  const section = m[2] ?? "";
+  return { id: decodeURIComponent(m[1]), section: SECTION_ALIASES[section] ?? section };
 }

@@ -6,6 +6,7 @@ does not exist yet (later phases), the status is `unknown` with a detail saying 
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -50,6 +51,10 @@ class Facts:
     # accessibility/security: {"scan_key", "open": [(finding key, severity)], "accepted": [(key, by, reason)]}
     # performance: {"run_key", "approved_at", "missed": [text], "thresholds": n}
     nf: dict[str, dict[str, Any] | None] = field(default_factory=dict)
+    # Phase 6 (P6-06; None = no rescan change set yet): the latest rescan change set's must-run tests.
+    # {"change_set", "reason" (None, or why there is no recommendation), "must": [TC keys], "pending": [TC keys not
+    #  re-run], "manual_pending": [manual TC keys without a recorded re-test], "runs": [RUN keys with their results]}
+    regression: dict[str, Any] | None = None
 
 
 DOR, DOD = ReadinessKind.dor, ReadinessKind.dod
@@ -105,6 +110,57 @@ def nf_rule_for(kind: ReadinessKind, text: str) -> str | None:
     return next((rule for rule, words in NF_RULES if any(w in low for w in words)), None)
 
 
+# P6-06: DoD items about regression, re-testing or "after changes" are evaluated from the latest rescan change set's
+# must-run tests (the P6-02 rule behind `rr.impacted_rerun`), whoever wrote them (design P6 §12.2).
+REGRESSION_WORDS = re.compile(
+    r"\bregression|\bre-?tests?(?:ed|ing)?\b|\bre-?runs?\b|\bre-?run(?:ning)?\b|\bre-?executed\b"
+    r"|\b(?:after|since|following) (?:the |a |any |each |every )?(?:latest |last )?(?:application )?changes?\b|\bpost-?changes?\b",
+    re.IGNORECASE,
+)
+# Re-testing fixed defects is the defect workflow (Gate 8), not the change set's regression run (QA P6-06).
+_DEFECT_RETEST = re.compile(r"\b(?:defects?|bugs?|fix(?:es|ed)?)\b", re.IGNORECASE)
+_CHANGE_WORD = re.compile(r"\bregression|\bchang", re.IGNORECASE)
+NO_CHANGE_SET = "Not evaluable: no change set yet"
+
+
+def text_rule_for(kind: ReadinessKind, text: str) -> str | None:
+    """The coded rule for a DoD item without one, from its words: non-functional first, then regression."""
+    rule = nf_rule_for(kind, text)
+    if rule is None and kind == DOD and REGRESSION_WORDS.search(text):
+        if _DEFECT_RETEST.search(text) and not _CHANGE_WORD.search(text):
+            return None
+        return "dod.regression"
+    return rule
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _regression(facts: Facts) -> dict[str, Any]:
+    r = facts.regression
+    if r is None:
+        return _result("unknown", NO_CHANGE_SET)
+    cs = r["change_set"]
+    if r.get("reason"):
+        return _result("unknown", f"Not evaluable: {r['reason']}")
+    if not r["must"]:
+        return _result("met", f"Met: {cs} has no must-run tests")
+    if r["pending"]:
+        n = len(r["pending"])
+        return _result(
+            "not_met",
+            f"Not met: {_plural(n, 'impacted test')} not re-run since {cs} ({_names(r['pending'])})",
+        )
+    if r["manual_pending"]:
+        return _result(
+            "unknown",
+            f"Not evaluable: manual must-run tests from {cs} without a recorded re-test ({_names(r['manual_pending'])})",
+        )
+    runs = f" ({_names(r['runs'])})" if r["runs"] else ""
+    return _result("met", f"Met: every must-run test from {cs} has a result{runs}")
+
+
 def _nf(rule_id: str, facts: Facts) -> dict[str, Any]:
     kind = rule_id.rsplit(".", 1)[1]
     data = facts.nf.get(kind)
@@ -139,6 +195,8 @@ def evaluate(rule_id: str | None, facts: Facts, *, requirement_id: str | None = 
         return _result("unknown", LATER_PHASE_DETAIL[rule_id])
     if rule_id.startswith("dod.nf."):
         return _nf(rule_id, facts)
+    if rule_id == "dod.regression":
+        return _regression(facts)
     reqs = facts.requirements
     if requirement_id is not None:
         reqs = [r for r in reqs if r["id"] == requirement_id]

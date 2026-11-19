@@ -47,7 +47,10 @@ function Breadcrumb() {
     const base = `/projects/${project.id}`;
     const section = sectionBySlug(project.section);
     crumbs = [{ label: "Projects", href: "/projects" }, { label: data?.name ?? "Project", href: section && section.slug ? base : undefined }];
-    if (section && section.slug) crumbs.push({ label: section.label, href: pathname.split("/").length > 4 ? `${base}/${section.slug}` : undefined });
+    // An aliased route (release readiness under Reports, design P6 §4.1) links back to its section.
+    const aliased = !!section?.slug && pathname.split("/")[3] !== section.slug;
+    if (section && section.slug) crumbs.push({ label: section.label, href: pathname.split("/").length > 4 || aliased ? `${base}/${section.slug}` : undefined });
+    if (aliased && pathname.split("/")[3] === "release-readiness") crumbs.push({ label: "Release readiness" });
     if (pathname.endsWith("/reports/discovery")) crumbs.push({ label: "Application Discovery Report" });
   }
   if (crumbs.length === 0) return <div className="min-w-0 flex-1" />;

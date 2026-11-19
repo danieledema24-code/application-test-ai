@@ -1,6 +1,6 @@
 // Traceability (design P3 §14): coverage tiles, matrix filters and chain levels. Pure; unit-tested.
 
-import type { ArtefactRef, CaseExec, Chain, Coverage, ExecutionCoverage, Gaps, Unavailable } from "./contract";
+import type { ArtefactRef, CaseExec, Chain, Coverage, ExecutionCoverage, Gaps, ImpactCell, Unavailable } from "./contract";
 
 /** Phase 4 content, or `Unavailable` in reports stored before it. */
 export function isAvailable<T>(x: T | Unavailable | undefined | null): x is T {
@@ -49,7 +49,43 @@ export function coverageTiles(c: Coverage, href: (q: Record<string, string>) => 
     },
     ...executionTiles(c.execution, href),
     ...nfTiles(c.non_functional, href),
+    ...changeTiles(c.changes, href),
   ];
+}
+
+/** Phase 6 tiles (design P6 §12.1): the counts are the lengths of the three change gap lists. */
+export function changeTiles(n: Coverage["changes"] | undefined, href: (q: Record<string, string>) => string): Tile[] {
+  if (!n) return [];
+  const at = (id: string) => href({ view: "coverage" }) + `#${id}`;
+  return [
+    { id: "chg_outdated", label: "Scripts that are outdated", value: String(n.scripts_outdated), hint: "locators not found after a change", warn: n.scripts_outdated > 0, href: at("gap-outdated") },
+    { id: "chg_rerun", label: "Impacted tests not re-run", value: String(n.impacted_not_rerun), hint: "no result since their change", warn: n.impacted_not_rerun > 0, href: at("gap-impacted") },
+    { id: "chg_pages", label: "New pages without requirements", value: String(n.new_pages_without_requirements), hint: "pages a rescan added", href: at("gap-new-pages") },
+  ];
+}
+
+const IMPACT_STATUS: Record<string, string> = { open: "open", resolved: "resolved", no_action: "no action needed" };
+const IMPACT_LEVEL: Record<string, string> = { direct: "Direct", indirect: "Indirect", gap: "Not covered" };
+
+/** The matrix's Change cell (design P6 §12.1): "Direct · CHG-0001 · open" / "Indirect · resolved" / "—". */
+export function changeCellText(c: ImpactCell | null | undefined): string {
+  if (!c) return "—";
+  const level = IMPACT_LEVEL[c.level] ?? c.level;
+  return c.status === "open" ? `${level} · ${c.change_set} · open` : `${level} · ${IMPACT_STATUS[c.status] ?? c.status}`;
+}
+
+/** "Change for TC-0019: directly affected by CHG-0001, open. Script outdated." */
+export function changeSr(caseKey: string, c: ImpactCell | null | undefined, scriptState?: string): string {
+  const outdated = scriptState === "outdated" ? " Script outdated." : "";
+  if (!c) return `Change for ${caseKey}: not affected.${outdated}`;
+  const how = c.level === "direct" ? "directly affected" : c.level === "indirect" ? "indirectly affected" : "not covered";
+  return `Change for ${caseKey}: ${how} by ${c.change_set}, ${IMPACT_STATUS[c.status] ?? c.status}.${outdated}`;
+}
+
+/** 375 px card line: "Change: Direct · CHG-0001 · open · Script outdated". */
+export function changeLine(x: Partial<CaseExec>): string | null {
+  if (!x.impacted && x.script?.state !== "outdated") return null;
+  return `Change: ${changeCellText(x.impacted)}${x.script?.state === "outdated" ? " · Script outdated" : ""}`;
 }
 
 /** Phase 5 tiles (design P5 §12.1): the counts are the lengths of the three non-functional gap lists. */
@@ -137,6 +173,9 @@ export const GAP_EMPTY: Record<string, string> = {
   flaky: "None. No test passed only on retry.",
   outdated: "None. Every script matches its test case.",
   regression: "None. Every defect's test case is in the Regression suite.",
+  scripts_outdated: "None. Every script's locators were found.",
+  impacted: "None. Every impacted test has a result after its change.",
+  new_pages: "None.",
   nf_open: "None. No requirement has an open accessibility finding.",
   nf_pages: "None. Every page was checked for accessibility.",
   nf_without: "None. Every non-functional requirement has a check, run or finding.",
@@ -166,7 +205,8 @@ export function gapCounts(g: Gaps) {
     execution: isAvailable(ev) ? ev.automated_not_run.length + ev.manual_only.length : 0,
     failed: isAvailable(g.failed_tests) ? g.failed_tests.length : 0,
     flaky: g.flaky_tests?.length ?? 0,
-    outdated: isAvailable(g.outdated_automation_scripts) ? g.outdated_automation_scripts.length : 0,
+    // Phase 6: the spec §12 list with reasons replaces the Phase 4 one (same scripts).
+    outdated: g.scripts_outdated ? g.scripts_outdated.length : isAvailable(g.outdated_automation_scripts) ? g.outdated_automation_scripts.length : 0,
     regression: isAvailable(g.defects_without_regression_coverage) ? g.defects_without_regression_coverage.length : 0,
     requirements: (g.requirements_without_test_cases?.none?.length ?? 0) + (g.requirements_without_test_cases?.none_approved?.length ?? 0),
     orphans: g.test_cases_without_requirements?.length ?? 0,
@@ -176,6 +216,8 @@ export function gapCounts(g: Gaps) {
     nf_open: g.requirements_with_open_accessibility_findings?.length ?? 0,
     nf_pages: g.pages_not_checked_for_accessibility?.length ?? 0,
     nf_without: g.non_functional_requirements_without_evidence?.length ?? 0,
+    impacted: g.impacted_not_rerun?.length ?? 0,
+    new_pages: g.new_pages_without_requirements?.length ?? 0,
   };
 }
 
@@ -229,6 +271,16 @@ const LEVEL: Record<string, { one: string; many: string }> = {
   performance_profile: { one: "Load test profile", many: "Load test profiles" },
   performance_run: { one: "Load test", many: "Load tests" },
   threshold_result: { one: "Threshold result", many: "Threshold results" },
+  // Phase 6 (P6-06)
+  change_set: { one: "Change set", many: "Change sets" },
+  change_item: { one: "Change", many: "Changes" },
+  impact_item: { one: "Impact item", many: "Impact items" },
+  page_object: { one: "Page object", many: "Page objects" },
+  heal_suggestion: { one: "Repair suggestion", many: "Repair suggestions" },
+  exploratory_session: { one: "Exploratory session", many: "Exploratory sessions" },
+  release_assessment: { one: "Release assessment", many: "Release assessments" },
+  release_criterion: { one: "Criterion", many: "Criteria" },
+  evidence: { one: "Evidence", many: "Evidence" },
 };
 
 export function levelName(type: string, n = 1): string {
@@ -248,6 +300,10 @@ export function typeOfKey(key: string): string | null {
   if (/^DEF-/.test(key)) return "defect";
   if (/^RUN-\d+-\d+$/.test(key)) return "execution_result";
   if (/^(A11Y|SEC)-\d+-\d+$/.test(key)) return "quality_finding";
+  if (/^CHG-\d+$/.test(key)) return "change_set";
+  if (/^HEAL-\d+$/.test(key)) return "heal_suggestion";
+  if (/^EXP-\d+(-\d+)?$/.test(key)) return "exploratory_session";
+  if (/^REL-\d+$/.test(key)) return "release_assessment";
   if (/^(A11Y|SEC)-\d+$/.test(key)) return "quality_scan";
   if (/^PERF-\d+$/.test(key)) return "performance_run";
   if (/^PRF-\d+$/.test(key)) return "performance_profile";
@@ -282,12 +338,18 @@ export function keyHref(projectId: string, key: string, reqOfAc?: string | null)
       return `${base}/non-functional/load-tests/${key}`;
     case "performance_profile":
       return `${base}/non-functional/profiles/${key}`;
+    case "change_set":
+      return `${base}/discovery/changes/${key}`;
+    case "exploratory_session":
+      return `${base}/execution/exploratory/${key.replace(/^(EXP-\d+)-\d+$/, "$1")}`;
+    case "release_assessment":
+      return `${base}/release-readiness/${key}`;
     default:
       return `${base}/traceability/${key}`;
   }
 }
 
-export const CHAIN_KEY = /^(?:(REQ|AC|TCOND|TC|RISK|DEF|PERF|PRF)-\d+|(A11Y|SEC)-\d+(?:-\d+)?)$/;
+export const CHAIN_KEY = /^(?:(REQ|AC|TCOND|TC|RISK|DEF|PERF|PRF|CHG|EXP|HEAL|REL)-\d+|(A11Y|SEC)-\d+(?:-\d+)?)$/;
 
 export type ChainLevel = { type: string; items: ArtefactRef[]; root?: boolean };
 
@@ -309,10 +371,21 @@ const RANK: Record<string, number> = {
   defect: 6,
 };
 
+/** Roots whose chain reads top-down from the root: CHG → change → impact item → …, HEAL → page object → …, EXP →
+ * finding → defect, REL → criteria → evidence. */
+const TOP_DOWN_ROOTS = new Set(["change_set", "heal_suggestion", "exploratory_session", "release_assessment"]);
+
 /** Splits a chain into the nested levels (requirement → AC → condition → case) and the side list (risks, features). */
 export function chainLevels(c: Chain): { chain: ChainLevel[]; side: ChainLevel[] } {
   const chain: ChainLevel[] = [];
   const side: ChainLevel[] = [];
+  if (TOP_DOWN_ROOTS.has(c.root.type)) {
+    // Phase 6 (design P6 §12.1): the root first, then `downstream` in the API's order; `upstream` is listed beside it.
+    chain.push({ type: c.root.type, items: [c.root], root: true });
+    for (const l of c.downstream ?? []) if (l.items?.length) chain.push({ type: l.type, items: l.items });
+    for (const l of c.upstream ?? []) if (l.items?.length) side.push({ type: l.type, items: l.items });
+    return { chain, side };
+  }
   for (const l of [...(c.upstream ?? []), ...(c.downstream ?? [])]) {
     if (!l.items?.length) continue;
     (l.type in RANK ? chain : side).push({ type: l.type, items: l.items });

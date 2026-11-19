@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import type { AcceptanceCriterionCreate, Proposal, ProposedTestCase, RequirementDetail, SuiteChange, TestCaseDetail } from "@/lib/contract";
 import { useAuth } from "@/lib/auth";
+import { actionProposal, actionToast, actionToastLink, isActionProposal } from "@/lib/assistant";
 import { PRIORITY_TEXT, proposalAppliedToast, suiteDiff, techniqueInfo } from "@/lib/testcases";
 import { likelihoodText, impactText } from "@/lib/strategy";
 import { Button, Disclosure, InlineError, StatusPill, useToast } from "@/components/ui";
@@ -26,6 +28,9 @@ const KIND_LABEL: Record<Proposal["kind"], string> = {
   request_run: "Request a test run",
   start_check: "Start a check",
   request_load_test: "Create load test request",
+  request_regression_run: "Request a regression run",
+  start_exploration: "Explore pages",
+  assess_release: "Assess release readiness",
 };
 
 const STATUS_LABEL: Record<Proposal["status"], string> = {
@@ -223,6 +228,8 @@ function Item({
             </p>
           ) : p.kind === "start_check" ? (
             <p className="text-small text-fg">Accepting starts the check now. Checks need no approval.</p>
+          ) : isActionProposal(p.kind) ? (
+            <p className="text-small text-fg">{actionProposal(p.kind, p.payload)?.footer}</p>
           ) : p.kind === "request_load_test" ? (
             <p className="text-small text-fg">
               Creates a load test request. Someone who can approve must still type the host and approve it; the assistant can&apos;t approve load tests or start load.
@@ -323,6 +330,7 @@ export function ProposalCard({
   onDone: () => void;
 }) {
   const toast = useToast();
+  const router = useRouter();
   const { role } = useAuth();
   // Viewers see proposals but not Apply/Reject (P3 §16.2); accepting would be a 403.
   const canWrite = role !== "viewer";
@@ -343,11 +351,13 @@ export function ProposalCard({
     setFailures([]);
     const fails: string[] = [];
     let ok = 0;
+    let created: string | undefined;
     for (const p of pending) {
       const act = all === "reject" ? "reject" : decision(p);
       try {
-        await api(`/assistant/proposals/${p.id}/${act}`, { body: {} });
+        const res = await api<Proposal>(`/assistant/proposals/${p.id}/${act}`, { body: {} });
         if (act === "accept") ok += 1;
+        created = created ?? res?.result?.applied?.[0]?.key;
       } catch (err) {
         const key = p.target?.key ?? p.key;
         fails.push(
@@ -366,15 +376,18 @@ export function ProposalCard({
       const caseCount = pending
         .filter((p) => decision(p) === "accept" && isCaseList(p))
         .reduce((n, p) => n + (proposedCases(p).length || 1), 0);
-      if (ok) toast(proposalAppliedToast(kind, ok, caseCount || ok));
+      const open = actionToastLink(kind, projectId, created);
+      if (ok) toast(actionToast(kind, proposals[0]?.payload, created) ?? proposalAppliedToast(kind, ok, caseCount || ok), undefined, open ? { action: { label: open.label, onClick: () => router.push(open.href) } } : undefined);
     } else toast("Proposal rejected. Nothing was changed.", "info");
     onDone();
   }
 
   const suiteCount = kind === "set_suite" ? accepted.reduce((n, p) => n + (suiteChanges(p).length || 1), 0) : 0;
   const caseTotal = kind === "add_test_cases" ? accepted.reduce((n, p) => n + (proposedCases(p).length || 1), 0) : 0;
-  const applyLabel =
-    kind === "set_suite"
+  const action = actionProposal(kind, proposals[0]?.payload);
+  const applyLabel = action
+    ? action.applyLabel
+    : kind === "set_suite"
       ? `Apply ${suiteCount} suite change${suiteCount === 1 ? "" : "s"}`
       : kind === "add_test_cases"
         ? `Add ${caseTotal} test case${caseTotal === 1 ? "" : "s"}`
@@ -414,9 +427,11 @@ export function ProposalCard({
         {pending.length > 0 && !canWrite && <p className="text-small text-fg-muted">Only members, owners and admins can apply proposals.</p>}
         {pending.length > 0 && canWrite && (
           <>
-            <p className="text-small text-fg-muted">
-              Applying creates new revisions attributed to you, “applied from AI QA Analyst proposal”.{gateReopens ? ` ${gateReopens}` : ""}
-            </p>
+            {!action && (
+              <p className="text-small text-fg-muted">
+                Applying creates new revisions attributed to you, “applied from AI QA Analyst proposal”.{gateReopens ? ` ${gateReopens}` : ""}
+              </p>
+            )}
             <div className="flex flex-wrap justify-end gap-2">
               <Button size="sm" variant="secondary" onClick={() => void run("reject")} loading={busy === "reject"}>
                 Reject all

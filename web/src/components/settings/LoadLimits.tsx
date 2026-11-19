@@ -10,9 +10,11 @@ import { useApi } from "@/lib/hooks";
 import { useAuth } from "@/lib/auth";
 import { durationShort, type Limits3 } from "@/lib/nonfunctional";
 import { ADMIN_ONLY_PAGE } from "@/lib/hardening";
+
+const LOAD_LIMITS_ADMIN_ONLY = "Only owners and admins can see the load-test limits.";
 import { Button, Card, CardBody, ConfirmDialog, ErrorState, InlineError, Skeleton, TextField, useToast } from "@/components/ui";
 
-type Settings = { load_ceiling: Limits3; effective_ceiling: Limits3; hard_cap: Limits3; can_edit: boolean; message?: string };
+type Settings = { load_ceiling: Limits3; effective_ceiling: Limits3; hard_cap: Limits3; can_edit: boolean; message?: string; exploration_ceiling?: unknown };
 
 export function LoadLimits() {
   const { organisation } = useAuth();
@@ -34,7 +36,8 @@ export function LoadLimits() {
   }, [d]);
   if (q.error && !d) return <ErrorState error={q.error} onRetry={() => q.mutate()} />;
   if (!d) return <Skeleton className="h-64" />;
-  if (!d.can_edit) return <p className="text-body text-fg">{ADMIN_ONLY_PAGE}</p>;
+  // With the exploration limits on the same page (P6 §9.9) everyone reads those, so only the load limits are hidden.
+  if (!d.can_edit) return <p className="text-body text-fg">{d.exploration_ceiling ? LOAD_LIMITS_ADMIN_ONLY : ADMIN_ONLY_PAGE}</p>;
   const next = { vus: Number(vus), rps: Number(rps), duration_s: Math.round(Number(minutes) * 60) };
   function check(): boolean {
     const e: Record<string, string> = {};

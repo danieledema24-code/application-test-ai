@@ -1,4 +1,5 @@
-"""Traceability matrix, coverage, gaps and chains (P3-04). Computed on read; any role can read."""
+"""Traceability matrix, coverage, gaps and chains (P3-04; P6-06 adds CHG-, EXP-, HEAL- and REL- chains). Computed on
+read; any role can read."""
 
 from __future__ import annotations
 
@@ -79,4 +80,6 @@ async def chain(
     t = await trace.load(s, project_id)
     if trace.is_nf_key(key):
         return await trace.nf_chain(s, t, key)
+    if trace.is_p6_key(key):
+        return await trace.p6_chain(s, t, key)
     return trace.chain(t, key)

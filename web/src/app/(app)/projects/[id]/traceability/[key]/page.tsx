@@ -13,10 +13,12 @@ import { isNotFound } from "@/components/testcases/hooks";
 const SHOW = 5;
 const LATER: Record<string, string> = { automation_script: "Script", execution_result: "Result", defect: "Defect" };
 
+/** Items without an ID of their own open where they're listed: scripts by file, pages and threshold results (P5-07),
+ * and Phase 6 changes, impact items, page objects and release criteria (P6-06). */
+const LABEL_ONLY = new Set(["automation_script", "page", "threshold_result", "change_item", "impact_item", "page_object", "release_criterion"]);
+
 function ItemLink({ item, projectId, here }: { item: ArtefactRef; projectId: string; here?: boolean }) {
-  // Scripts are named by file, and open in Automation (their key is the file path). Pages and threshold results
-  // (P5-07) have no ID of their own either; they open where they're listed.
-  if (item.type === "automation_script" || item.type === "page" || item.type === "threshold_result")
+  if (LABEL_ONLY.has(item.type))
     return (
       <Link href={item.path} className="text-navy-700 underline underline-offset-2">
         {item.label}
@@ -24,7 +26,7 @@ function ItemLink({ item, projectId, here }: { item: ArtefactRef; projectId: str
     );
   return (
     <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
-      <Link href={keyHref(projectId, item.key)} className="font-mono text-navy-700 underline underline-offset-2">
+      <Link href={item.type === "heal_suggestion" && item.path ? item.path : keyHref(projectId, item.key)} className="font-mono text-navy-700 underline underline-offset-2">
         {item.key}
       </Link>
       {item.label && <span className="break-words">{item.label}</span>}

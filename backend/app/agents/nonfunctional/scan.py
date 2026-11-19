@@ -512,6 +512,11 @@ class ScanJob:
                 actor_type=ActorType.system,
                 metadata={"key": sc.key, "status": status.value, "findings": n},
             )
+            if status != QualityScanStatus.cancelled:
+                # P6-05a: new accessibility/security results are new evidence for an assessment waiting for G9.
+                from app.services.release import mark_stale
+
+                await mark_stale(s, sc.project_id, f"{sc.key} finished")
             await s.commit()
             message = self._finished_message(sc)
         await self.orch._enqueue_pending(self.scope, project.id)

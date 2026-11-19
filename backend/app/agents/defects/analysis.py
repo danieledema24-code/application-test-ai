@@ -8,11 +8,12 @@ run's unfinished tests are not analysed. AI off: code only.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import Counter
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, true
 
 from app.agents.phase2 import StageOutcome
 from app.context import AppContext
@@ -26,11 +27,14 @@ from app.db.models import (
     TestCase,
 )
 from app.db.tenant import TenantScope, bind_scope
+from app.domain.change import heal as hd
 from app.domain.defects import classify as cl
-from app.domain.enums import EvidenceKind, FailureClass, GeneratedBy, ResultStatus
+from app.domain.enums import EvidenceKind, FailureClass, GeneratedBy, HealStatus, ResultStatus
 from app.services import defects as dsvc
 from app.services import execution as xsvc
+from app.services import repairs as repairs_svc
 
+log = logging.getLogger(__name__)
 ANALYSED = (ResultStatus.failed, ResultStatus.error, ResultStatus.flaky)
 NOT_ANALYSED = xsvc.NOT_RESULTS
 ORDER = [
@@ -93,7 +97,19 @@ class FailureAnalysisAgent:
                     r.analysis = {**(r.analysis or {}), "fix_suggestion": True}
                     await s.commit()
                     ready.add(str(result_id))
+        await self._repairs(items)
         return ready
+
+    async def _repairs(self, items: list[tuple[uuid.UUID, str]]) -> None:
+        """P6-04: the same failures as repair suggestions (HEAL-…), ranked and verified on the live page, and a failed
+        text check as an "Expected result may be out of date" review. Never fails the analysis."""
+        from app.services import repairs
+
+        for result_id, error in items[:10]:
+            try:
+                await repairs.propose_from_failure(self.ctx, self.scope, self.project_id, result_id, error)
+            except Exception:  # a repair suggestion is a hint; the analysis stands without it
+                log.warning("repair suggestion for a failed result couldn't be made", exc_info=True)
 
     async def run(self) -> StageOutcome:
         from app.services import approvals as apr
@@ -119,6 +135,7 @@ class FailureAnalysisAgent:
             groups: dict[str, list[dict[str, Any]]] = {}
             drafted: list[tuple[str, str]] = []
             heal_for: list[tuple[uuid.UUID, str]] = []
+            text_for: list[tuple[uuid.UUID, str]] = []  # P6-04: failed text checks (expected result may be out of date)
             analysed = 0
             for r in results:
                 if r.status == ResultStatus.error and (r.error or "") in NOT_ANALYSED:
@@ -130,6 +147,11 @@ class FailureAnalysisAgent:
                 )
                 last = max([int((e.meta or {}).get("attempt") or 1) for e in evidence] or [1])
                 pick = {e.kind: e for e in evidence if int((e.meta or {}).get("attempt") or 1) == last}
+                rel = await repairs_svc.related(s, script) if script else []
+                # An accepted repair changes the script's page object: results before it aren't "the same script"
+                # for the flaky rule (QA P6-04 R3).
+                fixed_at = max((x.decided_at for x in rel if x.status == HealStatus.accepted and x.decided_at),
+                               default=None)  # fmt: skip
                 history = [
                     (v, st.value)
                     for v, st in (
@@ -138,6 +160,7 @@ class FailureAnalysisAgent:
                             .where(
                                 ExecutionResult.case_lineage_id == r.case_lineage_id,
                                 ExecutionResult.execution_run_id != run.id,
+                                ExecutionResult.created_at > fixed_at if fixed_at else true(),
                                 # Cancelled or skipped rows are not results; they never make a test look flaky.
                                 or_(ExecutionResult.error.is_(None), ExecutionResult.error.not_in(NOT_ANALYSED)),
                             )
@@ -147,6 +170,19 @@ class FailureAnalysisAgent:
                     ).all()
                 ]
                 assertions = list(script.assertion_map or []) if script else []
+                # P6-04 (QA): repairs and reviews that concern this script (a test problem only when the failed check
+                # goes through a repaired element), and a rescan that changed the failed page after the open defect
+                # for this case was raised (context only: a defect that is still there keeps being linked).
+                # The window closes at the case's first passed result after the repair (QA P6-04 R3).
+                through = repairs_svc.involved(rel, assertions, r.error or "")
+                passed = await repairs_svc.proven(s, through, r.case_lineage_id)
+                page_changed_by = None
+                if case is not None:
+                    cs, changed = await repairs_svc.changed_pages(s, project.id)
+                    page = str((r.page_state or {}).get("url") or "").split("?", 1)[0]
+                    dup = await dsvc.open_duplicate(s, project.id, case.lineage_id, (r.failed_step or {}).get("title"))
+                    if cs is not None and dup is not None and page in changed and dup.created_at <= cs.created_at:
+                        page_changed_by = f"{cs.key} changed {page} after {dup.key} was raised"
                 fi = cl.FailureInput(
                     status=r.status.value,
                     error=r.error or "",
@@ -162,12 +198,18 @@ class FailureAnalysisAgent:
                     assertions=assertions,
                     history=history,
                     script_version=r.script_version,
+                    repairs=[repairs_svc.context_line(x) for x in rel if x.id not in through],
+                    repaired=[repairs_svc.context_line(x) for x in through if x.id not in passed],
+                    proven=[repairs_svc.context_line(x) for x in through if x.id in passed],
+                    page_changed_by=page_changed_by,
                 )
                 a = cl.classify(fi)
                 out = a.as_dict()
                 out["case_key"] = (plan.get(r.key) or {}).get("case_key") or (case.key if case else None)
                 refs = [{"evidence_id": str(e.id), "kind": e.kind.value} for e in pick.values()]
                 out["evidence_refs"] = refs
+                if rel:
+                    out["repairs"] = [{"id": str(x.id), "key": x.key, "status": x.status.value} for x in rel]
                 if a.classification == "application_defect" and a.confidence in ("medium", "high") and case:
                     d, created = await dsvc.draft_from_result(s, project, r, case, out, assertions)
                     out["defect"] = {
@@ -189,6 +231,9 @@ class FailureAnalysisAgent:
                 r.analysis = out
                 if a.classification == "selector_failure":
                     heal_for.append((r.id, r.error or ""))
+                elif hd.failed_text_review(r.error or "", dict(r.page_state or {}), lineage="", case_key="",
+                                           result_key="") is not None:  # fmt: skip
+                    text_for.append((r.id, r.error or ""))
                 counts[a.classification] += 1
                 analysed += 1
                 groups.setdefault(a.classification, []).append(
@@ -202,6 +247,7 @@ class FailureAnalysisAgent:
                 )
             await s.commit()
         ready = await self._suggest_fixes(heal_for)
+        await self._repairs(text_for)
         # The run's frozen Test Execution Report, with the causes just worked out (design §13).
         from app.agents.reporting.phase4_reports import freeze_for_run
 

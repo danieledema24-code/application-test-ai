@@ -42,8 +42,8 @@ from app.services import serialize_p2 as out
 from app.services.counters import next_key
 
 KEY_RE = re.compile(
-    r"\b(?:(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT|TCOND|TC|TD|DEF|APR|PERF|PRF)-\d{2,6}"
-    r"|(?:RUN|A11Y|SEC)-\d{2,6}(?:-\d{2,4})?)\b"
+    r"\b(?:(REQ|AC|RISK|DOR|DOD|TS|TP|DOC|PROP|FEAT|TCOND|TC|TD|DEF|APR|PERF|PRF|CHG|HEAL|REL)-\d{2,6}"
+    r"|(?:RUN|A11Y|SEC|EXP)-\d{2,6}(?:-\d{2,4})?)\b"
 )
 AI_OFF_NOTICE = "Free-form answers need AI, which isn't configured. Built-in questions still work."
 DEFAULT_AI_TURNS_PER_DAY = 200
@@ -124,6 +124,25 @@ INTENTS: dict[str, IntentSpec] = {
             _schema(profile="string"),
             creates_proposal=True,
         ),
+        # Phase 6 (P6-06): changes, repairs, exploration and release readiness; all work with AI off.
+        IntentSpec("what_changed", "What changed?", "What changed since the last scan?", _schema()),
+        IntentSpec("impact_summary", "What does the change affect?", "What does the change affect?", _schema()),
+        IntentSpec(
+            "propose_regression_run",
+            "Propose a regression run",
+            "Propose a regression run",
+            {"type": "object", "properties": {"include_should": {"type": "boolean"}}},
+            creates_proposal=True,
+        ),
+        IntentSpec("explain_heal", "Explain a repair suggestion", "Explain HEAL-0001", _schema(key="string")),
+        IntentSpec(
+            "propose_exploration",
+            "Explore new and changed pages",
+            "Explore the new and changed pages",
+            {"type": "object", "properties": {"signed_in": {"type": "boolean"}}},
+            creates_proposal=True,
+        ),
+        IntentSpec("release_readiness_summary", "Can we release?", "Can we release?", _schema()),
         IntentSpec(
             "propose_script_improvement",
             "Improve existing test scripts",
@@ -234,10 +253,18 @@ INTENTS: dict[str, IntentSpec] = {
     )
 }
 
+# Phase 6 built the last planned tasks (P6-06); what is left is the Hosted deployment phase (D23) and deferred items.
 LATER_PHASE = [
-    {"label": "Release readiness and Test Completion Report", "available_from_phase": 6, "needs": "Phase 6"},
-    {"label": "What changed since the last scan", "available_from_phase": 6, "needs": "Phase 6"},
+    {
+        "label": "Hosted deployment (Postgres, Redis, file storage, container sandbox)",
+        "available_from_phase": 7,
+        "needs": "the Hosted deployment phase",
+    },
+    {"label": "API testing", "available_from_phase": 7, "needs": "a later phase"},
+    {"label": "Word (DOCX) reports", "available_from_phase": 7, "needs": "a later phase"},
 ]
+# Questions answered from stored rows even with AI on: the model can't restate (or contradict) a verdict or counts.
+RULES_ONLY = frozenset({"what_changed", "release_readiness_summary"})
 
 
 def capabilities(ctx: AppContext) -> dict[str, Any]:
@@ -442,6 +469,10 @@ async def resolve_keys(s: AsyncSession, project_id: uuid.UUID, keys: set[str]) -
         from app.services import assistant_p5
 
         found.update(await assistant_p5.resolve(s, project_id, keys))
+    if {"CHG", "HEAL", "EXP", "REL"} & set(by_prefix):
+        from app.services import assistant_p6
+
+        found.update(await assistant_p6.resolve(s, project_id, keys))
     return found
 
 
@@ -960,6 +991,18 @@ def _register_p3() -> None:
             "propose_performance_run": p5.propose_performance_run,
         }
     )
+    from app.services import assistant_p6 as p6
+
+    HANDLERS.update(
+        {
+            "what_changed": p6.what_changed,
+            "impact_summary": p6.impact_summary,
+            "propose_regression_run": p6.propose_regression_run,
+            "explain_heal": p6.explain_heal,
+            "propose_exploration": p6.propose_exploration,
+            "release_readiness_summary": p6.release_readiness_summary,
+        }
+    )
 
 
 _register_p3()
@@ -978,6 +1021,9 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
     feat = re.search(r"\bFEAT-\d{2,6}\b", text, re.IGNORECASE)
     run_key = re.search(r"\bRUN-\d{2,6}-\d{2,4}\b", text, re.IGNORECASE)
     def_key = re.search(r"\bDEF-\d{2,6}\b", text, re.IGNORECASE)
+    p6 = _route_p6(text, t)
+    if p6 is not None:
+        return p6
     nf = _route_nf(text, t)
     if nf is not None:
         return nf
@@ -1047,6 +1093,47 @@ def route(text: str) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+# P6-06: release questions in any common wording go to the rules answer, never to the model (the verdict comes from
+# the stored assessment). "release", "ship", "go live", "production", "go/no-go", "release-ready" and similar.
+_SHIP = r"(release|ship|launch|go[- ]live|go to (?:prod|production)|deploy|production|prod)"
+RELEASE_QUESTION = re.compile(
+    r"\bgo\s*/\s*no[- ]?go\b|\bgo or no[- ]?go\b|\bno[- ]go\b|\brelease (?:readiness|status|verdict|decision|recommendation)\b|\brelease[- ]ready\b"
+    rf"|\b(?:ready|safe|ok|okay|good|fit|cleared?)\b[\w\s]{{0,24}}?\b{_SHIP}\b"
+    rf"|\b(?:can|could|should|shall|may) (?:we|i)\b[\w\s]{{0,24}}?\b{_SHIP}\b"
+    r"|\b(?:release|launch|build)\b[\w\s]{0,12}?\b(?:a )?go\b\s*[?.!]?\s*$",
+    re.IGNORECASE,
+)
+# Keys of earlier phases: a question naming one belongs to that phase's intent ("What changed in REQ-0001?").
+_OTHER_KEY = re.compile(r"\b(?:REQ|AC|TCOND|TC|RISK|DEF|FEAT|PERF|PRF|RUN|A11Y|SEC)-\d{2,6}\b", re.IGNORECASE)
+
+
+def _route_p6(text: str, t: str) -> tuple[str, dict[str, Any]] | None:
+    """Phase 6 questions (P6-06): release readiness, changes, repairs, regression runs and exploration. Specific
+    phrases or Phase 6 keys only, so earlier-phase questions keep their own routes."""
+    heal = re.search(r"\bHEAL-\d{2,6}\b", text, re.IGNORECASE)
+    if heal:
+        return "explain_heal", {"key": heal.group(0).upper()}
+    if re.search(r"\bREL-\d{2,6}\b", text, re.IGNORECASE) or RELEASE_QUESTION.search(t):
+        return "release_readiness_summary", {}
+    chg = re.search(r"\bCHG-\d{2,6}\b", text, re.IGNORECASE)
+    if _OTHER_KEY.search(text) and not chg:
+        return None
+    if re.search(r"\bexplore\b|\b(?:start|propose|run|begin|plan)\b[\w\s]{0,20}?\bexplor", t):
+        return "propose_exploration", {"signed_in": True} if re.search(r"\bsigned[ -]in\b", t) else {}
+    if re.search(r"\bregression run\b|\bre-?run\b.*\b(?:after|since) (?:the )?change", t):
+        return "propose_regression_run", {}
+    if "risk" not in t and re.search(
+        r"\b(?:the|this|that|a|last|latest) changes?\b.*\baffect|\bimpact of (?:the )?(?:last |latest )?(?:change|rescan)|\bchange impact\b|\bimpact summary\b|\bwhat (?:is|was) (?:affected|impacted)",
+        t,
+    ):
+        return "impact_summary", {}
+    if chg or re.search(
+        r"\bwhat(?:'s| has| did)? changed?\b(?! in\b)|\bwhat changed (?:in|on) the (?:site|app|application)\b", t
+    ):
+        return "what_changed", {}
+    return None
+
+
 def _route_nf(text: str, t: str) -> tuple[str, dict[str, Any]] | None:
     """Non-functional questions (P5-07): finding keys, load tests, accessibility and security."""
     finding = re.search(r"\b(?:A11Y|SEC)-\d{2,6}-\d{2,4}\b", text, re.IGNORECASE)
@@ -1097,7 +1184,9 @@ class AiRequirementUpdates(BaseModel):
 ASK_TASK = (
     "You are the QA analyst assistant for one project. Answer the project member's question using only the project "
     "data below. Cite artefacts by their keys exactly as given (e.g. REQ-0001, RISK-001); never invent keys, counts, "
-    "test results or behaviour. Backend behaviour cannot be observed; say so when relevant. No tests have been run. "
+    "test results or behaviour. Backend behaviour cannot be observed; say so when relevant. Test results and the "
+    "release state are summarised under `execution` and `release`; never state or predict whether the project can be "
+    "released or give a release verdict yourself: the platform answers release questions from the stored assessment. "
     "If the data does not answer the question, say what is missing. Keep it short.\n\nQuestion: {question}"
 )
 UPDATE_TASK = (
@@ -1138,8 +1227,63 @@ async def _project_digest(t: Turn) -> str:
                 {"key": r.key, "title": r.title, "score": r.score, "level": r.level.value, "status": r.status.value}
                 for r in risks[:100]
             ],
+            **await _p6_digest(t),
         }
     )
+
+
+async def _p6_digest(t: Turn) -> dict[str, Any]:
+    """P6-06: the real execution and release state, instead of a fixed "no tests have been run"."""
+    from app.db.models import ExecutionResult
+    from app.services import release as rsvc
+
+    results = (
+        await t.s.execute(
+            select(func.count()).select_from(ExecutionResult).where(ExecutionResult.project_id == t.project_id)
+        )
+    ).scalar_one()
+    rows = await rsvc.history(t.s, t.project_id)
+    latest = rows[0] if rows else None
+    release = (
+        {
+            "key": latest.key,
+            "recommendation": latest.recommendation.value,
+            "final_verdict": latest.final_verdict.value if latest.final_verdict else None,
+            "state": rsvc.state_word(latest),
+            "status": latest.status.value,
+            "note": "Advisory; Gate 9 decides. Answered by the platform, not by you.",
+        }
+        if latest is not None
+        else None
+    )
+    return {"execution": {"test_results_recorded": int(results)}, "release": release}
+
+
+# P6-06: a model answer that states a release verdict or readiness is replaced by the rules answer.
+RELEASE_CLAIM = re.compile(
+    r"\b(?:no[- ]go|go)\b\s*(?:[:.!·,;)]|$)"
+    r"|\bready (?:to|for) (?:release|ship|launch|go[- ]live|production|prod|deploy)"
+    r"|\bsafe to (?:release|ship|launch|deploy|go[- ]live)"
+    r"|\b(?:can|could|should|may) (?:safely )?(?:now )?(?:be )?(?:release|ship|launch|deploy|go live)\w*"
+    r"|\brelease[- ]ready\b|\b(?:approved|cleared|good|fit|ok|okay) (?:for|to) (?:release|ship|launch|production|go live)"
+    r"|\bverdict\b|\bgate 9\b",
+    re.IGNORECASE,
+)
+
+
+async def release_guard(t: Turn, ans: Answer) -> Answer:
+    """Every model answer is checked (QA P6-06): if it talks about a release verdict or readiness, the platform's
+    rules answer (verdict from the stored assessment, ending with the release statement) is returned instead."""
+    if ans.answered_by != "ai" or not RELEASE_CLAIM.search(ans.content):
+        return ans
+    from app.services import assistant_p6
+
+    rules = await assistant_p6.release_readiness_summary(t, {})
+    rules.notice("partial_answer", RELEASE_GUARD_NOTICE)
+    return rules
+
+
+RELEASE_GUARD_NOTICE = "Release questions are answered from the stored assessment, not by AI."
 
 
 async def ai_answer(t: Turn, question: str) -> Answer | None:

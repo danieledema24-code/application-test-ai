@@ -30,5 +30,66 @@ items, so Phase 1–4 discovery, test design and the Phase 4 failing set are unc
 
 `POST /login` returns the account page without a session cookie, so signed-in state does not persist.
 
+## Release 2 (Phase 6)
+
+P6-00 adds a second release of the shop for change detection, impact analysis, healing and exploratory testing. The
+release comes from `DEMO_VERSION` (default `1`). If `DEMO_VERSION_FILE` is set, that file is read on every request
+and its content (`1` or `2`) wins, so a release can be flipped without restarting; a missing or unreadable file falls
+back to `DEMO_VERSION`. The file is set by whoever starts the shop and is never served.
+
+```sh
+DEMO_VERSION=2 npm start                          # release 2
+DEMO_VERSION_FILE=/tmp/demo-version npm start     # echo 2 > /tmp/demo-version flips the next request to release 2
+```
+
+Release 1 is byte-for-byte the Phase 5 shop (checked route by route against a snapshot in
+`backend/tests/fixtures/demo_shop_v1_snapshot.json`). Release 2 changes:
+
+1. The nav gains "Offers" (`/offers`), between Products and Contact.
+2. `/offers` has the heading "Offers" and one offer, "Desk lamp bundle", with:
+   - `<button type="button">Show details</button>`: its inline handler writes "Bundle price: £NaN" and then throws a
+     `TypeError` (it reads a property of `undefined`);
+   - `<button type="button">Add to basket</button>`: its handler calls `fetch('/basket', {method: 'POST'})`;
+   - a "Promo code" form (one text field, submit "Apply code", `POST /offers/apply`, which says the code is not
+     valid).
+3. `/products/1` (Travel mug) returns 404 and is gone from `/products`. The bearer-token API is unchanged.
+4. The Contact form: the label "Message" becomes "Your message" (same `id`/`name`) and the textarea is `required`;
+   `POST /contact` rejects an empty message with 400 "Name, email and message are required"; a Name that is empty
+   after trimming gets 400 with the form shown again, Name flagged (`aria-invalid`) and "Name is required" (release 1
+   accepts a Name of only spaces: the demo chain's DEF-0002, fixed in release 2); a new optional field
+   "Order number" (`maxlength=20`); the button "Send message" becomes "Send". The confirmation ("Thank you" /
+   "Message sent") is unchanged.
+5. Everything else is as in release 1, Phase 5 flaws included.
+
+### Exploratory testing (P6-03a)
+
+Release 2's `/offers` is what the safe explorer finds on the demo (AI off, charter "New and changed pages from
+CHG-0001"): clicking "Show details" gives an uncaught `TypeError` and "Bundle price: £NaN" (two medium findings, one
+grouped defect draft), clicking "Add to basket" makes the page try `POST /basket`, which the explorer blocks before it
+leaves the browser ("Blocked write attempts"), and "Apply code" submits the Promo code form, so it is never clicked
+("Not tried: Submits a form").
+
+To check what reached the shop, set `DEMO_ACCESS_LOG` to a file path: one line `METHOD /path?query STATUS` is
+appended per request (no bodies, headers or cookies; the file is never served, and responses are unchanged). After an
+exploratory session the log holds only `GET` (and `HEAD`) lines.
+
+```sh
+DEMO_VERSION=2 DEMO_ACCESS_LOG=/tmp/demo-access.log npm start
+```
+
 The test login and API token live in `demo-login.mjs`. Tests read them from there or from `DEMO_LOGIN_USER` /
 `DEMO_LOGIN_PASSWORD`; docs never copy them.
+
+### Phase 6 journey (P6-08)
+
+`web/e2e/phase6-journey.spec.ts` takes a fresh project through release 1 and release 2 of a **private** copy of the
+shop: it writes `1` or `2` into the shop's `DEMO_VERSION_FILE` (and always leaves `1`), and reads `DEMO_ACCESS_LOG` to
+check that only `GET`/`HEAD` reached the shop while the exploratory session ran. Never point it at the shared shop on
+:4100. A private stack, for example:
+
+```sh
+DEMO_PORT=4130 DEMO_VERSION_FILE=$TMP/version DEMO_ACCESS_LOG=$TMP/access.log npm start
+```
+
+The backend closing suite (`backend/tests/integration/test_p6_close.py`) starts its own copy the same way, saves the
+shop's test account to the project, and checks it never appears in a Phase 6 artefact, report or log.

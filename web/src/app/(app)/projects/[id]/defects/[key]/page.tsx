@@ -12,7 +12,7 @@ import { api, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { CONFIDENCE_TEXT } from "@/lib/execution";
-import { DEFECT_STATUS, environmentLine, isNonFunctional, NF_ROOT_CAUSE, nfOccurrences, PRIORITY_TEXT, rejectReasonText, SOURCE_TEXT, reproText, type DefectAction, type DefectDetail, type DefectList } from "@/lib/defects";
+import { checkHref, DEFECT_STATUS, environmentLine, isCheckDraft, NF_ROOT_CAUSE, nfOccurrences, PRIORITY_TEXT, rejectReasonText, SOURCE_TEXT, reproText, type DefectAction, type DefectDetail, type DefectList } from "@/lib/defects";
 import { Button, Callout, EmptyState, ErrorState, LinkButton, Skeleton, useToast } from "@/components/ui";
 import { ClassificationLabel, DefectStatusPill, HypothesisLabel, ObservedLabel, SeverityValue } from "@/components/domain/ExecutionLabels";
 import { GeneratedByLabel } from "@/components/domain/ObservationLabel";
@@ -124,7 +124,8 @@ function DefectPage() {
   const permNote = "You can read and edit this draft, but confirming or rejecting needs gate-approval permission. Ask someone who can approve gates.";
   const rerun = caseKey && member ? <LinkButton href={`/projects/${p.id}/execution?new=1&cases=${caseKey}`}>Re-run {caseKey}…</LinkButton> : null;
   const env = d.environment ?? {};
-  const nf = isNonFunctional(d.source);
+  // Drafts from checks and exploration (design P5 §10, P6 §9.8): observed facts, no root-cause analysis.
+  const nf = isCheckDraft(d.source);
 
   if (editing)
     return (
@@ -341,9 +342,9 @@ function DefectPage() {
               ) : (
                 "None"
               )}
-              {(env.scan_key || env.run_key) && (
+              {checkHref(p.id, env) && (
                 <Link
-                  href={`/projects/${p.id}/non-functional/${env.scan_key ? `checks/${env.scan_key}` : `load-tests/${env.run_key}`}`}
+                  href={checkHref(p.id, env)!}
                   className="mt-1 block font-medium text-navy-700 underline underline-offset-2"
                 >
                   Open {env.scan_key ?? env.run_key}
@@ -387,7 +388,7 @@ function DefectPage() {
         projectId={p.id}
         duplicates={(others.data?.items ?? []).filter((x) => x.id !== d.id).map((x) => ({ key: x.key, summary: x.summary }))}
         onReject={(v) => act("reject", v)}
-        nonFunctional={isNonFunctional(d.source)}
+        nonFunctional={isCheckDraft(d.source)}
       />
     </div>
   );

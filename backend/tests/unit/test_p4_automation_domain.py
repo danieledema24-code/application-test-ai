@@ -282,7 +282,7 @@ def test_demo_spec_content() -> None:
     assert 'test("TC-0019: Send the contact form with an empty Message", { tag: ["@TC-0019"] }' in code
     assert 'await test.step("Press Send message", async () => {' in code
     assert "await qa.expectSubmissionBlocked(contact.form);" in code
-    assert 'await qa.expectFieldFlagged("Message");' in code
+    assert 'await qa.expectFieldFlagged(contact.message, "Message");' in code  # D36: through the page object
     assert 'await test.step("Enter \\"Sam Tester\\" in Name"' in code
     for banned in ("waitForTimeout", "test.only", "page.locator(", 'Sam Tester")', 'sam@example.com")'):
         assert banned not in code, banned
@@ -293,7 +293,8 @@ def test_demo_spec_content() -> None:
     assert '"TD-0001": "Sam Tester"' in b.assets["data/factories.ts"]
     assert [m["helper"] for m in out.assertion_map] == ["expectFormShown", "expectSubmissionBlocked",
                                                         "expectFieldFlagged"]  # fmt: skip
-    assert "pages/ContactPage.ts#message" in out.locators  # used through qa.expectFieldFlagged("Message")
+    assert "pages/ContactPage.ts#message" in out.locators  # used through qa.expectFieldFlagged(contact.message, …)
+    assert out.assertion_map[-1].get("by_locator") is True
 
 
 def test_long_valid_values_are_titled_by_field() -> None:

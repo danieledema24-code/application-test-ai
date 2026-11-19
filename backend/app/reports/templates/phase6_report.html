@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<title>{{ c.title }} · {{ c.source_key }} · {{ c.project.name }}</title>
+<style>
+  body { font-family: Helvetica, Arial, sans-serif; color: #1D2433; font-size: 11px; line-height: 1.45; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 15px; margin: 18px 0 6px; border-bottom: 1px solid #E4E7EC; }
+  h3 { font-size: 12px; margin: 12px 0 4px; }
+  .muted { color: #535D70; } .statement { background: #F0F4FA; border: 1px solid #D0D9E8; padding: 6px 8px; border-radius: 4px; }
+  .band { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+  .draft { background: #FFFAEB; color: #B54708; border: 1px solid #FEDF89; }
+  .verdict { font-size: 14px; font-weight: 700; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0; } th, td { border: 1px solid #E4E7EC; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #F9FAFB; }
+  .lessons { white-space: pre-line; }
+</style>
+</head>
+<body>
+{% macro criteria_table(rows) %}
+  <table><thead><tr><th>Criterion</th><th>Blocking</th><th>Status</th><th>Source</th><th>Evidence</th></tr></thead><tbody>
+  {% for x in rows %}<tr><td>{{ x.text }}<br><span class="muted">{{ x.detail }}</span>{% if x.confirmed %}<br>{{ x.confirmed }}{% endif %}</td>
+    <td>{{ x.blocking_text }}</td><td>{{ x.status_text }}</td><td>{{ x.source_label }}</td><td>{{ x.evidence or '—' }}</td></tr>
+  {% else %}<tr><td colspan="5">No criteria.</td></tr>{% endfor %}
+  </tbody></table>
+{% endmacro %}
+{% macro conditions_list(rows) %}
+  {% if rows %}<ol>{% for x in rows %}<li>{{ x.text }}{% if x.blocking %} (blocking){% endif %}</li>{% endfor %}</ol>
+  {% else %}<p>None.</p>{% endif %}
+{% endmacro %}
+{% macro residual_table(rows, overall) %}
+  <p>Overall residual risk: {{ overall or '—' }}</p>
+  <table><thead><tr><th>Risk</th><th>Before testing</th><th>Now</th><th>Why</th></tr></thead><tbody>
+  {% for r in rows %}<tr><td>{{ r.key }} · {{ r.title }}</td><td>{{ r.initial }}</td><td>{{ r.residual }}</td><td>{{ r.line }}</td></tr>
+  {% else %}<tr><td colspan="4">No risks in the register.</td></tr>{% endfor %}
+  </tbody></table>
+{% endmacro %}
+<header>
+  <h1>{{ c.title }} · {{ c.source_key }}</h1>
+  <p class="muted">{{ c.project.name }} · version {{ c.version }} · generated {{ c.generated_at[:16].replace('T', ' ') }} UTC</p>
+  {% if c.band %}<p><span class="band draft">{{ c.band }}</span></p>{% endif %}
+</header>
+
+{% if c.report_type == 'release_readiness' %}
+<p class="statement">{{ c.statement }}</p>
+<section><h2>{{ 'Final verdict' if c.assessment.status == 'final' else 'Recommendation' }}</h2>
+  <p class="verdict">{{ c.verdict_text }}</p>
+  {% if c.override_text %}<p><strong>{{ c.override_text }}</strong></p>{% endif %}
+  <p>{{ c.reason }}</p>
+  <p>{{ c.decision_line }}</p>
+  <p class="muted">Assessed {{ c.assessment.assessed_at[:16].replace('T', ' ') if c.assessment.assessed_at else '' }} UTC{% if c.assessment.created_by %} by {{ c.assessment.created_by.full_name }}{% endif %} · written by rules.</p>
+  {% if c.narrative %}<h3>What this means</h3><p>{{ c.narrative.text }}</p><p class="muted">{{ 'Written by AI from the recorded figures.' if c.narrative.generated_by == 'ai' else 'Written by rules.' }}</p>{% endif %}
+</section>
+<section><h2>Conditions ({{ c.conditions|length }})</h2>{{ conditions_list(c.conditions) }}</section>
+<section><h2>Criteria ({{ c.criteria|length }})</h2>{{ criteria_table(c.criteria) }}
+  <p class="muted">"Critical or high" means the critical and major severities.</p></section>
+<section><h2>Residual risk</h2>{{ residual_table(c.residual, c.overall_residual) }}</section>
+<section><h2>What changed since the last assessment</h2>
+  {% if c.changes.previous %}<p>Since {{ c.changes.previous.key }}:</p><ul>{% for x in c.changes.parts %}<li>{{ x }}</li>{% endfor %}</ul>
+  {% else %}<p>{{ c.changes.text }}</p>{% endif %}
+</section>
+<section><h2>Limitations</h2><ul>{% for x in c.limitations %}<li>{{ x }}</li>{% endfor %}</ul></section>
+{% else %}
+{% set m = c.measures %}
+<section><h2>Summary</h2><p>{{ c.summary }}</p><p class="muted">Written by rules. Measures are computed in code.</p>
+  {% if c.release.key %}
+  <p class="statement">{{ c.release.statement }}</p>
+  <p><strong>{{ c.release.key }}: {{ c.release.verdict_text }}</strong>{% if c.release.override_text %} · {{ c.release.override_text }}{% endif %}</p>
+  <p>{{ c.release.reason }}</p><p>{{ c.release.decision_line }}</p>
+  {% else %}<p>{{ c.release.text }}</p>{% endif %}
+</section>
+<section><h2>Scope and what was not tested</h2>
+  <p>{{ c.scope.requirements }} approved requirements, {{ c.scope.acceptance_criteria }} approved acceptance criteria, {{ c.scope.test_cases }} approved test cases{% if c.scope.test_types %}; test types in scope: {{ c.scope.test_types|join(', ') }}{% endif %}.</p>
+  <h3>Not tested</h3>
+  {% if c.not_tested %}<ul>{% for x in c.not_tested %}<li>{{ x.item }}: {{ x.reason }}</li>{% endfor %}</ul>{% else %}<p>None.</p>{% endif %}
+</section>
+<section><h2>Deviations from the test plan</h2><p>{{ c.deviations_line }}</p>
+  {% if c.deviations %}<table><thead><tr><th>Test case</th><th>Deviation</th><th>Reason</th></tr></thead><tbody>
+  {% for d in c.deviations %}<tr><td>{{ d.case_key }} · {{ d.title }}</td><td>{{ d.deviation }}</td><td>{{ d.reason }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<section><h2>Test measures</h2>
+  <table><thead><tr><th>Group</th><th>Approved</th><th>Executed</th><th>Passed</th><th>Failed</th><th>Flaky</th><th>Error</th><th>Blocked</th><th>Skipped</th><th>Not run</th></tr></thead><tbody>
+  {% for b in m.groups %}<tr><td>{{ b.group }}</td><td>{{ b.approved }}</td><td>{{ b.executed }}</td><td>{{ b.passed }}</td><td>{{ b.failed }}</td><td>{{ b.flaky }}</td><td>{{ b.error }}</td><td>{{ b.blocked }}</td><td>{{ b.skipped }}</td><td>{{ b.not_run }}</td></tr>{% endfor %}
+  </tbody></table>
+  <h3>Coverage</h3>
+  <p>Requirements: {{ m.coverage.requirements.with_approved_case }} of {{ m.coverage.requirements.approved }} approved requirements have an approved test case ({{ m.coverage.requirements.percent_approved_covered }} %); {{ m.coverage.execution.requirements.with_result }} have a result.</p>
+  <p>Acceptance criteria: {{ m.coverage.acceptance_criteria.covered }} of {{ m.coverage.acceptance_criteria.approved }} approved acceptance criteria are covered by a test case ({{ m.coverage.acceptance_criteria.percent }} %).</p>
+  <h3>Defects</h3>
+  <p>{{ m.defects.total }} recorded.
+    By severity: {% for k, v in m.defects.by_severity|dictsort %}{{ v }} {{ k }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}.
+    By status: {% for k, v in m.defects.by_status|dictsort %}{{ v }} {{ k }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}.
+    By source: {% for k, v in m.defects.by_source|dictsort %}{{ v }} {{ k }}{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+  <h3>Runs</h3>
+  <table><thead><tr><th>Run</th><th>Status</th><th>Selection</th><th>Passed</th><th>Failed</th><th>Error</th><th>Blocked</th><th>Skipped</th></tr></thead><tbody>
+  {% for r in c.runs %}<tr><td>{{ r.key }}</td><td>{{ r.status }}</td><td>{{ r.selection }}{% if r.change_set %} · regression after {{ r.change_set }}{% endif %}</td><td>{{ r.totals.passed or 0 }}</td><td>{{ r.totals.failed or 0 }}</td><td>{{ r.totals.error or 0 }}</td><td>{{ r.totals.blocked or 0 }}</td><td>{{ r.totals.skipped or 0 }}</td></tr>
+  {% else %}<tr><td colspan="8">No finished run.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<section><h2>Change sets and regression runs</h2>
+  {% if c.change_sets %}<ul>{% for x in c.change_sets %}<li>{{ x.key }}: {{ x.total }} changes{% if x.regression_runs %} · regression runs: {{ x.regression_runs|join(', ') }}{% else %} · no regression run{% endif %}</li>{% endfor %}</ul>
+  {% else %}<p>No rescan has been compared yet.</p>{% endif %}
+</section>
+<section><h2>Exploratory sessions</h2>
+  {% if c.exploratory.sessions %}<ul>{% for x in c.exploratory.sessions %}<li>{{ x.key }} · {{ x.status_label or x.status }}{% if x.ran is not defined or x.ran %} · {{ x.actions if x.actions is not none else '—' }} actions · {{ x.findings }} findings ({{ x.open_high_medium }} open high or medium){% endif %}{% if x.statement %}<br><span class="statement">{{ x.statement }}</span>{% endif %}</li>{% endfor %}</ul>
+  {% else %}<p>{{ c.exploratory.empty }}</p>{% endif %}
+</section>
+<section><h2>Non-functional summary</h2>
+  <ul>{% for x in c.non_functional %}<li>{{ x.type }}{% if x.source %} ({{ x.source }}){% endif %}: {{ x.text }}</li>{% endfor %}</ul>
+</section>
+<section><h2>Exit criteria</h2>{{ criteria_table(c.criteria) }}
+  <h3>Conditions</h3>{{ conditions_list(c.conditions) }}</section>
+<section><h2>Residual risk</h2>{{ residual_table(c.residual, c.overall_residual) }}</section>
+<section><h2>Reusable assets</h2>
+  <p>{{ c.assets.scripts|length }} test scripts{% if c.assets.profiles %}; load-test profiles: {% for p in c.assets.profiles %}{{ p.key }} ({{ p.name }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}.</p>
+  {% if c.assets.scripts %}<ul>{% for x in c.assets.scripts %}<li>{{ x.path }} v{{ x.version }} · {{ x.state }}</li>{% endfor %}</ul>{% endif %}
+</section>
+<section><h2>Limitations</h2><ul>{% for x in c.limitations %}<li>{{ x }}</li>{% endfor %}</ul></section>
+<section><h2>Lessons learned</h2>
+  {% if c.lessons and c.lessons.text %}<p class="lessons">{{ c.lessons.text }}</p>
+  <p class="muted">{% if c.lessons.generated_by == 'ai' %}Suggested by AI and kept by {{ c.lessons.author or 'someone' }}; not edited.{% else %}Written by {{ c.lessons.author or 'someone' }}.{% endif %}</p>
+  {% else %}<p>No lessons learned were recorded.</p>{% endif %}
+</section>
+{% endif %}
+</body>
+</html>

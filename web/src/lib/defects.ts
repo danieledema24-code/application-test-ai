@@ -20,7 +20,7 @@ export type DefectRow = {
   severity: Severity;
   priority: DefectPriority;
   status: DefectStatus;
-  source: "analysis" | "user" | "accessibility" | "security" | "performance";
+  source: "analysis" | "user" | "accessibility" | "security" | "performance" | "exploratory";
   /** Observed "Why" line of a non-functional draft (design P5 §10); null otherwise. */
   why?: string | null;
   reproducibility: Reproducibility;
@@ -47,7 +47,9 @@ export type DefectDetail = DefectRow & {
   environment: { url?: string; browser?: string; viewport?: string; run_key?: string; result_key?: string; date?: string; failed_step?: string; script_version?: number; duplicate_of?: string; related_to?: string;
     // Phase 5 (P5-02/P5-01c): non-functional drafts
     scan_key?: string; rule_id?: string; axe?: string | null; pages?: string[]; engine?: string; profile?: string; virtual_users?: number;
-    occurrences?: { scan_key?: string; run_key?: string; pages?: number; added?: boolean; measured?: number | null; at?: string }[] };
+    // Phase 6 (P6-03a): exploratory drafts
+    step?: number | null; findings?: string[]; why?: string;
+    occurrences?: { scan_key?: string; run_key?: string; pages?: number; findings?: string[]; added?: boolean; measured?: number | null; at?: string }[] };
   preconditions: string[];
   steps: string[];
   expected: string;
@@ -88,12 +90,33 @@ export const REJECT_REASONS: { value: RejectReason; label: string }[] = [
   { value: "cannot_reproduce", label: "Can't reproduce" },
   { value: "test_problem", label: "Problem with the test" },
 ];
-/** Non-functional drafts only (design P5 §10, open question 2). */
+/** Drafts from coded checks (design P5 §10, open question 2; P6 §9.8 adds exploratory). */
 export const ACCEPTED_RISK_REASON: { value: RejectReason; label: string } = { value: "accepted_risk", label: "Accepted risk" };
 export const NON_FUNCTIONAL_SOURCES = ["accessibility", "security", "performance"] as const;
+/**
+ * Sources whose drafts come from a check rather than a test case: they state what was observed (the "Why" line), have
+ * no root-cause analysis, and can be rejected as Accepted risk at Gate 8. Mirrors backend `defects.CHECK_DRAFTS`; the
+ * server refuses Accepted risk for any other source with its own message, which the dialog shows.
+ */
+export const CHECK_DRAFT_SOURCES = [...NON_FUNCTIONAL_SOURCES, "exploratory"] as const;
 export const isNonFunctional = (source: string | null | undefined) => (NON_FUNCTIONAL_SOURCES as readonly string[]).includes(source ?? "");
-/** Source chip text (design P5 §10). */
-export const SOURCE_TEXT: Record<DefectRow["source"], string> = { analysis: "Functional", user: "Functional", accessibility: "Accessibility", security: "Security", performance: "Performance" };
+export const isCheckDraft = (source: string | null | undefined) => (CHECK_DRAFT_SOURCES as readonly string[]).includes(source ?? "");
+/** Source chip text (design P5 §10, P6 §9.8). */
+export const SOURCE_TEXT: Record<DefectRow["source"], string> = {
+  analysis: "Functional",
+  user: "Functional",
+  accessibility: "Accessibility",
+  security: "Security",
+  performance: "Performance",
+  exploratory: "Exploratory",
+};
+/** Where a check draft came from: the check, load test or exploratory session page. */
+export function checkHref(projectId: string, env: { scan_key?: string; run_key?: string }): string | null {
+  if (env.scan_key?.startsWith("EXP-")) return `/projects/${projectId}/execution/exploratory/${env.scan_key}`;
+  if (env.scan_key) return `/projects/${projectId}/non-functional/checks/${env.scan_key}`;
+  if (env.run_key) return `/projects/${projectId}/non-functional/load-tests/${env.run_key}`;
+  return null;
+}
 export const rejectReasonText = (r: string | null | undefined) => [...REJECT_REASONS, ACCEPTED_RISK_REASON].find((x) => x.value === r)?.label ?? r ?? "";
 
 /** Defect detail Environment line (design P5 §10): check/run facts for non-functional drafts, run facts otherwise. */
@@ -103,16 +126,22 @@ export function environmentLine(d: Pick<DefectDetail, "source" | "environment">,
   const parts =
     d.source === "performance"
       ? [env.url, env.engine, env.profile, env.run_key, env.virtual_users ? `${env.virtual_users} virtual users` : null]
-      : d.source === "accessibility" || d.source === "security"
-        ? [env.url, env.browser, vp, env.scan_key]
-        : [env.url, env.browser, env.viewport ? env.viewport.replace("x", " × ") : null, env.run_key, env.date ? fmt(env.date) : null];
+      : d.source === "exploratory"
+        ? [env.url, env.browser, env.viewport, env.scan_key && env.step ? `${env.scan_key} step ${env.step}` : env.scan_key]
+        : d.source === "accessibility" || d.source === "security"
+          ? [env.url, env.browser, vp, env.scan_key]
+          : [env.url, env.browser, env.viewport ? env.viewport.replace("x", " × ") : null, env.run_key, env.date ? fmt(env.date) : null];
   return parts.filter(Boolean).join(" · ") || "None";
 }
 
-/** Occurrences of a non-functional defect: "A11Y-0001 · 2 pages", "A11Y-0002 · 2 pages (added)", "PERF-0001". */
+/** Occurrences of a check draft: "A11Y-0001 · 2 pages", "A11Y-0002 · 2 pages (added)", "PERF-0001", "EXP-0002 · 2 findings". */
 export function nfOccurrences(d: Pick<DefectDetail, "environment">): string[] {
   return (d.environment?.occurrences ?? []).map((o) =>
-    o.scan_key ? `${o.scan_key} · ${o.pages ?? 0} page${o.pages === 1 ? "" : "s"}${o.added ? " (added)" : ""}` : `${o.run_key ?? ""}`,
+    o.scan_key && o.findings
+      ? `${o.scan_key} · ${o.findings.length} finding${o.findings.length === 1 ? "" : "s"}${o.added ? " (added)" : ""}`
+      : o.scan_key
+        ? `${o.scan_key} · ${o.pages ?? 0} page${o.pages === 1 ? "" : "s"}${o.added ? " (added)" : ""}`
+        : `${o.run_key ?? ""}`,
   );
 }
 

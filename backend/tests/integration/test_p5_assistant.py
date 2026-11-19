@@ -2,7 +2,7 @@
 
 Covers: the four non-functional questions answer from stored checks and load tests only (no run → "No load test has
 run in this project yet."); security answers always end with the fixed statement (design check 33); Later phases
-lists only Phase 6 items (32); accepting "Check accessibility" starts a check; accepting "Plan a load test" creates a
+lists no Phase 5 item (32; P6-06 moved it past Phase 6); accepting "Check accessibility" starts a check; accepting "Plan a load test" creates a
 request waiting for approval, never a running test (32); A11Y/SEC/PERF/PRF keys resolve in the citation guard and
 unknown ones are removed.
 """
@@ -66,7 +66,8 @@ async def test_assistant_v4_ai_off(env: Any) -> None:
         return list(r.json()["result"]["applied"])
 
     caps = (await client.get(f"{API}/projects/{pid}/assistant/capabilities", headers=h)).json()
-    assert {x["needs"] for x in caps["later_phase_tasks"]} == {"Phase 6"}
+    # P6-06 built the Phase 6 tasks; only the Hosted deployment phase and deferred items remain.
+    assert all(x["available_from_phase"] > 6 for x in caps["later_phase_tasks"])
     ours = {i["intent"]: i for i in caps["intents"]}
     for intent in ("performance_summary", "accessibility_summary", "security_summary", "explain_finding"):
         assert ours[intent]["available"] and not ours[intent]["needs_ai"]

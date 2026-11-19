@@ -23,6 +23,10 @@ PREFIXES = {
     "security_scan": "SEC",  # P5-03 (findings: SEC-0001-01)
     "perf_profile": "PRF",  # P5-01b
     "perf_run": "PERF",  # P5-01b
+    "change_set": "CHG",  # P6-01
+    "exploratory_session": "EXP",  # P6-03a (findings: EXP-0001-01)
+    "heal": "HEAL",  # P6-04
+    "release_assessment": "REL",  # P6-05a
 }
 # Key widths per api-contracts.md (REQ-0001, AC-0001, DOR-01, RISK-001, TS-001, TP-001, DOC-001, PROP-0001).
 WIDTHS = {"DOR": 2, "DOD": 2, "RISK": 3, "TS": 3, "TP": 3, "DOC": 3, "PRF": 2}

@@ -8,6 +8,7 @@ import { ArrowRight } from "lucide-react";
 import type { Workflow } from "@/lib/contract";
 import { useApi } from "@/lib/hooks";
 import { nfGlanceLines, nfLifecycleRows, nfReachable, type Overview } from "@/lib/nonfunctional";
+import { exploreLifecycleStatus, type SessionList } from "@/lib/exploratory";
 import { Card, CardBody, CardHeader } from "@/components/ui";
 
 /** GET /projects/{id}/non-functional, only once the checks are reachable (earlier projects make no call). */
@@ -45,19 +46,45 @@ export function NonFunctionalGlance({ projectId, g2, overview }: { projectId: st
   );
 }
 
-/** "Optional checks · any time after Gate 2" (§4.3): three rows, no gate diamonds, each linking to its tab. */
-export function OptionalChecks({ projectId, g2, overview, canApprove }: { projectId: string; g2: boolean; overview: Overview | undefined; canApprove: boolean }) {
-  const rows = nfLifecycleRows(overview, g2, canApprove);
+/** "Optional checks · any time after Gate 2" (§4.3; P6 §4.3 adds Exploratory testing): no gate diamonds, each row
+ * linking to its tab. */
+export function OptionalChecks({
+  projectId,
+  g2,
+  overview,
+  canApprove,
+  explore,
+}: {
+  projectId: string;
+  g2: boolean;
+  overview: Overview | undefined;
+  canApprove: boolean;
+  explore?: { g2: boolean; list: SessionList | undefined };
+}) {
+  const rows: { id: string; label: string; agent: string; status: string; href: string; on: boolean }[] = nfLifecycleRows(overview, g2, canApprove).map((r) => ({
+    ...r,
+    href: `/projects/${projectId}/non-functional?tab=${r.id}`,
+    on: g2,
+  }));
+  if (explore)
+    rows.push({
+      id: "exploratory",
+      label: "Exploratory testing",
+      agent: "Safe explorer (rules)",
+      status: exploreLifecycleStatus(explore.list, explore.g2, canApprove),
+      href: `/projects/${projectId}/execution?tab=exploratory`,
+      on: explore.g2,
+    });
   return (
     <section aria-labelledby="optional-checks-h" className="mt-4 border-t border-line pt-3">
       <h3 id="optional-checks-h" className="text-small font-semibold text-fg-strong">
         Optional checks · any time after Gate 2
       </h3>
-      <ul className="mt-2 grid gap-2 md:grid-cols-3">
+      <ul className={`mt-2 grid gap-2 ${rows.length > 3 ? "sm:grid-cols-2 lg:grid-cols-4" : "md:grid-cols-3"}`}>
         {rows.map((r) => (
           <li key={r.id} className="min-w-0">
-            {g2 ? (
-              <Link href={`/projects/${projectId}/non-functional?tab=${r.id}`} className="block rounded-sm hover:underline">
+            {r.on ? (
+              <Link href={r.href} className="block rounded-sm hover:underline">
                 <span className="block text-small font-semibold text-fg-strong">{r.label}</span>
                 <span className="block text-caption text-fg">{r.status}</span>
                 <span className="block text-caption text-fg-muted">{r.agent}</span>
@@ -72,7 +99,10 @@ export function OptionalChecks({ projectId, g2, overview, canApprove }: { projec
         ))}
       </ul>
       <p className="mt-2 text-caption text-fg-muted">
-        Every load test needs its own approval. Accessibility and security checks only read pages. Starts only when someone runs it.
+        {explore
+          ? "Every load test and signed-in exploration needs its own approval. Accessibility and security checks, rescans and anonymous exploration only read pages."
+          : "Every load test needs its own approval. Accessibility and security checks only read pages."}{" "}
+        Starts only when someone runs it.
       </p>
     </section>
   );

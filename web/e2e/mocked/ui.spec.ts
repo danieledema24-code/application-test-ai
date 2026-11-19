@@ -249,7 +249,7 @@ test.describe("project workspace", () => {
     await page.goto("/projects/p1");
     const lifecycle = page.getByRole("list", { name: "QA lifecycle" });
     await expect(lifecycle.getByText("Running, step 4 of 8")).toBeVisible();
-    await expect(lifecycle.getByText("Phase 6")).toBeVisible();
+    await expect(lifecycle.getByText("Available after the first test run")).toBeVisible();
     await page.getByRole("button", { name: "Show all 21 steps" }).click();
     await expect(page.getByText("Release readiness assessment")).toBeVisible();
     await expect(page.getByText("Gate 9 · Release readiness")).toBeVisible();

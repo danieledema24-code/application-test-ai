@@ -325,11 +325,8 @@ async def test_load_ceiling_default_for_new_organisations(setup: Any) -> None:
     ctx, _client, owner, _ = setup
     async with ctx.session_factory() as s:
         org = (await s.execute(select(Organisation).where(Organisation.id == owner.org_id))).scalar_one()
-    assert (
-        org.settings
-        == {"load_ceiling": DEFAULT_CEILING.as_dict()}
-        == {"load_ceiling": {"vus": 20, "rps": 20, "duration_s": 300}}
-    )
+    # P6-00 adds the exploration ceiling next to it (test_p6_foundation.py).
+    assert org.settings["load_ceiling"] == DEFAULT_CEILING.as_dict() == {"vus": 20, "rps": 20, "duration_s": 300}
 
 
 # ------------------------------------------------------------------ migration 0017 on a database with Phase 4 data
@@ -432,7 +429,7 @@ async def test_migration_keeps_phase4_data_and_sets_the_ceiling(tmp_path: Path, 
     assert "'perf_summary'" in ev and "ck_evidence_evidence_kind" in ev and "fk_evidence_quality_scan_id" in ev
     assert settings and all('"load_ceiling"' in s and '"vus": 20' in s for s in settings)
     # The app's startup data step (main.lifespan; httpx's ASGI transport doesn't run lifespan) adds the stage rows.
-    assert await ensure_stage_rows(ctx) == 2
+    assert await ensure_stage_rows(ctx) == 4  # the two Phase 5 stages, and the two Phase 6 ones (head is 0019)
     async with client_for(ctx) as client:
         login = await client.post(
             "/api/v1/auth/login", json={"email": owner.email, "password": "correct-horse-battery"}

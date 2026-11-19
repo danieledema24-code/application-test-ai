@@ -118,7 +118,7 @@ async def test_demo_shop_empty_message_case_is_automated(make_ctx, tmp_path: Pat
         assert row["generated_by"] == "rules"
         script = (await c.get(f"{API}/automation-scripts/{row['id']}", headers=h)).json()
         assert "await qa.expectSubmissionBlocked(contact.form);" in script["code"]
-        assert 'await qa.expectFieldFlagged("Message");' in script["code"]
+        assert 'await qa.expectFieldFlagged(contact.message, "Message");' in script["code"]  # D36
         assert "waitForTimeout" not in script["code"] and "test.only" not in script["code"]
         helpers = [(m["helper"], m["args"]) for m in script["assertion_map"]]
         assert ("expectSubmissionBlocked", ["Contact us"]) in helpers, helpers

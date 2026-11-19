@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, Principal, ScopedSession
-from app.api.errors import AppError, Conflict, Forbidden, NotFound
+from app.api.errors import AppError, Conflict, Forbidden, NotFound, ValidationFailed
 from app.api.routers import p2common as c
 from app.automation.axe import load_axe
 from app.automation.loadgen import LoadGenerator, LoadGeneratorError, LoadRefused
@@ -48,6 +48,7 @@ from app.domain.performance.limits import DEFAULT_CEILING
 from app.orchestrator.orchestrator import Orchestrator
 from app.security import passive_rules as sec
 from app.services import approvals as apr
+from app.services import exploratory as esvc
 from app.services import performance as psvc
 from app.services import quality as qsvc
 from app.services import serialize_p2 as out
@@ -100,7 +101,7 @@ async def overview(project_id: uuid.UUID, ctx: Ctx, s: ScopedSession, p: Current
             gates[key] = False
     see = out.sees_email(p.membership.role)
     latest: dict[str, Any] = {}
-    for kind in QualityScanKind:
+    for kind in qsvc.NF_KINDS:
         scan = (
             await s.execute(
                 select(QualityScan)
@@ -288,6 +289,10 @@ async def list_security(project_id: uuid.UUID, s: ScopedSession, p: CurrentPrinc
 
 
 async def _scan_detail(s: Any, p: Principal, scan: QualityScan) -> dict[str, Any]:
+    if scan.kind == QualityScanKind.exploratory:  # P6-03a: an exploratory session (EXP-0001)
+        from app.api.routers.exploratory import session_view
+
+        return await session_view(s, p, scan)
     d = await qsvc.scan_dict(s, scan, see_email=out.sees_email(p.membership.role), full=True)
     d["permissions"] = {"can_start": _member(p), "can_triage": _member(p), "can_cancel": _member(p)}
     return d
@@ -309,8 +314,12 @@ async def get_scan_by_key(project_id: uuid.UUID, key: str, s: ScopedSession, p: 
 
 
 @router.post("/quality-scans/{scan_id}/cancel")
-async def cancel_scan(scan_id: uuid.UUID, s: ScopedSession, p: MemberPrincipal) -> dict[str, Any]:
+async def cancel_scan(scan_id: uuid.UUID, ctx: Ctx, s: ScopedSession, p: MemberPrincipal) -> dict[str, Any]:
     scan = await qsvc.get_scan(s, scan_id)
+    if scan.kind == QualityScanKind.exploratory:  # P6-03a Stop now: the requester or any approver, within 2 s
+        from app.api.routers.exploratory import stop_session
+
+        return await stop_session(ctx, s, p, scan)
     message = await qsvc.cancel(s, scan, p.user)
     await s.commit()
     return {"message": message, "scan": await _scan_detail(s, p, scan)}
@@ -750,17 +759,23 @@ async def org_settings(org_id: uuid.UUID, ctx: Ctx, s: ScopedSession, p: Current
     lim = await psvc.limits(ctx, s, org_id)
     org = await s.get(Organisation, org_id)
     stored = ((org.settings if org else None) or {}).get("load_ceiling") or DEFAULT_CEILING.as_dict()
+    explore = await esvc.limits(ctx, s, org_id)
     return {
         "load_ceiling": stored,
         "effective_ceiling": lim["organisation"],
         "hard_cap": lim["server"],
+        # P6-03a (design §9.9): the exploration ceiling next to the load ceiling, with the platform cap.
+        "exploration_ceiling": explore["stored"],
+        "exploration_effective": explore["organisation"],
+        "exploration_cap": explore["server"],
         "can_edit": _admin(p),
     }
 
 
 class SettingsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    load_ceiling: dict[str, int]
+    load_ceiling: dict[str, int] | None = None
+    exploration_ceiling: dict[str, Any] | None = None  # taken as sent: "5" or true get the whole-number 422
 
 
 @router.patch("/organisations/{org_id}/settings")
@@ -770,11 +785,17 @@ async def patch_org_settings(
     if org_id != p.organisation.id:
         raise NotFound("Organisation not found")
     if not _admin(p):
-        raise Forbidden("Only owners and admins can change load limits.")
+        raise Forbidden("Only owners and admins can change these limits.")
+    if body.load_ceiling is None and body.exploration_ceiling is None:
+        raise ValidationFailed("Send load_ceiling or exploration_ceiling")
     org = await s.get(Organisation, org_id)
     assert org is not None
-    await psvc.save_ceiling(ctx, s, org, p.user, body.load_ceiling)
+    if body.load_ceiling is not None:
+        await psvc.save_ceiling(ctx, s, org, p.user, body.load_ceiling)
+    if body.exploration_ceiling is not None:
+        await esvc.save_ceiling(ctx, s, org, p.user, body.exploration_ceiling)
     await s.commit()
     d = await org_settings(org_id, ctx, s, p)
-    d["message"] = "Load limits saved."
+    d["message"] = "Load limits saved." if body.exploration_ceiling is None else (
+        "Exploration limits saved." if body.load_ceiling is None else "Limits saved.")  # fmt: skip
     return d

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.reporting import phase4_reports as _p4
 from app.agents.reporting import phase5_reports as _p5
+from app.agents.reporting import phase6_reports as _p6
 from app.agents.reporting import xlsx
 from app.agents.reporting.discovery_report import _env
 from app.context import AppContext
@@ -42,6 +43,8 @@ TITLES = {
     ReportType.performance: "Performance Report",
     ReportType.accessibility: "Accessibility Report",
     ReportType.security: "Security Report",
+    ReportType.completion: "Test Completion Report",
+    ReportType.release_readiness: "Release Readiness Report",
 }
 REPORT_STAGE = {
     ReportType.requirements_spec: StageKey.requirements,
@@ -54,6 +57,8 @@ REPORT_STAGE = {
     ReportType.performance: StageKey.performance,
     ReportType.accessibility: StageKey.accessibility,
     ReportType.security: StageKey.security_assessment,
+    ReportType.completion: StageKey.release_readiness,
+    ReportType.release_readiness: StageKey.release_readiness,
 }
 PHASE3 = frozenset({ReportType.test_case_spec, ReportType.rtm})
 GATE_OF = {
@@ -86,6 +91,8 @@ async def approval(s: AsyncSession, report: QaReport) -> dict[str, Any]:
         return await _p4.approval(s, report)
     if report.report_type in _p5.PHASE5:
         return await _p5.approval(s, report)
+    if report.report_type in _p6.PHASE6:
+        return await _p6.approval(s, report)
     gate = GATE_OF[report.report_type]
     d = await gates.last_approval(s, report.project_id, gate)
     stamped = (report.source_versions or {}).get("snapshot_hash")
@@ -105,6 +112,8 @@ async def is_latest_source(s: AsyncSession, report: QaReport) -> bool:
         return await _p4.is_latest_source(s, report)
     if report.report_type in _p5.PHASE5:
         return True  # a run's or check's report never goes out of date
+    if report.report_type in _p6.PHASE6:
+        return await _p6.is_latest_source(s, report)
     current, _ = await source_snapshot(s, report.project_id, report.report_type)
     if report.report_type == ReportType.test_plan:
         from app.services.plan import current_plan
@@ -134,6 +143,8 @@ async def build(ctx: AppContext, s: AsyncSession, project: Project, report: QaRe
         return {**base, **await _p4.build(s, project, report)}
     if report.report_type in _p5.PHASE5:
         return {**base, **await _p5.build(ctx, s, project, report)}
+    if report.report_type in _p6.PHASE6:
+        return {**base, **await _p6.build(ctx, s, project, report)}
     return {**base, **await _plan(s, project)}
 
 
@@ -310,6 +321,8 @@ def render_html(content: dict[str, Any]) -> str:
         return _env.get_template("phase4_report.html").render(c=content)
     if content.get("report_type") in ("performance", "accessibility", "security"):
         return _env.get_template("phase5_report.html").render(c=content)
+    if content.get("report_type") in ("completion", "release_readiness"):
+        return _env.get_template("phase6_report.html").render(c=content)
     return _env.get_template("phase2_report.html").render(c=content)
 
 
@@ -331,6 +344,8 @@ async def render_pdf(ctx: AppContext, html_doc: str, content: dict[str, Any]) ->
         band = f" · {content.get('hypothesis_note', '')}"
     if content.get("report_type") in ("performance", "accessibility", "security"):
         band = ""
+    if content.get("report_type") in ("completion", "release_readiness"):
+        band = f" · {content['band']}" if content.get("band") else ""
     title = html.escape(f"{content['title']} · {content['project']['name']}{band}")
     header = (
         '<div style="font-family:Helvetica,Arial,sans-serif;font-size:8px;color:#535D70;width:100%;padding:0 20mm;">'
@@ -361,7 +376,7 @@ async def render(ctx: AppContext, s: AsyncSession, report: QaReport) -> QaReport
     try:
         content = await build(ctx, s, project, report)
         content["frozen"] = frozen
-        if not report.source_versions and report.report_type not in (*_p4.PHASE4, *_p5.PHASE5):
+        if not report.source_versions and report.report_type not in (*_p4.PHASE4, *_p5.PHASE5, *_p6.PHASE6):
             report.source_versions = await stamp(s, project.id, report.report_type)
         content["approval"] = (
             _p5.approval_of(content) if report.report_type in _p5.PHASE5 else await approval(s, report)
@@ -380,25 +395,33 @@ async def render(ctx: AppContext, s: AsyncSession, report: QaReport) -> QaReport
             from app.agents.reporting.phase3_reports import to_csv
 
             outputs.append(("csv", to_csv(content), "text/csv; charset=utf-8"))
-        host = await _p4.host_of(s, project.id) if report.report_type in (*_p4.PHASE4, *_p5.PHASE5) else ""
+        host = await _p4.host_of(s, project.id) if report.report_type in (*_p4.PHASE4, *_p5.PHASE5, *_p6.PHASE6) else ""
         if report.report_type in _p4.PHASE4:
             outputs.append(("csv", _p4.to_csv(content), "text/csv; charset=utf-8"))
         if report.report_type in _p5.PHASE5:
             outputs.append(("csv", _p5.to_csv(content), "text/csv; charset=utf-8"))
         if report.report_type == ReportType.performance:
             outputs.append(("csv_timeseries", _p5.to_timeseries_csv(content), "text/csv; charset=utf-8"))
+        if report.report_type in _p6.PHASE6:
+            outputs.append(("csv", _p6.to_csv(content), "text/csv; charset=utf-8"))
         tables = [
             (xlsx.SHEET_NAMES.get(report.report_type.value, "Table") if fmt == "csv" else "Time series", data)
             for fmt, data, _mime in outputs
             if fmt in ("csv", "csv_timeseries")
         ]
+        extra = None
+        if report.report_type in _p6.PHASE6:  # P6-05c: one sheet per table (criteria, conditions, risk, results…)
+            tables = _p6.xlsx_tables(content)
+            extra = _p6.summary_rows(content)
         if tables:  # P5-04b: the same rows as the CSV, one sheet per table (table reports only)
-            outputs.append(("xlsx", xlsx.to_xlsx(content, tables), xlsx.MIME))
+            outputs.append(("xlsx", xlsx.to_xlsx(content, tables, extra), xlsx.MIME))
         for fmt, data, mime in outputs:
             if report.report_type in _p4.PHASE4:
                 name = _p4.file_name(host, content, report.version, fmt)
             elif report.report_type in _p5.PHASE5:
                 name = _p5.file_name(host, content, fmt)
+            elif report.report_type in _p6.PHASE6:
+                name = _p6.file_name(host, content, fmt)
             else:
                 name = f"{slug}-v{report.version}-{content['generated_at'][:10]}.{fmt}"
             ev = await write_evidence(
@@ -452,6 +475,8 @@ async def has_source(s: AsyncSession, project_id: Any, report_type: ReportType) 
         return await _p4.has_source(s, project_id, report_type)
     if report_type in _p5.PHASE5:
         return await _p5.has_source(s, project_id, report_type)
+    if report_type in _p6.PHASE6:
+        return await _p6.has_source(s, project_id)
     if report_type == ReportType.requirements_spec:
         run, _ = await gates.current_requirements(s, project_id)
         return run is not None

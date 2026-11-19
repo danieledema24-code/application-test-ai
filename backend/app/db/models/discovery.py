@@ -6,7 +6,19 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Column, Float, ForeignKey, Index, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    false,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, CreatedMixin, IdMixin, TenantMixin, TimestampMixin
@@ -64,6 +76,12 @@ class ScanSession(IdMixin, TenantMixin, TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(default=None)
     finished_at: Mapped[datetime | None] = mapped_column(default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # Phase 6 (P6-00, migration 0019): a rescan (P6-01) and the scan it is compared with (decision D25: the last
+    # G2-approved scan unless the person chose another). Earlier scans are never deleted.
+    is_rescan: Mapped[bool] = mapped_column(default=False, server_default=false())
+    baseline_scan_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("scan_sessions.id", ondelete="RESTRICT"), default=None
+    )
 
 
 class DiscoveredPage(IdMixin, TenantMixin, TimestampMixin, Base):

@@ -3,6 +3,7 @@
 import type { Workflow } from "./contract";
 import type { ExecSummary } from "./execution";
 import { gateReview } from "./lifecycle";
+import { releaseAttentionRows, type ReleaseSummary } from "./release";
 
 const GATE_TITLE: Record<string, string> = { G2: "Discovery completeness", G3: "Requirements review", G4: "Test Strategy review", G5: "Test case quality", G6: "Script validation" };
 const WEEK_MS = 7 * 24 * 3600 * 1000;
@@ -26,6 +27,8 @@ export function attentionRows(o: {
   now?: number;
   /** Phase 5 (design P5 §4.5): non-functional rows (lib/nonfunctional `nfAttentionRows`), placed after the run rows. */
   nonFunctional?: { text: string; action: string; href: string | null }[];
+  /** Phase 6 (design P6 §4.5): the latest release assessment; its rows go after the run rows. */
+  release?: ReleaseSummary | null;
 }): { text: string; action: string; href: string | null }[] {
   const rows: { text: string; action: string; href: string | null }[] = [];
   const base = `/projects/${o.projectId}`;
@@ -42,8 +45,8 @@ export function attentionRows(o: {
   const canApprove = o.canApprove ?? true;
   for (const st of o.wf?.stages ?? []) {
     const review = gateReview(st);
-    // G7 and G8 are decided per run and per defect: their rows come from `exec` below.
-    if (!review || !st.gate || st.gate.key === "G7" || st.gate.key === "G8") continue;
+    // G7, G8 and G9 are decided per run, defect and release assessment: their rows come from `exec` and `release`.
+    if (!review || !st.gate || st.gate.key === "G7" || st.gate.key === "G8" || st.gate.key === "G9") continue;
     if (st.gate.key === "G6" && o.scripts?.aiReview)
       rows.push({
         text: `${o.scripts.aiReview} script${o.scripts.aiReview === 1 ? "" : "s"} written by AI need${o.scripts.aiReview === 1 ? "s" : ""} review before ${o.scripts.aiReview === 1 ? "it" : "they"} can run.`,
@@ -75,6 +78,7 @@ export function attentionRows(o: {
       href: `${base}/defects?view=review`,
     });
   }
+  rows.push(...releaseAttentionRows(o.release, base, canApprove, !!o.viewer));
   rows.push(...(o.nonFunctional ?? []));
   const cant = (o.scripts?.invalid ?? 0) + (o.scripts?.outdated ?? 0);
   if (cant)
@@ -97,11 +101,11 @@ export function attentionRows(o: {
       href: `${base}/test-cases?oq=1`,
     });
   for (const st of o.wf?.stages ?? [])
-    if (st.status === "changes_requested" && st.gate) rows.push({ text: `Changes were requested at Gate ${st.gate.key.slice(1)}.`, action: "Open", href: gateHref(st.gate.key) });
+    if (st.status === "changes_requested" && st.gate && st.gate.key !== "G9") rows.push({ text: `Changes were requested at Gate ${st.gate.key.slice(1)}.`, action: "Open", href: gateHref(st.gate.key) });
   if (o.credFailed) rows.push({ text: "Sign-in with the test account failed.", action: "Check credentials", href: `${base}/settings?view=credentials` });
   for (const st of o.wf?.stages ?? [])
     if (st.status === "stale" && st.key === "test_design") rows.push({ text: "Test cases are out of date.", action: "Open test cases", href: `${base}/test-cases` });
-    else if (st.status === "stale" && st.key !== "traceability")
+    else if (st.status === "stale" && st.key !== "traceability" && st.key !== "release_readiness")
       rows.push({
         text: `${st.key === "requirements" ? "Requirements are" : st.key === "test_strategy" ? "The Test Strategy is" : `${st.title} is`} out of date.`,
         action: st.key === "test_strategy" ? "Open strategy" : "Open requirements",

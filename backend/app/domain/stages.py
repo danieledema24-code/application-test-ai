@@ -14,7 +14,7 @@ from app.domain.enums import (
     StageStatus,
 )
 
-CURRENT_PHASE = 5
+CURRENT_PHASE = 6
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,9 @@ STAGES: tuple[StageDef, ...] = (
     StageDef(StageKey.performance, "Performance testing", 5, None, (StageKey.test_strategy,), "performance"),
     StageDef(StageKey.accessibility, "Accessibility testing", 5, None, (StageKey.discovery,), "accessibility"),
     StageDef(StageKey.security_assessment, "Passive security assessment", 5, None, (StageKey.discovery,), "security"),
+    # Phase 6 (P6-00): change analysis runs automatically after a rescan; exploratory sessions are optional, after G2.
+    StageDef(StageKey.change_analysis, "Change analysis", 6, None, (StageKey.discovery,), "change"),
+    StageDef(StageKey.exploratory, "Exploratory testing", 6, None, (StageKey.discovery,), "exploratory"),
 )
 STAGE_BY_KEY: dict[StageKey, StageDef] = {s.key: s for s in STAGES}
 STAGE_ORDER: dict[StageKey, int] = {s.key: i for i, s in enumerate(STAGES)}
@@ -134,6 +137,8 @@ DERIVED_STAGES: dict[StageKey, StageKey] = {
 SUBJECT_GATES: dict[GateKey, str] = {
     GateKey.G7: "Authorise each test run from Test Execution",
     GateKey.G8: "Confirm or reject each defect from Defects",
+    # P6-00: G9 is decided on each release assessment (P6-05a, decision D33).
+    GateKey.G9: "Decide each release assessment from Release readiness",
 }
 # Stages driven by execution runs: never queued by advance() or POST /stages/{stage}/run (P4-00).
 RUN_DRIVEN_STAGES: dict[StageKey, str] = {
@@ -145,11 +150,15 @@ RUN_DRIVEN_STAGES: dict[StageKey, str] = {
     # POST /security-assessments) that mirrors this stage, like execution runs.
     StageKey.accessibility: "Start an accessibility check from Non-functional",
     StageKey.security_assessment: "Start a security check from Non-functional",
+    # P6-00: each exploratory session is a quality scan started from Test Execution (P6-03a) that mirrors this stage.
+    StageKey.exploratory: "Start an exploratory session from Test Execution",
 }
 # P5-00: optional branches. advance() never queues them; a person starts them from their workspace or the
 # assistant, and each scan or run is its own stage run. Accessibility and security start from their own endpoints
 # once discovery is gate-satisfied (G2); performance once G4 is approved.
-OPTIONAL_STAGES = frozenset({StageKey.accessibility, StageKey.security_assessment, StageKey.performance})
+OPTIONAL_STAGES = frozenset(
+    {StageKey.accessibility, StageKey.security_assessment, StageKey.performance, StageKey.exploratory}
+)
 # P5-00: the message when an optional stage's discovery input is not ready (409 gate_blocked).
 OPTIONAL_STAGE_BLOCK = "Discovery completeness (G2) must be satisfied first"
 # P5-00: why a check is out of date after its upstream was re-run.
@@ -157,6 +166,9 @@ RERUN_STALE_REASONS: dict[StageKey, str] = {
     StageKey.accessibility: "Pages changed after this check",
     StageKey.security_assessment: "Pages changed after this check",
 }
+# P6-00 (decision D27): a rescan marks only these stale. Requirements, strategy, test design and automation keep their
+# approved versions; the change set's impact items say exactly what is affected (P6-02).
+RESCAN_STALE_STAGES = frozenset(RERUN_STALE_REASONS)
 # P5-00: the `accessibility` and `security_assessment` stages mirror their latest quality scan (P5-02, P5-03), and
 # `performance` mirrors its latest started run (P5-01b). Runs waiting for (or refused) a `load_test` approval
 # don't move the stage, like execution runs waiting for G7.
@@ -178,7 +190,16 @@ PERF_RUN_STAGE_STATUS: dict[PerfRunStatus, StageStatus] = {
     PerfRunStatus.error: StageStatus.failed,
 }
 # Stages queued again automatically when their upstream produces a new version ("auto_rerun").
-AUTO_RERUN_STAGES = frozenset({StageKey.discovery_report})
+AUTO_RERUN_STAGES = frozenset({StageKey.discovery_report, StageKey.change_analysis})
+# P6-00: auto-rerun stages that follow only a discovery run started as a rescan (`parameters.rescan`, P6-01).
+RESCAN_ONLY_STAGES = frozenset({StageKey.change_analysis})
+# P6-01: change analysis is never started through `POST /stages/change_analysis/run` (422 with this message).
+CHANGE_ANALYSIS_START = "Rescan the site, or compare two scans from Application Discovery › Changes"
+# P6-00: started only on request, never by advance(): release readiness from POST /release-assessments or
+# POST /stages/release_readiness/run, once at least one execution run has finished.
+ON_REQUEST_STAGES = frozenset({StageKey.release_readiness})
+# P6-00: the 409 when release readiness is requested before any execution run has finished.
+RELEASE_NEEDS_RUN = "Run the tests first: release readiness needs execution results"
 # Stages a user can start with POST /stages/{stage}/run in the current phase.
 RUNNABLE_IN_PHASE = frozenset(
     {
@@ -190,6 +211,9 @@ RUNNABLE_IN_PHASE = frozenset(
         StageKey.test_design,
         StageKey.automation_assessment,
         StageKey.automation,
+        # Phase 6 (P6-00): change analysis is normally queued after a rescan; release readiness on request only.
+        StageKey.change_analysis,
+        StageKey.release_readiness,
     }
 )
 

@@ -63,6 +63,13 @@ Intent = Literal[
     "explain_finding",
     "propose_scan",
     "propose_performance_run",
+    # Phase 6 (P6-06)
+    "what_changed",
+    "impact_summary",
+    "propose_regression_run",
+    "explain_heal",
+    "propose_exploration",
+    "release_readiness_summary",
 ]
 
 
@@ -268,11 +275,16 @@ async def _answer(
             return await asst.ai_requirement_update(turn, params), True
         return await asst.HANDLERS[intent](turn, params), False
     text = body.content or ""
+    routed = asst.route(text)
+    if ctx.llm.enabled and routed is not None and routed[0] in asst.RULES_ONLY:
+        # P6-06: "What changed?" and "Can we release?" are answered from stored rows even with AI on, so the model
+        # can't restate a verdict or a count differently from the rules.
+        return await asst.HANDLERS[routed[0]](turn, {**params, **routed[1]}), False
     if ctx.llm.enabled:
         _ai_quota(ctx, p)
         ai = await asst.ai_answer(turn, text)
         if ai is not None:
-            return ai, True
+            return await asst.release_guard(turn, ai), True
         routed = asst.route(text)
         fallback = (
             await asst.HANDLERS[routed[0]](turn, {**params, **routed[1]})
@@ -483,6 +495,10 @@ async def _apply(
         from app.services import assistant_p5
 
         applied += await assistant_p5.apply(ctx, s, p, pr, after)
+    elif pr.kind in ("request_regression_run", "start_exploration", "assess_release"):
+        from app.services import assistant_p6
+
+        applied += await assistant_p6.apply(ctx, s, p, pr, after)
     elif pr.kind in ("add_test_cases", "set_suite"):
         from app.services import assistant_p3
 
