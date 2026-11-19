@@ -7,6 +7,8 @@ import type { ArtefactRef, BackwardRow, CaseExec, Coverage, ForwardRow, Gaps } f
 import { CASE_STATUS_TEXT, PRIORITY_TEXT, techniqueInfo } from "@/lib/testcases";
 import { GAP_EMPTY, PHASE4_SR, PHASE4_TEXT, a11yCellText, changeCellText, changeLine, changeSr, coverageTiles, defectText, execLine, gapCounts, isAvailable, keyHref, perfCellText, resultText, scriptText, secCellText } from "@/lib/traceability";
 import { Card, Disclosure, StatTile, StatusPill } from "@/components/ui";
+import { ManualResultLabel } from "@/components/domain/ExecutionLabels";
+import { NOT_ANALYSED, recordStartHref } from "@/lib/execution";
 
 // ---- Coverage tiles and gap lists (§14.2) ---------------------------------------------------------------
 
@@ -290,8 +292,18 @@ function ExecutionGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: st
       <Link href={keyHref(projectId, x.case.key)} className="font-mono text-navy-700 underline underline-offset-2">
         {x.case.key}
       </Link>
-      <span>{x.label ?? (x.status === "flaky" ? "Flaky" : x.status === "error" ? "Error" : "Failed")}</span>
-      {x.classification && <span className="text-small text-fg-muted">(Hypothesis)</span>}
+      {x.manual ? (
+        <>
+          <span>{x.status === "error" ? "Error" : "Failed"}</span>
+          <ManualResultLabel name={x.recorded_by} />
+          <span className="text-small text-fg-muted">{x.label ?? NOT_ANALYSED}</span>
+        </>
+      ) : (
+        <>
+          <span>{x.label ?? (x.status === "flaky" ? "Flaky" : x.status === "error" ? "Error" : "Failed")}</span>
+          {x.classification && <span className="text-small text-fg-muted">(Hypothesis)</span>}
+        </>
+      )}
       <Link href={keyHref(projectId, x.result_key)} className="text-small font-medium text-navy-700 underline underline-offset-2">
         {x.run_key}
         <span className="sr-only"> result {x.result_key}</span>
@@ -308,6 +320,11 @@ function ExecutionGaps({ gaps, projectId, canEdit }: { gaps: Gaps; projectId: st
         </div>
         <div>
           <h4 className="text-body font-semibold text-fg-strong">Manual only, no recorded result ({ev.manual_only.length})</h4>
+          {canEdit && ev.manual_only.length > 0 && (
+            <Link href={recordStartHref(projectId)} className="inline-flex min-h-6 items-center text-small font-medium text-navy-700 underline underline-offset-2">
+              Record manual results
+            </Link>
+          )}
           <RefList items={ev.manual_only} projectId={projectId} empty="None." />
         </div>
         {n.execution === 0 && ev.executed && <p className="text-body text-fg-muted">{GAP_EMPTY.execution}</p>}

@@ -160,6 +160,8 @@ class FailureAnalysisAgent:
                             .where(
                                 ExecutionResult.case_lineage_id == r.case_lineage_id,
                                 ExecutionResult.execution_run_id != run.id,
+                                # Results recorded by hand never make an automated failure look flaky (P4-14a).
+                                ExecutionResult.recorded_by.is_(None),
                                 ExecutionResult.created_at > fixed_at if fixed_at else true(),
                                 # Cancelled or skipped rows are not results; they never make a test look flaky.
                                 or_(ExecutionResult.error.is_(None), ExecutionResult.error.not_in(NOT_ANALYSED)),

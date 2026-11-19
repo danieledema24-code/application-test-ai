@@ -29,6 +29,7 @@ from app.services import gates
 from app.services import nf_evidence as nfe
 from app.services import serialize_p3 as p3
 from app.services import testdesign as tds
+from app.services.manual import NOT_ANALYSED
 from app.services.serialize_p2 import TECHNIQUE_SHORT, artefact_ref
 
 Basis = Literal["current", "approved"]
@@ -183,8 +184,8 @@ OPEN_DEFECT = ("confirmed", "fixed")
 
 async def _load_execution(s: AsyncSession, project_id: uuid.UUID, t: Trace) -> None:
     """Scripts of the current bundle, defects by case and whether anything ran (P4-12)."""
-    from app.db.models import AutomationScript, Defect, DefectLink, ExecutionRun
-    from app.domain.enums import StageKey
+    from app.db.models import AutomationScript, Defect, DefectLink, ExecutionResult, ExecutionRun
+    from app.domain.enums import RunMode, StageKey
     from app.services import automation as asvc
 
     bundle = await asvc.current_run(s, project_id, StageKey.automation)
@@ -204,6 +205,14 @@ async def _load_execution(s: AsyncSession, project_id: uuid.UUID, t: Trace) -> N
         await s.execute(
             select(ExecutionRun.id)
             .where(ExecutionRun.project_id == project_id, ExecutionRun.finished_at.is_not(None))
+            .limit(1)
+        )
+    ).first() is not None or (
+        # P4-14a: a result recorded by hand counts as soon as it is saved, before its manual run is finished.
+        await s.execute(
+            select(ExecutionResult.id)
+            .join(ExecutionRun, ExecutionRun.id == ExecutionResult.execution_run_id)
+            .where(ExecutionRun.project_id == project_id, ExecutionRun.mode == RunMode.manual)
             .limit(1)
         )
     ).first() is not None
@@ -243,7 +252,9 @@ def _case_exec(t: Trace, c: CaseView) -> dict[str, Any]:
             script["outdated_reason"] = sc.get("outdated_reason")
     return {
         "script": script,
-        "result": {k: res[k] for k in ("status", "run_key", "result_key", "at")} if res else None,
+        "result": {k: res.get(k) for k in ("status", "run_key", "result_key", "at", "manual", "recorded_by")}
+        if res
+        else None,
         "defects": [_strip(d) for d in t.defects.get(str(c.row.lineage_id), [])],
         "impacted": t.impacted.get(str(c.row.lineage_id)),
     }
@@ -566,7 +577,10 @@ def _execution_gaps(t: Trace, reqs: list[Any]) -> dict[str, Any]:
             "run_key": res["run_key"],
             "result_key": res["result_key"],
             "classification": res.get("classification"),
-            "label": res.get("label"),
+            # P4-14a: a failure recorded by hand is never analysed (not counted in the "unknown" share).
+            "label": NOT_ANALYSED if res.get("manual") else res.get("label"),
+            "manual": bool(res.get("manual")),
+            "recorded_by": res.get("recorded_by"),
         }
         if res["status"] in ("failed", "error"):
             failed.append(item)
@@ -1016,6 +1030,10 @@ def _exec_levels(t: Trace, cases: list[CaseView]) -> list[dict[str, Any]]:
         for x in (res or {}).get("results", []):
             size = "mobile" if x["viewport"] == "390x844" else "desktop"
             label = f"{x['result_key']} · {x['status'].capitalize()} · {x['browser'].capitalize()} {size}"
+            if (res or {}).get("manual") or x["browser"] == "manual":
+                # P4-14a: "RUN-0005-01 · Passed · By hand · Recorded by J. Tester".
+                who = (res or {}).get("recorded_by") or "someone"
+                label = f"{x['result_key']} · {x['status'].capitalize()} · By hand · Recorded by {who}"
             results.append(artefact_ref(pid, "execution_result", None, x["result_key"], label))
         for d in t.defects.get(str(c.row.lineage_id), []):
             defects[str(d["key"])] = {**_strip(d), "label": f"{d['key']} · {str(d['status']).capitalize()}"}

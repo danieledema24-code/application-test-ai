@@ -264,7 +264,7 @@ function AutomationScreen() {
             <div className="space-y-4">
               {assessment.data ? <SuitabilitySummary assessment={assessment.data} projectId={p.id} canEdit={canEdit} /> : <Skeleton className="h-40" />}
               <ValidationSummary overview={o} scriptsHref={scriptsHref} />
-              <NotAutomatedCard overview={o} projectId={p.id} />
+              <NotAutomatedCard overview={o} projectId={p.id} canEdit={canEdit} />
               <ExportCard overview={o} projectId={p.id} host={host} canEdit={canEdit} />
             </div>
           )}

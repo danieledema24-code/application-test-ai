@@ -1,7 +1,8 @@
 "use client";
 
 // Run page ⋯ menu (design P4 §13–14): the run's frozen Test Execution Report, the analyst with this run as context,
-// and a copyable link. Closes on Escape or an outside click, like the project header menu.
+// and a copyable link. Manual runs add their own items first (P4-14: Open RUN-0005, Discard RUN-0005…). Closes on
+// Escape or an outside click, like the project header menu.
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -9,7 +10,7 @@ import { MoreHorizontal } from "lucide-react";
 import { Button, useToast } from "@/components/ui";
 import { useAssistantDrawer } from "@/components/assistant/AssistantDrawer";
 
-export function RunMenu({ projectId, runKey, finished }: { projectId: string; runKey: string; finished: boolean }) {
+export function RunMenu({ projectId, runKey, finished, extra = [] }: { projectId: string; runKey: string; finished: boolean; extra?: { label: string; onClick: () => void }[] }) {
   const router = useRouter();
   const toast = useToast();
   const assistant = useAssistantDrawer();
@@ -34,6 +35,11 @@ export function RunMenu({ projectId, runKey, finished }: { projectId: string; ru
       </Button>
       {open && (
         <div role="menu" className="absolute right-0 top-12 z-40 w-64 rounded-lg bg-surface py-1 shadow-lg ring-1 ring-line-strong">
+          {extra.map((x) => (
+            <button key={x.label} role="menuitem" type="button" className={item} onClick={() => (setOpen(false), x.onClick())}>
+              {x.label}
+            </button>
+          ))}
           {finished && (
             <button role="menuitem" type="button" className={item} onClick={() => (setOpen(false), router.push(`/projects/${projectId}/reports/test-execution?run=${runKey}`))}>
               Open Test Execution Report

@@ -52,6 +52,8 @@ from app.domain.enums import (
     QualityScanKind,
     ReportStatus,
     ReportType,
+    RunMode,
+    RunStatus,
 )
 from app.domain.release import criteria as rc
 from app.services import exploratory as esvc
@@ -567,12 +569,14 @@ async def _completion(ctx: AppContext, s: AsyncSession, project: Project, report
         {
             "key": r.key,
             "status": r.status.value,
-            "selection": xsvc.selection_label(r.selection or {}),
+            "selection": "Manual" if r.mode == RunMode.manual else xsvc.selection_label(r.selection or {}),
             "change_set": (r.selection or {}).get("change_set_key"),
             "totals": {k: v for k, v in (r.totals or {}).items() if k != "live"},
             "finished_at": r.finished_at.isoformat() if r.finished_at else None,
         }
         for r in runs
+        # P4-14a: a manual run cancelled before anything was recorded did nothing.
+        if not (r.mode == RunMode.manual and r.status == RunStatus.cancelled and not (r.totals or {}).get("finished"))
     ]
     sets = list(
         (

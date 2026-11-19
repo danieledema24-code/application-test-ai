@@ -20,7 +20,8 @@ import {
   type Suitability,
 } from "@/lib/automation";
 import { fmtDateTime } from "@/lib/format";
-import { Button, Card, Disclosure, useToast } from "@/components/ui";
+import { recordStartHref } from "@/lib/execution";
+import { Button, Card, Disclosure, LinkButton, useToast } from "@/components/ui";
 import { ApiError, downloadFile } from "@/lib/api";
 
 const GROUP_ICON: Record<Suitability, typeof CircleCheck> = { suitable: CircleCheck, partial: Lock, manual_only: UserRound };
@@ -54,6 +55,11 @@ function SuitabilityGroup({ kind, cases, projectId, canEdit }: { kind: Suitabili
         {kind === "partial" && canEdit && cases.length > 0 && (
           <Link href={`/projects/${projectId}/settings#credentials`} className="text-small font-medium text-navy-700 underline underline-offset-2">
             Add test credentials
+          </Link>
+        )}
+        {kind === "manual_only" && canEdit && cases.length > 0 && (
+          <Link href={recordStartHref(projectId, { cases: cases.map((c) => c.key) })} className="inline-flex min-h-6 items-center text-small font-medium text-navy-700 underline underline-offset-2">
+            Record manual results
           </Link>
         )}
       </div>
@@ -165,7 +171,7 @@ export function ValidationSummary({ overview, scriptsHref }: { overview: Automat
   );
 }
 
-export function NotAutomatedCard({ overview, projectId }: { overview: AutomationOverview; projectId: string }) {
+export function NotAutomatedCard({ overview, projectId, canEdit = false }: { overview: AutomationOverview; projectId: string; canEdit?: boolean }) {
   const items = overview.bundle?.not_automated ?? [];
   if (!items.length) return null;
   return (
@@ -173,7 +179,12 @@ export function NotAutomatedCard({ overview, projectId }: { overview: Automation
       <h2 id="not-automated-h" className="text-h3 font-semibold text-fg-strong">
         Not automated ({items.length})
       </h2>
-      <p className="text-small text-fg">These approved cases are tested by a person. Recording manual results in the app isn&apos;t available yet.</p>
+      <p className="text-small text-fg">These approved cases are tested by a person. Record what happened in Test Execution.</p>
+      {canEdit && (
+        <LinkButton href={recordStartHref(projectId, { cases: items.map((c) => c.key) })} size="sm">
+          Record manual results
+        </LinkButton>
+      )}
       <Disclosure label={`Show ${items.length} not automated ${items.length === 1 ? "case" : "cases"}`}>
         <ul className="mt-2 space-y-2">
           {items.map((c) => (

@@ -141,8 +141,11 @@ _WORST = ("error", "failed", "blocked", "flaky", "skipped", "passed")
 
 async def last_results(s: AsyncSession, project_id: uuid.UUID) -> dict[str, dict[str, Any]]:
     """Per case lineage: the results of the latest run that ran it (one per browser and size). Cancelled or
-    interrupted rows are not results."""
+    interrupted rows are not results. A manual run counts like any run (P4-14a, D38): the latest result wins, with
+    `manual: true` and `recorded_by` (the recorder's name). "Latest" is the latest saved (`saved_at`): a result edited
+    by hand in an older open manual run becomes the latest again."""
     from app.db.models import ExecutionResult, ExecutionRun
+    from app.db.models.automation import saved_at
     from app.services.execution import NOT_RESULTS
 
     rows = (
@@ -150,7 +153,7 @@ async def last_results(s: AsyncSession, project_id: uuid.UUID) -> dict[str, dict
             select(ExecutionResult, ExecutionRun.key, ExecutionRun.finished_at, ExecutionRun.mode)
             .join(ExecutionRun, ExecutionRun.id == ExecutionResult.execution_run_id)
             .where(ExecutionResult.project_id == project_id)
-            .order_by(ExecutionResult.created_at.desc())
+            .order_by(saved_at().desc(), ExecutionResult.created_at.desc())
             .limit(5000)
         )
     ).all()
@@ -164,15 +167,19 @@ async def last_results(s: AsyncSession, project_id: uuid.UUID) -> dict[str, dict
             continue
         picked.setdefault(lin, []).append((r, run_key, finished_at, mode))
     out: dict[str, dict[str, Any]] = {}
+    # P4-14a: who recorded a result by hand (names only: this is shown in reports and to viewers).
+    recorders = await users(s, [x[0].recorded_by for items in picked.values() for x in items])
     for lin, items in picked.items():
         items.sort(key=lambda x: _WORST.index(x[0].status.value) if x[0].status.value in _WORST else 0)
         worst, run_key, finished_at, mode = items[0]
+        who = recorders.get(worst.recorded_by) if worst.recorded_by else None
         out[lin] = {
             "status": worst.status.value,
             "run_key": run_key,
             "result_key": worst.key,
-            "at": (finished_at or worst.updated_at).isoformat(),
+            "at": (worst.recorded_at or finished_at or worst.updated_at).isoformat(),
             "manual": getattr(mode, "value", mode) == "manual",
+            "recorded_by": ((who.full_name if who else None) or "someone") if worst.recorded_by else None,
             "classification": worst.classification.value if worst.classification else None,
             "label": (worst.analysis or {}).get("label"),
             "results": [

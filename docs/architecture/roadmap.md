@@ -1720,7 +1720,7 @@ Web stories implement it, and section references ("design P4 §n") point to it.
 
 ---
 
-### P4-14 Manual test results (Backend + web; M; decision D15: included, cut first if the phase runs long)
+### P4-14 Manual test results (Backend + web; M; decision D15: included, cut first if the phase runs long; cut 2026-11-14; planned again 2026-11-19, see "Revised 2026-11-19")
 
 **User value:** cases that need a person (accessibility with a screen reader, HTTPS inspection, judgement calls) can be recorded too, so execution evidence and the Definition of Done aren't blocked by what can't be automated.
 
@@ -1734,6 +1734,69 @@ Web stories implement it, and section references ("design P4 §n") point to it.
 - **Given** the demo's "Inspect the sign-in form's action address" case, **when** a member records `passed` with notes, **then** the requirement leaves "requirements without execution evidence".
 - **Given** a manual `failed` result, **then** no defect draft is created automatically, and "Raise defect" prefills from the result.
 - **Given** a viewer, **then** 403; another organisation, 404.
+
+#### Revised 2026-11-19 (user request; branch `manual-results`; supersedes the scope above, which is kept for history)
+
+**Status:** P4-14 was cut on 2026-11-14 and is now planned again. The text above predates Phases 5 and 6: migration 0017 went to `0017_nonfunctional` (head is now `0021`), and since then D37 manual re-tests (`manual_retests`, 0020), release readiness (D32, G9), the Test Completion Report and the assistant's Phase 6 intents were built. This revision fits manual results into all of them and replaces D37's separate store, so the product has one idea of a manual result instead of two.
+
+**User value:** a tester records what happened when they tested a case by hand (screen reader, HTTPS inspection, judgement calls, a broken script). That record counts as execution evidence everywhere: traceability, coverage, Definition of Done, reports, release readiness and the assistant. Manual-only requirements stop being "never executed" for ever.
+
+**What exists already (no new concept needed):** `RunMode.manual`, `ResultStatus.blocked`, `evidence.execution_result_id`, `last_results()[…].manual`, `POST /defects {from_result_id}` prefill, and the "Manual only, no recorded result" gap list.
+
+**Decisions (pending user, D38–D40 in `docs/product/backlog.md`).** The criteria below assume the recommended options: D38 (a) any approved case, latest result wins; D39 (a) D37 re-tests become manual results; D40 (a) manual passed/failed count like automated ones in readiness.
+
+**Slices (one PR each):** P4-14a Backend (M) → P4-14b Web (M, needs UX: update `docs/design/P4-qa-analyst-phase4.md` §10 and the change set "Manual re-tests" section of `P6-qa-analyst-phase6.md` first).
+
+##### P4-14a Manual runs and results (Backend; M)
+
+**Scope**
+- Migration `0022_manual_results`: `execution_results.recorded_by` (FK users, nullable) and `notes` (text, nullable); run status `recording` added to `execution_run_status`. `manual_retests` is not changed (frozen, read as legacy; see D39).
+- `POST /projects/{id}/execution-runs {mode: "manual", case_keys[1..100], change_set_key?}` (member+). Cases: any case approved at the latest G5 (D38). No G7, no approvals, no stage run, no worker, no toolkit check. The run is created in status **`recording`** (never `running`, so it never blocks an automated run or a load test, which both refuse to start beside a `running` execution run) with its plan; it records `requested_by`.
+- `PUT /execution-runs/{id}/results/{case_key} {status: passed|failed|blocked, actual_result, notes?}` (member+) creates or updates that case's result: browser and viewport `manual` (shown "By hand"), `recorded_by`, no analysis, no classification. `actual_result` ("What happened", ≤ 2,000) is required for every status; `notes` ≤ 2,000. Until the run is finished, only the person who recorded a result can change it (audited with the previous status).
+- `POST /execution-results/{id}/evidence` (multipart, member+, manual results of a `recording` run, by their recorder): PNG, JPEG or PDF by magic bytes, ≤ 10 MB, ≤ 5 files per result. Reuses the P2-08 multipart parser, size checks and per-project upload rate limit; stored as `evidence` (`screenshot` for images, `document_file` for PDF) with `execution_result_id`; served by the existing signed evidence content URL; subject to retention. Uploads can't be deleted (evidence is immutable).
+- `POST /execution-runs/{id}/finish` (member+): status from `final_status` (failed if any result failed, else passed), `finished_at` set, report frozen. Unrecorded cases stay "Not run" (no row). Zero results → 409. `cancel` of a `recording` run works only with zero results.
+- Not for manual runs (409 "Manual runs don't run on the platform."): `authorise`, `rerun`, `live`, frames, classification override, heal suggestions. The assistant's `propose_rerun` only selects automated runs.
+- A saved manual result counts as soon as it is saved (not at finish). Each save marks waiting release assessments stale ("TC-0027 recorded by hand (passed)"). Audit: `execution_run.manual_started`, `execution_result.recorded`, `evidence.uploaded`, `execution_run.finished`; event `execution.manual_recorded`.
+- **Flow into the rest of the product** (no new rules, only the inputs change):
+  - `last_results`: a manual run is "the latest run that ran it" like any run (D38), with `manual: true` and `recorded_by`. Traceability, coverage (execution coverage, pass rate), DoD `dod.tests_executed`, readiness `exit.ac_executed`, `exit.pass_rate`, `rr.high_risk_tested` and the Test Completion Report read it unchanged (D40). Passed and failed are evidence; blocked isn't (existing rule). `t.executed` is true once any manual result exists.
+  - Gap lists: "requirements without execution evidence → manual only" loses requirements with a manual passed/failed result; "failed tests" includes manual failures labelled "Not analysed: recorded by a person" (classification null, not counted in the "unknown" share).
+  - D37 (D39): for impacted must-run tests, a manual passed/failed result on a run created after the change set counts as the re-test (it already counts as "re-run" through `_results_since`); `manual_result`/`manual_note` (and so `rr.manual_retests`) come from the newest of that result or a legacy `manual_retests` row. `GET /change-sets/{id}/manual-retests` keeps its shape, built from the same sources. `POST /change-sets/{id}/manual-retests` keeps its body, validation and messages and now writes a manual result into the caller's newest `recording` manual run for that change set (created with `change_set_key` and the change set's manual must-run cases if none). `readiness._regression_facts` uses the same rule.
+  - Test Execution Report: a manual run has its own report (frozen at finish) with "By hand", "Recorded by", What happened, notes and evidence instead of browser · size and likely cause. The latest-per-case report includes manual results. "Not automated" gains a "Manual result" column ("Passed · RUN-0005 · J. Tester, 19 Nov" or "No result recorded"); the limitation becomes "{n} approved test cases need a person; {m} have no recorded result."
+  - Assistant: `execution_results` keeps summarising the latest finished automated run and adds a cited line "By hand since then: RUN-0005, 3 recorded: 2 passed, 1 failed (TC-0027)"; with only manual runs it answers from the latest manual run. `explain_failed_test` on a manual result says "Recorded by a person; not analysed", quotes What happened and offers "Raise defect"; it never states a classification. `last_result_line` adds "(by hand)".
+  - Defects: no automatic draft. `POST /projects/{id}/defects {from_result_id}` for a manual failed or blocked result prefills summary, steps and expected from the case, actual from What happened, environment "By hand, recorded by {name}" with run and result keys, and links the uploaded evidence. Source `user`, G8 as normal.
+- Docs: `database-schema.md` (0022), `api-contracts.md` (endpoints above, D37 change).
+
+**Out of scope:** a manual result per browser or size; editing after finish (record again in a new run); deleting uploads; assigning cases to testers; manual test scripts or checklists beyond the case's steps; importing results from other tools.
+
+**Acceptance criteria**
+- **Given** the demo after G5, **when** a member starts a manual run with the "Inspect the sign-in form's action address" case and records `passed` with What happened, **then** no G7 decision or approval exists for the run, its status is `recording`, and the requirement leaves "requirements without execution evidence → manual only" and counts in execution coverage, before the run is finished.
+- **Given** a manual run in `recording`, **when** an approver authorises an automated run, **then** it starts (the manual run doesn't block it); **and** `authorise`, `rerun` and `live` on the manual run return 409.
+- **Given** `status: failed` without What happened, **then** 422 "Describe what happened."; **given** a 12 MB PNG or a `.png` that is really HTML, **then** 422 with the P2-08 messages ("This file is larger than 10 MB." / "This file type isn't supported. Use PNG, JPEG or PDF.").
+- **Given** a manual `failed` result, **then** no defect draft exists; **when** a member raises a defect `from_result_id`, **then** the draft's actual result equals What happened, its environment says "By hand, recorded by {name}" and the uploaded evidence is linked.
+- **Given** a manual `blocked` result only, **then** the requirement stays in "manual only" and DoD "Tests executed with evidence" stays `not_met` for it.
+- **Given** a case whose latest automated result failed, **when** a member records `passed` by hand in a later manual run, **then** the case's latest result is the manual pass, shown with `manual: true` and the recorder, and it leaves "failed tests".
+- **Given** a person who didn't record TC-0027, **when** they change its result, **then** 403; **given** a finished manual run, **when** anyone records, **then** 409 "RUN-0005 is finished. Start a new manual run to record again."
+- **Given** finish with 2 of 4 recorded, **then** the run is finished with `totals.tests = 4`, the other 2 cases have no result, and the run's Test Execution Report lists the 2 results with "Recorded by" and no likely cause.
+- **Given** the Phase 6 demo (CHG-0001 with manual must-run Contact cases), **when** a member posts to `/change-sets/{id}/manual-retests` as before, **then** the response shape and messages are unchanged, a manual result exists in a `recording` run for that change set, `rr.impacted_rerun` counts it, a `failed` one appears in `rr.manual_retests` with its note, and `test_p6_release_demo.py` passes unchanged. **Given** a legacy `manual_retests` row, **then** it still counts until a newer manual result replaces it.
+- **Given** a waiting release assessment, **when** a manual result is saved, **then** the assessment is stale with reason "TC-0027 recorded by hand (passed)".
+- **Given** AI off and one manual failure, **when** I ask "Did the tests pass?", **then** the answer cites the latest automated run and the manual run separately, and "Explain the failed test TC-0027" says it wasn't analysed and quotes What happened; numbers equal the API.
+- **Given** a viewer, **then** every write above is 403 and reads work; **given** another organisation, **then** run, result, evidence and report ids are 404.
+
+##### P4-14b Record manual results (Web; M; needs UX)
+
+**Scope**
+- Entry points (member+ only): Test Execution [Record manual results]; Automation "Needs a person" group (replaces "Recording manual results in the app isn't available yet."); a case's [Record a manual result]; the change set "Manual re-tests" section's [Record re-test] uses the same result card (Passed/Failed only there, as in D37).
+- Start modal and record page `/execution/RUN-0005/record` as in design P4 §10, updated for D38 (all approved cases available, pre-filtered to "Needs a person") and the "What happened" rule.
+- Result display everywhere results appear (run list "Manual · Recording 2 of 4", run detail, result detail, case last result, traceability cells and chain, readiness evidence): "Passed · By hand · Recorded by J. Tester" with the `UserPen` icon, never a classification ("Not analysed: recorded by a person"). After a failed save: "No defect is drafted automatically for manual results." [Raise defect…] (prefilled).
+- Traceability gap heading stays "Manual only, no recorded result ({n})".
+
+**Acceptance criteria**
+- **Given** a member on Test Execution, **when** they start recording 4 cases, record 2 and finish, **then** the confirm dialog says "Finish with 2 cases not recorded? They'll show 'Not run'.", and the run shows Passed/Failed with "By hand" rows.
+- **Given** Failed saved, **then** [Raise defect…] opens the defect form prefilled with What happened, and no draft exists until they submit.
+- **Given** an upload error, **then** the P2-08 message appears next to the field and is announced; **given** a save, **then** "TC-0027 saved as Passed" is announced in a polite live region.
+- **Given** a viewer, **then** no entry point renders and manual results are shown read-only.
+- **Given** keyboard only and 375 px, **then** every control is reachable, the result radios have a legend, errors are linked to their fields, and touch targets are ≥ 24 px (WCAG 2.2 AA).
+- **Given** the change set Manual re-tests section, **when** a member records a re-test, **then** it appears in the section and as a manual result on the case, and release readiness shows it.
 
 ---
 

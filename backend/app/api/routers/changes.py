@@ -301,8 +301,11 @@ async def record_manual_retest(
 
     cs = await load_set(s, change_set_id)
     project = await c.project_of(s, cs.project_id)
+    from app.services import manual
+
+    # D39: written as a manual result in the caller's recording manual run for the change set (contract unchanged).
     await release_svc.record_manual_retest(s, project, cs, p.user, case_key=body.case_key, status=body.status,
-                                           note=body.note)  # fmt: skip
+                                           note=body.note, secrets=await manual.saved_values(ctx, s, project.id))  # fmt: skip
     await s.commit()
     name = p.user.full_name or p.user.email
     await ctx.events.emit(

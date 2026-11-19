@@ -30,12 +30,14 @@ from app.db.models import (
     TestCase,
     User,
 )
+from app.db.models.automation import saved_at
 from app.db.tenant import TenantScope, bind_scope
 from app.domain.enums import (
     AutomationSuitability,
     DefectStatus,
     ReportStatus,
     ReportType,
+    RunMode,
     RunStatus,
     StageKey,
     UrlRole,
@@ -47,6 +49,7 @@ PHASE4 = frozenset({ReportType.execution, ReportType.defect})
 SOURCE_GROUP = {"analysis": "functional", "user": "functional", "accessibility": "accessibility",
                 "security": "security", "performance": "performance", "api": "api"}  # fmt: skip
 HYPOTHESIS_NOTE = "Causes are hypotheses unless a person confirmed them."
+MANUAL_NOTE = "Results marked By hand were recorded by a person who tested the case; they are not analysed."
 NO_RUN = "Needs a test run"
 FINISHED = (RunStatus.passed, RunStatus.failed, RunStatus.error, RunStatus.cancelled)
 _SIZE = {"390x844": "Mobile 390 × 844"}
@@ -211,7 +214,33 @@ def _cause(r: ExecutionResult) -> dict[str, Any] | None:
     }
 
 
-def _row(r: ExecutionResult, case: TestCase | None, run_key: str) -> dict[str, Any]:
+def _row(
+    r: ExecutionResult, case: TestCase | None, run_key: str, people: dict[Any, User] | None = None
+) -> dict[str, Any]:
+    if r.recorded_by is not None:
+        # P4-14a: recorded by hand: "By hand", "Recorded by", What happened, notes and files instead of browser · size
+        # and likely cause (names only: reports leave the organisation).
+        return {
+            "result_key": r.key,
+            "run_key": run_key,
+            "case_key": case.key if case else None,
+            "title": case.title if case else None,
+            "browser": "By hand",
+            "size": "",
+            "status": r.status.value,
+            "attempts": None,
+            "duration_ms": None,
+            "failed_step": None,
+            "cause": None,
+            "error_reason": None,
+            "reason": None,
+            "manual": True,
+            "recorded_by": _name((people or {}).get(r.recorded_by)) or "someone",
+            "recorded_at": (r.recorded_at or r.updated_at).isoformat(),
+            "what_happened": r.actual_result,
+            "notes": r.notes,
+            "evidence": [],
+        }
     return {
         "result_key": r.key,
         "run_key": run_key,
@@ -258,15 +287,19 @@ async def _execution(s: AsyncSession, project: Project, run_key: str | None) -> 
                     select(ExecutionResult, ExecutionRun.key)
                     .join(ExecutionRun, ExecutionRun.id == ExecutionResult.execution_run_id)
                     .where(ExecutionResult.project_id == project.id)
-                    .order_by(ExecutionResult.created_at.desc())
+                    .order_by(saved_at().desc(), ExecutionResult.created_at.desc())
                 )
             ).all()
         )
         seen: set[tuple[str, str, str]] = set()
         results = []
         keys = {}
+        # P4-14a (D38): the newest result of a case decides whether it is shown by hand or from automated runs.
+        hand: dict[str, bool] = {}
         for r, k in rows:
             if r.error in xsvc.NOT_RESULTS:
+                continue
+            if hand.setdefault(str(r.case_lineage_id), r.recorded_by is not None) != (r.recorded_by is not None):
                 continue
             ident = (str(r.case_lineage_id), r.browser, r.viewport)
             if ident in seen:
@@ -283,9 +316,12 @@ async def _execution(s: AsyncSession, project: Project, run_key: str | None) -> 
             )
         ).scalars()
     }
+    people = await out.users(s, [r.recorded_by for r in results if r.recorded_by])
     rows_out = [
-        _row(r, cases.get(r.test_case_id) if r.test_case_id else None, keys[r.execution_run_id]) for r in results
+        _row(r, cases.get(r.test_case_id) if r.test_case_id else None, keys[r.execution_run_id], people)
+        for r in results
     ]
+    await _manual_evidence(s, results, rows_out)
     totals: dict[str, int] = {}
     for x in rows_out:
         totals[x["status"]] = totals.get(x["status"], 0) + 1
@@ -299,13 +335,37 @@ async def _execution(s: AsyncSession, project: Project, run_key: str | None) -> 
     summary_parts = [f"{totals.get(k, 0)} {k}" for k in ("passed", "failed", "flaky", "error", "blocked", "skipped")]
     not_automated = await _not_automated(s, project.id)
     run_out = None
-    if run is not None:
+    if run is not None and run.mode == RunMode.manual:
+        us = await out.users(s, [run.requested_by])
+        plan = (run.config or {}).get("plan") or []
+        run_out = {
+            "key": run.key,
+            "mode": "manual",
+            "status": run.status.value,
+            "selection": "Manual",
+            "browsers": [],
+            "viewports": [],
+            "sizes": [],
+            "requested_by": _name(us.get(run.requested_by)) if run.requested_by else None,
+            "requested_at": run.created_at.isoformat() if run.created_at else None,
+            "authorised": False,
+            "gate_note": "Manual runs don't need Gate 7: nothing ran on the platform.",
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            "duration_ms": xsvc.duration_ms(run),
+            "planned": len(plan),
+            "not_recorded": [i["case_key"] for i in plan if i["key"] not in {r.key for r in results}],
+            "change_set_key": (run.config or {}).get("change_set_key"),
+            "error": run.error,
+        }
+    elif run is not None:
         gd = await xsvc.g7_decision(s, run)
         us = await out.users(s, [run.requested_by, gd.decided_by if gd else None])
         config = run.config or {}
         viewports = [str(v) for v in (run.scope or {}).get("viewports") or []]
         run_out = {
             "key": run.key,
+            "mode": "automated",
             "status": run.status.value,
             "selection": xsvc.selection_label(run.selection or {}),
             "browsers": (run.scope or {}).get("browsers") or [],
@@ -336,6 +396,7 @@ async def _execution(s: AsyncSession, project: Project, run_key: str | None) -> 
         "causes": by_cause,
         "defects": defects,
         "hypothesis_note": HYPOTHESIS_NOTE,
+        "manual_note": MANUAL_NOTE if any(x.get("manual") for x in rows_out) else None,
         "flaky_note": "Flaky tests passed only on a retry. They are counted separately, never as passed.",
         "not_automated": not_automated,
         "limitations": _limitations(run, rows_out, not_automated),
@@ -359,25 +420,82 @@ async def _not_automated(s: AsyncSession, project_id: Any) -> list[dict[str, Any
             await s.execute(select(AutomationAssessment).where(AutomationAssessment.stage_run_id == arun.id))
         ).scalars()
     }
-    out = []
+    from app.services.serialize_p3 import last_results
+
+    latest = await last_results(s, project_id)
+    result = []
     for c in sorted(cases, key=lambda c: c.case.key):
         a = rows.get(c.case.lineage_id)
         if a is not None and a.suitability == AutomationSuitability.manual_only:
             reasons = [str(x) for x in a.reasons or []] or ["Needs a person"]
-            out.append({"case_key": c.case.key, "title": c.case.title, "reasons": reasons})
-    return out
+            got = latest.get(c.case.lineage_id)
+            result.append(
+                {
+                    "case_key": c.case.key,
+                    "title": c.case.title,
+                    "reasons": reasons,
+                    # P4-14a: "Passed · RUN-0005 · J. Tester, 19 Nov" or "No result recorded".
+                    "manual_result": _manual_text(got) if got and got.get("manual") else "No result recorded",
+                    "recorded": bool(got and got.get("manual")),
+                }
+            )
+    return result
+
+
+def _manual_text(got: dict[str, Any]) -> str:
+    from datetime import datetime
+
+    day = ""
+    try:
+        day = datetime.fromisoformat(str(got.get("at"))).strftime("%-d %b")
+    except ValueError:
+        day = ""
+    who = got.get("recorded_by") or "someone"
+    return f"{str(got['status']).capitalize()} · {got['run_key']} · {who}" + (f", {day}" if day else "")
+
+
+async def _manual_evidence(s: AsyncSession, results: list[ExecutionResult], rows_out: list[dict[str, Any]]) -> None:
+    """The files a person attached to each result recorded by hand: key, kind and type only (never a file name)."""
+    from app.db.models import Evidence
+
+    ids = [r.id for r in results if r.recorded_by is not None]
+    if not ids:
+        return
+    files: dict[Any, list[dict[str, Any]]] = {}
+    for e in (
+        await s.execute(select(Evidence).where(Evidence.execution_result_id.in_(ids)).order_by(Evidence.key))
+    ).scalars():
+        files.setdefault(e.execution_result_id, []).append(
+            {"key": e.key, "kind": e.kind.value, "mime": e.mime, "size": e.size, "removed": e.purged_at is not None}
+        )
+    for r, x in zip(results, rows_out, strict=True):
+        if x.get("manual"):
+            x["evidence"] = files.get(r.id, [])
 
 
 def _limitations(
     run: ExecutionRun | None, rows: list[dict[str, Any]], not_automated: list[dict[str, Any]]
 ) -> list[str]:
     """What this report can't show (P4-11 "limitations": the sandbox, browsers and sizes not run, untested cases)."""
+    need = _need_person(not_automated)
+    if run is not None and run.mode == RunMode.manual:
+        out = ["Recorded by hand: nothing ran on the platform. Each result is what the person who tested the case saw "
+               "and wrote down; it isn't analysed and has no likely cause."]  # fmt: skip
+        unrecorded = len((run.config or {}).get("plan") or []) - len(rows)
+        if unrecorded > 0:
+            out.append(f"{unrecorded} test case{'s' if unrecorded != 1 else ''} of {run.key} "
+                       f"{'was' if unrecorded == 1 else 'were'} not recorded (Not run).")  # fmt: skip
+        if need:
+            out.append(need)
+        out.append("Files attached by people are stored as they were uploaded.")
+        return out
     if run is not None:
         browsers = {str(b) for b in (run.scope or {}).get("browsers") or []}
         sizes = {str(v) for v in (run.scope or {}).get("viewports") or []}
     else:
-        browsers = {str(x["browser"]).lower() for x in rows}
-        sizes = {"mobile" if str(x["size"]).startswith("Mobile") else "desktop" for x in rows}
+        auto = [x for x in rows if not x.get("manual")]
+        browsers = {str(x["browser"]).lower() for x in auto}
+        sizes = {"mobile" if str(x["size"]).startswith("Mobile") else "desktop" for x in auto}
     out = [
         "Tests ran in a separate process with a cleaned environment, resource limits and a network policy that only "
         "allows the approved site. It is not a container: memory limits aren't enforced on every server.",
@@ -392,17 +510,25 @@ def _limitations(
         out.append("Not run at the mobile size (390 × 844).")
     if rows and "desktop" not in sizes:
         out.append("Not run at the desktop size (1440 × 900).")
-    if not_automated:
-        n = len(not_automated)
-        out.append(
-            f"{n} approved test case{'s' if n != 1 else ''} need{'s' if n == 1 else ''} a person and "
-            f"{'was' if n == 1 else 'were'} not run (listed under Not automated)."
-        )
+    if need:
+        out.append(need)
     blocked = sum(1 for x in rows if x["status"] in ("blocked", "skipped"))
     if blocked:
         out.append(f"{blocked} test{'s' if blocked != 1 else ''} did not run (blocked or skipped); see their reasons.")
     out.append("Automated checks can't judge wording, look and feel, or emails and other effects outside the browser.")
     return out
+
+
+def _need_person(not_automated: list[dict[str, Any]]) -> str | None:
+    """P4-14a: "{n} approved test cases need a person; {m} have no recorded result." """
+    if not not_automated:
+        return None
+    n = len(not_automated)
+    m = sum(1 for x in not_automated if not x.get("recorded"))
+    return (
+        f"{n} approved test case{'s' if n != 1 else ''} need{'s' if n == 1 else ''} a person; "
+        f"{m} {'has' if m == 1 else 'have'} no recorded result."
+    )
 
 
 def _and(items: list[str]) -> str:
@@ -579,7 +705,7 @@ def to_csv(content: dict[str, Any]) -> bytes:
     w = csv.writer(buf, lineterminator="\r\n")
     if content["report_type"] == ReportType.execution.value:
         w.writerow(["Result", "Run", "Test case", "Title", "Browser", "Size", "Status", "Attempts", "Failed step",
-                    "Likely cause", "Cause is", "Defect"])  # fmt: skip
+                    "Likely cause", "Cause is", "Defect", "Recorded by", "What happened", "Notes"])  # fmt: skip
         for x in content["results"]:
             cause = x.get("cause") or {}
             w.writerow(
@@ -590,7 +716,8 @@ def to_csv(content: dict[str, Any]) -> bytes:
                         x["size"], x["status"], x.get("attempts") or "", x.get("failed_step") or "",
                         cause.get("label") or "",
                         ("Set by a person" if cause.get("set_by_person") else "Hypothesis") if cause else "",
-                        _defect_text(x.get("defect")),
+                        _defect_text(x.get("defect")), x.get("recorded_by") or "",
+                        x.get("what_happened") or "", x.get("notes") or "",
                     )
                 ]
             )  # fmt: skip

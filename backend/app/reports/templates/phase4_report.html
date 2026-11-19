@@ -20,12 +20,22 @@
   <p class="muted">{{ c.project.name }} · version {{ c.version }} · generated {{ c.generated_at[:16].replace('T', ' ') }} UTC</p>
   {% if c.report_type == 'defect' and c.draft_note %}<p><span class="band draft">{{ c.draft_note }}</span></p>{% endif %}
   <p><span class="band note">{{ c.hypothesis_note }}</span></p>
+  {% if c.manual_note %}<p><span class="band note">{{ c.manual_note }}</span></p>{% endif %}
 </header>
 <section><h2>Summary</h2><p>{{ c.summary }}</p><p class="muted">Written by rules.</p></section>
 
 {% if c.report_type == 'execution' %}
 <section><h2>Run</h2>
-  {% if c.run %}
+  {% if c.run and c.run.mode == 'manual' %}
+  <table><tbody>
+    <tr><th>Run</th><td>{{ c.run.key }} · Manual (by hand){% if c.run.change_set_key %} · re-tests after {{ c.run.change_set_key }}{% endif %}</td></tr>
+    <tr><th>Status</th><td>{{ c.run.status }}</td></tr>
+    <tr><th>Started</th><td>{{ c.run.requested_by or 'Unknown' }}{% if c.run.requested_at %} · {{ c.run.requested_at[:16].replace('T', ' ') }}{% endif %}</td></tr>
+    <tr><th>Gate 7</th><td>{{ c.run.gate_note }}</td></tr>
+    <tr><th>Finished</th><td>{{ (c.run.finished_at or '')[:16].replace('T', ' ') }}</td></tr>
+    <tr><th>Recorded</th><td>{{ c.totals.tests }} of {{ c.run.planned }} test cases{% if c.run.not_recorded %} · not recorded (Not run): {{ c.run.not_recorded|join(', ') }}{% endif %}</td></tr>
+  </tbody></table>
+  {% elif c.run %}
   <table><tbody>
     <tr><th>Run</th><td>{{ c.run.key }} · {{ c.run.selection }}</td></tr>
     <tr><th>Status</th><td>{{ c.run.status }}</td></tr>
@@ -42,19 +52,29 @@
   <p class="muted">{{ c.flaky_note }}</p>
 </section>
 <section><h2>Results</h2>
+  {% if c.run and c.run.mode == 'manual' %}
+  <table><thead><tr><th>Result</th><th>Test case</th><th>Status</th><th>Recorded by</th><th>What happened</th><th>Notes</th><th>Files</th><th>Defect</th></tr></thead><tbody>
+  {% for x in c.results %}<tr><td>{{ x.result_key }}</td><td>{{ x.case_key or '' }} {{ x.title or '' }}</td><td>{{ x.status }} · By hand</td>
+    <td>{{ x.recorded_by }}{% if x.recorded_at %}, {{ x.recorded_at[:16].replace('T', ' ') }} UTC{% endif %}</td><td>{{ x.what_happened or '' }}</td><td>{{ x.notes or '' }}</td>
+    <td>{% for e in x.evidence %}{{ e.key }} ({{ 'PDF' if e.mime == 'application/pdf' else 'image' }}{% if e.removed %}, removed{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</td>
+    <td>{% if x.defect %}{{ x.defect.key }}{% endif %}</td></tr>
+  {% else %}<tr><td colspan="8">No results.</td></tr>{% endfor %}
+  </tbody></table>
+  {% else %}
   <table><thead><tr><th>Result</th><th>Test case</th><th>Browser · size</th><th>Status</th><th>Failed step</th><th>Likely cause</th><th>Defect</th></tr></thead><tbody>
   {% for x in c.results %}<tr><td>{{ x.result_key }}</td><td>{{ x.case_key or '' }} {{ x.title or '' }}</td><td>{{ x.browser }} · {{ x.size }}</td>
     <td>{{ x.status }}{% if x.reason or x.error_reason %}: {{ x.reason or x.error_reason }}{% endif %}</td><td>{{ x.failed_step or '' }}</td>
-    <td>{% if x.cause %}{{ x.cause.label }} ({{ 'set by a person' if x.cause.set_by_person else 'Hypothesis' }}){% endif %}</td>
+    <td>{% if x.manual %}Not analysed: recorded by {{ x.recorded_by }}. What happened: {{ x.what_happened }}{% elif x.cause %}{{ x.cause.label }} ({{ 'set by a person' if x.cause.set_by_person else 'Hypothesis' }}){% endif %}</td>
     <td>{% if x.defect %}{{ x.defect.key }}{% if x.defect.occurrence > 1 %} (occurrence {{ x.defect.occurrence }}){% endif %}{% endif %}</td></tr>
   {% else %}<tr><td colspan="7">No results.</td></tr>{% endfor %}
   </tbody></table>
+  {% endif %}
 </section>
 <section><h2>Not automated</h2>
   {% if c.not_automated %}
-  <p>Approved test cases that need a person, so no test ran for them:</p>
-  <table><thead><tr><th>Test case</th><th>Why it isn't automated</th></tr></thead><tbody>
-  {% for x in c.not_automated %}<tr><td>{{ x.case_key }} {{ x.title }}</td><td>{{ x.reasons|join('; ') }}</td></tr>{% endfor %}
+  <p>Approved test cases that need a person, so no automated test runs them:</p>
+  <table><thead><tr><th>Test case</th><th>Why it isn't automated</th><th>Manual result</th></tr></thead><tbody>
+  {% for x in c.not_automated %}<tr><td>{{ x.case_key }} {{ x.title }}</td><td>{{ x.reasons|join('; ') }}</td><td>{{ x.manual_result or 'No result recorded' }}</td></tr>{% endfor %}
   </tbody></table>
   {% else %}<p>None. Every approved test case can be automated.</p>{% endif %}
 </section>

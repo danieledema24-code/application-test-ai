@@ -171,9 +171,9 @@ test("manual re-tests (D37): link from the impacted re-run criterion to the chan
   expect(manualRetestSets(rerun).map((r) => r.key)).toEqual(["CHG-0001"]);
   expect(manualRetestSets({ ...rerun, status: "met" })).toEqual([]);
   expect(manualRetestHref("p1", "CHG-0001")).toBe("/projects/p1/discovery/changes/CHG-0001?tab=regression#manual-retests");
-  expect(retestErrors(null, " ")).toEqual({ status: "Choose Passed or Failed.", note: "Add a note: what you did and what you saw." });
+  expect(retestErrors(null, " ")).toEqual({ status: "Choose Passed or Failed.", note: "Describe what happened." });
   expect(retestErrors("passed", "ok")).toEqual({});
-  expect(retestLine({ id: "r", status: "failed", note: "blank page", recorded_by: approver, recorded_at: "x" }, fmt)).toBe("Failed · recorded by A. Approver · 15 Nov 16:00: 'blank page'");
+  expect(retestLine({ id: "r", status: "failed", note: "blank page", recorded_by: approver, recorded_at: "x" }, fmt)).toBe("Failed · By hand · Recorded by A. Approver · 15 Nov 16:00: 'blank page'");
   expect(confirmErrors(null, "")).toEqual({ status: "Choose Met or Not met.", reason: "Say how it was confirmed." });
 });
 

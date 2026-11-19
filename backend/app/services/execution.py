@@ -304,8 +304,11 @@ async def authorise(
     return gd
 
 
+CANCELLABLE = (RunStatus.awaiting_authorisation, RunStatus.queued, RunStatus.running, RunStatus.recording)
+
+
 def can_cancel(run: ExecutionRun, user: User, can_approve: bool) -> bool:
-    if run.status not in (RunStatus.awaiting_authorisation, RunStatus.queued, RunStatus.running):
+    if run.status not in CANCELLABLE:
         return False
     return can_approve or run.requested_by == user.id
 
@@ -313,11 +316,15 @@ def can_cancel(run: ExecutionRun, user: User, can_approve: bool) -> bool:
 async def cancel(s: AsyncSession, project: Project, run: ExecutionRun, user: User, *, can_approve: bool) -> str:
     """Withdraw a request, cancel a queued run, or ask the engine to stop a running one. Returns the toast text."""
     if not can_cancel(run, user, can_approve):
-        if run.status in (RunStatus.awaiting_authorisation, RunStatus.queued, RunStatus.running):
+        if run.status in CANCELLABLE:
             raise Forbidden("Only the person who requested this run or someone who can approve gates can cancel it")
         raise Conflict(f"{run.key} has already finished")
     now = utcnow()
-    if run.status == RunStatus.awaiting_authorisation:
+    if run.status == RunStatus.recording:
+        from app.services import manual
+
+        message = await manual.cancel(s, run)  # P4-14a: only while nothing is recorded
+    elif run.status == RunStatus.awaiting_authorisation:
         run.status = RunStatus.cancelled
         run.finished_at = now
         run.error = "Request withdrawn. Nothing ran."
@@ -428,6 +435,16 @@ async def run_summary(
 
     gd = await g7_decision(s, run)
     scope = run.scope or {}
+    plan = (run.config or {}).get("plan") or []
+    finished_by = (run.config or {}).get("finished_by")
+    manual = None
+    if run.mode == RunMode.manual:
+        # P4-14a: "Manual · Recording 2 of 4"; the change set a D37 re-test run belongs to.
+        manual = {
+            "recorded": int((run.totals or {}).get("finished") or 0),
+            "tests": len(plan),
+            "change_set_key": (run.config or {}).get("change_set_key"),
+        }
     return {
         "id": run.id,
         "key": run.key,
@@ -455,9 +472,12 @@ async def run_summary(
         "created_at": run.created_at,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
+        # P4-14a: who finished a manual run; null otherwise.
+        "finished_by": out.person(users.get(uuid.UUID(finished_by)), see_email=see_email) if finished_by else None,
         "duration_ms": duration_ms(run),
         "error": run.error,
         "bundle_version": run.bundle_version,
+        "manual": manual,
     }
 
 
@@ -471,9 +491,10 @@ async def user_ids(s: AsyncSession, runs: list[ExecutionRun]) -> set[uuid.UUID]:
             if d
         }
     for r in runs:
-        by = (r.config or {}).get("cancelled_by")
-        if by:
-            ids.add(uuid.UUID(by))
+        for k in ("cancelled_by", "finished_by"):
+            by = (r.config or {}).get(k)
+            if by:
+                ids.add(uuid.UUID(by))
     return ids
 
 
@@ -498,6 +519,12 @@ def result_row(r: ExecutionResult, plan_item: dict[str, Any] | None = None) -> d
         "classification": r.classification.value if r.classification else None,
         "confidence": analysis.get("confidence"),
         "defect": analysis.get("defect"),
+        # P4-14a: recorded by hand ("By hand"); the recorder is added by the caller, which knows the people.
+        "manual": r.recorded_by is not None,
+        "actual_result": r.actual_result if r.recorded_by is not None else None,
+        "notes": r.notes if r.recorded_by is not None else None,
+        # When it was last saved by hand (the "saved at" that decides the latest result); null for Playwright.
+        "recorded_at": (r.recorded_at or r.updated_at) if r.recorded_by is not None else None,
     }
 
 
@@ -509,11 +536,13 @@ async def tests_rows(s: AsyncSession, run: ExecutionRun) -> list[dict[str, Any]]
         for r in (await s.execute(select(ExecutionResult).where(ExecutionResult.execution_run_id == run.id))).scalars()
     }
     live = ((run.totals or {}).get("live") or {}) if run.status == RunStatus.running else {}
+    people = await out_users(s, [r.recorded_by for r in results.values()])
     rows = []
     for item in plan:
         r = results.get(item["key"])
         if r is not None:
             row = result_row(r, item)
+            row["recorded_by"] = person_name(people, r.recorded_by)
         else:
             state = (live.get(item["key"]) or {}).get("state")
             row = {
@@ -524,7 +553,10 @@ async def tests_rows(s: AsyncSession, run: ExecutionRun) -> list[dict[str, Any]]
                 "test_case_id": item["test_case_id"],
                 "browser": item["browser"],
                 "viewport": item["size"],
-                "status": "running" if state == "running" else "waiting",
+                # Manual runs: "not_recorded" while recording, "not_run" once finished (unrecorded cases have no row).
+                "status": ("not_recorded" if run.status == RunStatus.recording else "not_run")
+                if run.mode == RunMode.manual
+                else ("running" if state == "running" else "waiting"),
                 "attempts": (live.get(item["key"]) or {}).get("attempt"),
                 "duration_ms": None,
                 "failed_step": None,
@@ -532,10 +564,29 @@ async def tests_rows(s: AsyncSession, run: ExecutionRun) -> list[dict[str, Any]]
                 "classification": None,
                 "confidence": None,
                 "defect": None,
+                "manual": run.mode == RunMode.manual,
+                "actual_result": None,
+                "notes": None,
+                "recorded_by": None,
+                "recorded_at": None,
             }
         row["retried"] = item.get("retried", True)
         rows.append(row)
     return rows
+
+
+async def out_users(s: AsyncSession, ids: list[uuid.UUID | None]) -> dict[uuid.UUID, User]:
+    from app.services import serialize_p2 as out
+
+    return await out.users(s, [i for i in ids if i])
+
+
+def person_name(people: dict[uuid.UUID, User], user_id: uuid.UUID | None) -> dict[str, Any] | None:
+    """The recorder of a manual result as {id, full_name}: names only, never emails (results are read by viewers)."""
+    if user_id is None:
+        return None
+    u = people.get(user_id)
+    return {"id": user_id, "full_name": (u.full_name if u else None) or "someone"}
 
 
 async def analysis_summary(s: AsyncSession, run: ExecutionRun) -> dict[str, Any] | None:

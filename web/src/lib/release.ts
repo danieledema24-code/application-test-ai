@@ -116,7 +116,8 @@ export type DecisionResponse = { assessment: Assessment; message: string };
 
 // ---- manual re-tests of impacted manual must-run tests (D37) ---------------------------------------------------
 
-export type ManualRetest = { id: Uuid; status: "passed" | "failed"; note: string; recorded_by: UserRef | null; recorded_at: IsoDate | null };
+/** D37 re-test; since D39 (P4-14) a manual result: `run_key`/`result_key` say where it is stored (null for legacy rows). */
+export type ManualRetest = { id: Uuid; status: "passed" | "failed"; note: string; recorded_by: UserRef | null; recorded_at: IsoDate | null; run_key?: string | null; result_key?: string | null };
 export type ManualRetestItem = { case_key: string; title: string | null; test_case_id: Uuid; case_lineage_id: Uuid; reasons: string[]; latest: ManualRetest | null; history: ManualRetest[] };
 export type ManualRetests = {
   change_set: { id: Uuid; key: string };
@@ -129,7 +130,7 @@ export type ManualRetests = {
 /** The server's "not runnable" reason on an impacted manual must-run test (backend services/impact.py MUST_MANUAL). */
 export const MUST_MANUAL = "Manual test: a person runs it (not part of the automated run)";
 export const RETEST_STATUS_ERROR = "Choose Passed or Failed.";
-export const RETEST_NOTE_ERROR = "Add a note: what you did and what you saw.";
+export const RETEST_NOTE_ERROR = "Describe what happened.";
 
 export function retestErrors(status: "passed" | "failed" | null, note: string): { status?: string; note?: string } {
   const out: { status?: string; note?: string } = {};
@@ -138,9 +139,10 @@ export function retestErrors(status: "passed" | "failed" | null, note: string): 
   return out;
 }
 
-/** "Passed · M. Member · 15 Nov 16:00: 'note'" — the latest recorded manual re-test. */
+/** "Passed · By hand · Recorded by M. Member · 15 Nov 16:00: 'what happened'" — a recorded manual re-test, in the
+ * vocabulary of every manual result (P4-14 §4.6). */
 export function retestLine(r: ManualRetest, fmt: (iso: string | null | undefined) => string): string {
-  return `${r.status === "passed" ? "Passed" : "Failed"} · recorded by ${who(r.recorded_by)} · ${fmt(r.recorded_at)}: '${r.note}'`;
+  return `${r.status === "passed" ? "Passed" : "Failed"} · By hand · Recorded by ${who(r.recorded_by)} · ${fmt(r.recorded_at)}: '${r.note}'`;
 }
 
 // ---- vocabulary (design P6 §3.7, §3.8) -----------------------------------------------------------------------

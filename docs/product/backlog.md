@@ -1,5 +1,30 @@
 # Backlog
 
+## P4-14 Manual test results (revived; branch `manual-results`, from `main` / 5329b0b)
+
+**Source of truth:** `docs/architecture/roadmap.md`, "P4-14 → Revised 2026-11-19" (full Given/When/Then). The original P4-14 (cut 2026-11-14) predates Phases 5–6; the revision fits it to D37 manual re-tests, release readiness, the Test Completion Report and the assistant. Migration `0022_manual_results` (head is `0021`).
+
+**Problem:** cases that need a person are "never executed" for ever: they hold requirements in the "manual only" gap, keep DoD "Tests executed with evidence" not met and keep high-risk checks from passing. D37 lets a person record a re-test, but only for impacted must-run tests of a change set, and that record doesn't count as execution evidence anywhere else.
+
+**Shape:** one concept. A manual result is an `execution_results` row in a manual run (`mode: manual`, new status `recording`, no G7, no worker). Everything that reads results (traceability, coverage, DoD, readiness, reports, assistant, defect prefill) picks it up through `last_results`; D37 re-tests are written the same way.
+
+| ID | Story | Priority | Size | Acceptance criteria (brief) | Status |
+|---|---|---|---|---|---|
+| P4-14a | As a tester, I record passed/failed/blocked with what happened, notes and evidence for approved cases I tested by hand, so they count as execution evidence (Backend, migration 0022) | P1 | M | Manual run without G7 in status `recording` (never blocks automated runs or load tests); "What happened" required; PNG/JPEG/PDF ≤ 10 MB sniffed; counts on save; recorder-only edits until finish; requirement leaves "manual only"; blocked doesn't count; no auto defect draft, `from_result_id` prefill; D37 endpoint unchanged on the outside but writes manual results; assessment goes stale; report and assistant show "By hand · Recorded by"; viewer 403, other org 404. | Done (2026-11-19; QA PASS WITH NOTES after 3 rounds) |
+| P4-14b | As a tester, I start a manual run, record each case on one page and finish it; everyone sees "By hand · Recorded by <name>" (Web; needs UX) | P1 | M | Entry points on Test Execution, Automation "Needs a person", case detail, change set Manual re-tests; record page per design P4 §10 (updated); finish confirm for unrecorded cases; [Raise defect…] prefilled after Failed; announced saves and errors; viewers see no entry points; keyboard and 375 px. | Done (2026-11-19; QA PASS WITH NOTES, real-backend walk-through) |
+
+**Not doing:** per-browser/size manual results, editing after finish, deleting uploads, assigning cases to testers, importing results from other tools.
+
+**Main technical risk:** a manual run left in `running` would block every automated run and load test (`engine.py` and `performance/runner.py` refuse to start beside a `running` execution run), hence the new `recording` status. Also check every `RunStatus` mapping (`domain/stages.py`) and run list filter handles it.
+
+### Product decisions for P4-14 (pending user, 2026-11-19)
+
+| # | Decision | Options | Recommendation | Stories affected |
+|---|---|---|---|---|
+| D38 | Which cases can be recorded by hand, and which result counts when a case has both | (a) Any case approved at the latest G5 (pre-filtered to "Needs a person"); the latest result wins, manual or automated, always labelled "By hand · Recorded by". (b) Only `manual_only` cases; automated cases are only ever run by the platform. | **Decided: (a)** (user, 2026-11-19).: people test by hand exactly when a script is invalid, outdated or broken by a change. Trade-off: a manual pass can replace an automated failure; the label, the audit trail and "What happened" are the safeguard. | P4-14a, P4-14b |
+| D39 | D37 manual re-tests vs manual results | (a) One concept: a D37 re-test is a manual result in a manual run for the change set; `/change-sets/{id}/manual-retests` keeps its contract; `manual_retests` is frozen and read as legacy. (b) Keep both: re-tests stay change-set-only and don't count as execution evidence; manual runs are separate. | **Decided: (a)** (user, 2026-11-19).: otherwise a person who re-tested TC-0005 after CHG-0001 still sees "Manual only, no recorded result", and a failed manual-run result after a change wouldn't raise the `rr.manual_retests` condition. Costs about S inside P4-14a. | P4-14a, P4-14b, P6-05a/b behaviour |
+| D40 | Do manual results count toward release readiness, including blocking checks | (a) Yes, like automated results (DoD, AC executed, pass rate, `rr.high_risk_tested`), with "by hand, recorded by X" in the evidence. (b) Count in traceability and DoD only; release checks need automated results. | **Decided: (a)** (user, 2026-11-19).: consistent with D37 (the platform already trusts a recorded re-test). With (b) a high risk covered only by manual cases makes every release no-go. | P4-14a |
+
 ## Phase 6: Change intelligence and release readiness (branch `phase-6`, from `main` / 3a35c06)
 
 **Source of truth:** `docs/architecture/roadmap.md` ("Phase 6") has the full Given/When/Then criteria. Schema: one migration, `0019_change_intelligence`, written by P6-00 with every column the phase uses (`0018_retention` is the head; 0019 was never used, because P5-06a was cut). `database-schema.md` gets a "Change intelligence and release readiness (Phase 6)" section and `api-contracts.md` gets "Phase 6 endpoints", both with P6-00.
@@ -170,7 +195,7 @@ The chain runs:
 | P4-10 | Export Playwright project + GitHub Actions/GitLab CI templates | P1 | M | Unzipped export runs locally with the same outcome as the platform; safe zip paths; invalid scripts excluded and listed; templates parse and use secrets by name only. | Done (QA pass, phase4-verification.md) |
 | P4-03b | Automation Engineer: AI path and repair loop | P1 | M | Up to 3 repairs then rule fallback; assertion set must equal the rule baseline (`assertion_changed`), AI-only assertions must map to a step; AI scripts need G6 review. | Done (QA pass, phase4-verification.md) |
 | P4-13 | AI QA Analyst v3: execution and defects (Backend PR, Web PR) | P2 | M + S | AI off: "Did the tests pass?", "Explain a failed test", "Analyse a defect" grounded and cited; rerun proposals create run requests only (G7 still needed). | Done (QA pass, phase4-verification.md) |
-| P4-14 | Manual test results (only if D15 = include) | P2 | M | Record pass/fail/blocked with notes and upload for manual cases; counts as execution evidence; no automatic defect drafts. | **Cut** (2026-11-14, lead decision after Phase 4 QA round 1): manual-only cases stay "not executed" and are listed with their reasons in the Test Execution Report's "Not automated" section. |
+| P4-14 | Manual test results (only if D15 = include) | P2 | M + M | Record pass/fail/blocked with notes and upload for manual cases; counts as execution evidence; no automatic defect drafts. Revised 2026-11-19 as P4-14a (backend) + P4-14b (web), see "P4-14 Manual test results (revived)" at the top. | **Done (2026-11-19)** as P4-14a + P4-14b. Previously cut (2026-11-14, lead decision after Phase 4 QA round 1). |
 | P4-15 | End-to-end verification, `api/` retirement, phase close | P0 | M | Full AI-off demo journey catches the empty-Message bug through G8; cross-tenant and credential-absence suites; `api/` retired per D16 (demo shop moved to `demo-shop/` first); `phase4-verification.md`. | Done (QA pass, phase4-verification.md) |
 
 ### Product decisions (resolved 2026-11-13)

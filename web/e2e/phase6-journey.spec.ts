@@ -625,7 +625,8 @@ test("8. History: release 1 and 2 compared again, DEF-0001's release-1 evidence 
   const sets = (await O.get(`/projects/${s.pid}/changes`)).items as Json[];
   expect(sets.filter((x) => x.status === "completed").length).toBeGreaterThanOrEqual(1);
   // The pair is listed (compared once; asking again returns the same set).
-  const again = sets.find((x) => x.from_scan?.id === s.scan1 && x.to_scan?.id === s.scan2);
+  // ChangeSet refs are `base` and `target` (scan refs, api-contracts "Rescan and change detection").
+  const again = sets.find((x) => x.base?.id === s.scan1 && x.target?.id === s.scan2);
   expect(again, "release 1 vs release 2 resolves to a change set").toBeTruthy();
   expect(again!.key).toBe("CHG-0001");
   const items = (await O.get(`/change-sets/${again!.id}/items`)).items as Json[];

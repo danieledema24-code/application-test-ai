@@ -133,7 +133,7 @@ async def _regression_facts(s: AsyncSession, project_id: uuid.UUID, facts: Facts
         for row_lin, st, err, run_key in rows:
             if st in rsvc.RAN_STATUSES and (err or "") not in NOT_RESULTS:
                 ran.setdefault(str(row_lin), set()).add(str(run_key))
-    by_hand = {str(k) for k in (await rsvc.latest_manual_retests(s, cs.id))}
+    by_hand = set(await rsvc.latest_manual_retests(s, cs))
     runs: set[str] = set()
     for p in musts:
         must_lin = str(p["case_lineage_id"])

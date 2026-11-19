@@ -29,6 +29,8 @@ export function attentionRows(o: {
   nonFunctional?: { text: string; action: string; href: string | null }[];
   /** Phase 6 (design P6 §4.5): the latest release assessment; its rows go after the run rows. */
   release?: ReleaseSummary | null;
+  /** P4-14 §3: approved cases that need a person and have no passed or failed result (members only). */
+  manualPending?: number;
 }): { text: string; action: string; href: string | null }[] {
   const rows: { text: string; action: string; href: string | null }[] = [];
   const base = `/projects/${o.projectId}`;
@@ -79,6 +81,12 @@ export function attentionRows(o: {
     });
   }
   rows.push(...releaseAttentionRows(o.release, base, canApprove, !!o.viewer));
+  if (o.manualPending && !o.viewer)
+    rows.push({
+      text: `${o.manualPending} approved case${o.manualPending === 1 ? " needs" : "s need"} a person and ${o.manualPending === 1 ? "has" : "have"} no recorded result.`,
+      action: "Record manual results",
+      href: `${base}/execution?record=1`,
+    });
   rows.push(...(o.nonFunctional ?? []));
   const cant = (o.scripts?.invalid ?? 0) + (o.scripts?.outdated ?? 0);
   if (cant)
@@ -117,6 +125,24 @@ export function attentionRows(o: {
   return rows;
 }
 
+
+/**
+ * P4-14 §3: the cases that need a person: the scripts bundle's `not_automated` and, before any bundle exists, the
+ * suitability assessment's "Needs a person" cases (the Start modal's source). Both, without repeats.
+ */
+export function needPersonKeys(notAutomated: { key: string }[] | null | undefined, assessed: { key: string; suitability: string }[] | null | undefined): string[] {
+  return [...new Set([...(notAutomated ?? []).map((c) => c.key), ...(assessed ?? []).filter((c) => c.suitability === "manual_only").map((c) => c.key)])];
+}
+
+/** P4-14 §3: how many of the cases that need a person (`keys`) have no passed or failed result yet. */
+export function manualPendingCount(keys: string[], cases: { key: string; status?: string; last_result: { status: string } | null }[] | undefined): number {
+  if (!cases) return 0;
+  const by = new Map(cases.map((c) => [c.key, c]));
+  return keys.filter((k) => {
+    const c = by.get(k);
+    return !!c && c.status !== "deprecated" && c.status !== "rejected" && c.last_result?.status !== "passed" && c.last_result?.status !== "failed";
+  }).length;
+}
 
 /** "May submit the Contact us form (if …)" → "may submit the Contact us form". */
 function sideEffectPhrase(text: string): string {

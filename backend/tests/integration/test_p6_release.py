@@ -193,11 +193,13 @@ async def fixture_project(
                           start_url="https://shop.example.com/", status=ScanStatus.completed, finished_at=utcnow()))  # fmt: skip
         s.add(GateDecision(**common, gate_key=GateKey.G2, stage_run_id=runs[StageKey.discovery],
                            decision=GateDecisionKind.approve, decided_by=owner.user_id))  # fmt: skip
-        run = ExecutionRun(**common, key="RUN-0001", status=RunStatus.passed, requested_by=owner.user_id,
+        # RUN-0001 through the counter, so runs created later (P4-14a manual runs) get the next key.
+        _n, run_key = await next_key(s, owner.org_id, pid, "run")
+        run = ExecutionRun(**common, key=run_key, status=RunStatus.passed, requested_by=owner.user_id,
                            started_at=utcnow(), finished_at=utcnow())  # fmt: skip
         s.add(run)
         await s.flush()
-        s.add(ExecutionResult(**common, execution_run_id=run.id, key="RUN-0001-01", case_lineage_id=case.lineage_id,
+        s.add(ExecutionResult(**common, execution_run_id=run.id, key=f"{run_key}-01", case_lineage_id=case.lineage_id,
                               test_case_id=case.id, status="passed"))  # fmt: skip
         for key, kind in (("A11Y-0001", QualityScanKind.accessibility), ("SEC-0001", QualityScanKind.security),
                           ("EXP-0001", QualityScanKind.exploratory)):  # fmt: skip

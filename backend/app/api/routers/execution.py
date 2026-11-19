@@ -2,8 +2,14 @@
 
 Reads are open to every member of the organisation (viewers included). Requesting, cancelling (own runs) and
 re-running need a member; authorising (G7) and deciding approvals need `can_approve`, in one request (design §7.3).
-Results are never written through the API: only the engine stores them, from Playwright's report. People change a
-result's *classification* (with a reason), never its status. Objects of another organisation are 404.
+Results of automated runs are never written through the API: only the engine stores them, from Playwright's report.
+People change such a result's *classification* (with a reason), never its status. Objects of another organisation are
+404.
+
+P4-14a: a manual run (`mode: manual`) is a person's record of cases tested by hand. It has no G7 and is created in
+status `recording`; members record each case (`PUT /execution-runs/{id}/results/{case_key}`), add files
+(`POST /execution-results/{id}/evidence`) and finish it. Authorise, re-run, the live view, frames, classification
+changes and fix suggestions are 409 for it ("Manual runs don't run on the platform.").
 """
 
 from __future__ import annotations
@@ -12,13 +18,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.api.deps import Ctx, CurrentPrincipal, MemberPrincipal, Principal, ScopedSession
-from app.api.errors import Conflict, Forbidden, NotFound, ValidationFailed
+from app.api.errors import Conflict, Forbidden, NotFound, RateLimited, ValidationFailed
 from app.api.routers import p2common as c
 from app.api.routers.automation import Browser, SelectionInput, Viewport
 from app.db.models import (
@@ -32,11 +38,12 @@ from app.db.models import (
 )
 from app.db.tenant import BYPASS
 from app.domain.defects import classify as cl
-from app.domain.enums import FailureClass, ResultStatus, Role, RunStatus, StageKey
+from app.domain.enums import FailureClass, ResultStatus, Role, RunMode, RunStatus, StageKey
 from app.orchestrator.orchestrator import Orchestrator
 from app.services import approvals as apr
 from app.services import defects as dsvc
 from app.services import execution as xsvc
+from app.services import manual
 from app.services import serialize as ser
 from app.services import serialize_p2 as out
 from app.services.audit import audit
@@ -55,6 +62,12 @@ def _member(p: Principal) -> bool:
 async def _run(s: Any, run_id: uuid.UUID) -> ExecutionRun:
     run: ExecutionRun = await c.load(s, ExecutionRun, run_id, "Run")
     return run
+
+
+def _not_manual(run: ExecutionRun | None) -> None:
+    """409 for what only automated runs do (authorise, re-run, live view, frames, causes, fix suggestions)."""
+    if run is not None and run.mode == RunMode.manual:
+        raise Conflict(manual.NOT_FOR_MANUAL)
 
 
 async def _emit(ctx: Ctx, project: Project, type_: str, message: str, data: dict[str, Any]) -> None:
@@ -110,6 +123,7 @@ async def list_runs(
         "items": items,
         "waiting": waiting,
         "running": next((r.key for r in runs if r.status == RunStatus.running), None),
+        "recording": [r.key for r in runs if r.status == RunStatus.recording],
         "permissions": {"can_request": _member(p), "can_authorise": _approver(p)},
     }
 
@@ -149,9 +163,16 @@ async def run_detail(ctx: Ctx, s: Any, p: Principal, run: ExecutionRun) -> dict[
             "analysis": await xsvc.analysis_summary(s, run),
             "permissions": {
                 "can_authorise": _approver(p) and run.status == RunStatus.awaiting_authorisation,
-                "can_cancel": _member(p) and xsvc.can_cancel(run, p.user, _approver(p)),
-                "can_rerun": _member(p) and run.status in xsvc.FINISHED,
+                "can_cancel": _member(p)
+                and xsvc.can_cancel(run, p.user, _approver(p))
+                and not (run.status == RunStatus.recording and (run.totals or {}).get("finished")),
+                "can_rerun": _member(p) and run.status in xsvc.FINISHED and run.mode == RunMode.automated,
                 "is_requester": run.requested_by == p.user.id,
+                # P4-14a: any member records cases and finishes a recording run (once something is recorded).
+                "can_record": _member(p) and run.status == RunStatus.recording,
+                "can_finish": _member(p)
+                and run.status == RunStatus.recording
+                and bool((run.totals or {}).get("finished")),
             },
         }
     )
@@ -193,6 +214,10 @@ class ApprovalChoice(BaseModel):
 
 class RunInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # P4-14a: `manual` records results by hand for `case_keys` (no G7; the other fields don't apply).
+    mode: Literal["automated", "manual"] = "automated"
+    case_keys: list[str] | None = Field(default=None, max_length=manual.MAX_CASES)
+    change_set_key: str | None = Field(default=None, max_length=32)
     selection: SelectionInput = Field(default_factory=SelectionInput)
     browsers: list[Browser] = Field(default_factory=lambda: list[Browser](["chromium"]))
     viewports: list[Viewport] = Field(default_factory=lambda: list[Viewport](["desktop"]))
@@ -206,8 +231,14 @@ class RunInput(BaseModel):
 async def request_run(
     project_id: uuid.UUID, body: RunInput, ctx: Ctx, s: ScopedSession, p: MemberPrincipal
 ) -> dict[str, Any]:
-    """A run request (G7 waiting), or with `authorise: true` an authorised run in the same request (approvers)."""
+    """A run request (G7 waiting), or with `authorise: true` an authorised run in the same request (approvers).
+    With `mode: manual` a manual run in `recording` (P4-14a): no G7, approvals, stage run, worker or toolkit."""
     project = await c.project_of(s, project_id)
+    if body.mode == "manual":
+        return await _start_manual(ctx, s, p, project, body)
+    if body.case_keys is not None or body.change_set_key is not None:
+        msg = "case_keys and change_set_key are for manual runs; use selection.case_keys."
+        raise ValidationFailed(msg, details=[{"field": "case_keys", "message": msg}])
     if body.authorise and not _approver(p):
         raise Forbidden("Authorising runs needs gate-approval permission")
     case_keys = body.selection.case_keys
@@ -257,6 +288,26 @@ async def request_run(
     return await run_detail(ctx, s, p, run)
 
 
+async def _start_manual(ctx: Ctx, s: Any, p: Principal, project: Project, body: RunInput) -> dict[str, Any]:
+    if body.authorise or body.approvals:
+        raise Conflict(manual.NOT_FOR_MANUAL)
+    if not body.case_keys:
+        msg = "Choose the test cases you'll record."
+        raise ValidationFailed(msg, details=[{"field": "case_keys", "message": msg}])
+    run = await manual.create_run(s, project, p.user, case_keys=body.case_keys, change_set_key=body.change_set_key)
+    await s.commit()
+    name = p.user.full_name or p.user.email
+    tests = len((run.config or {}).get("plan") or [])
+    await _emit(
+        ctx,
+        project,
+        "execution.run_status",
+        f"{run.key} started by hand by {name}: {tests} test case{'s' if tests != 1 else ''} to record",
+        {"kind": "status", "run_key": run.key, "status": "recording", "tests": tests},
+    )
+    return await run_detail(ctx, s, p, run)
+
+
 class AuthoriseInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: Literal["approve", "reject"]
@@ -269,6 +320,7 @@ async def authorise_run(
     run_id: uuid.UUID, body: AuthoriseInput, ctx: Ctx, s: ScopedSession, p: CurrentPrincipal
 ) -> dict[str, Any]:
     run = await _run(s, run_id)
+    _not_manual(run)
     if not _approver(p):
         raise Forbidden("Authorising runs needs gate-approval permission")
     project = await c.project_of(s, run.project_id)
@@ -315,7 +367,7 @@ async def cancel_run(run_id: uuid.UUID, ctx: Ctx, s: ScopedSession, p: MemberPri
     run = await _run(s, run_id)
     project = await c.project_of(s, run.project_id)
     message = await xsvc.cancel(s, project, run, p.user, can_approve=_approver(p))
-    if run.status == RunStatus.cancelled:
+    if run.status == RunStatus.cancelled and run.mode == RunMode.automated:
         await Orchestrator(ctx).mirror_execution_run(s, project, run)
     await s.commit()
     await Orchestrator(ctx)._enqueue_pending(p.scope, project.id)
@@ -338,6 +390,7 @@ class RerunInput(BaseModel):
 async def rerun(run_id: uuid.UUID, body: RerunInput, ctx: Ctx, s: ScopedSession, p: MemberPrincipal) -> dict[str, Any]:
     """A **new** run request with the same browsers and sizes; it needs its own G7 (decision D8)."""
     run = await _run(s, run_id)
+    _not_manual(run)
     project = await c.project_of(s, run.project_id)
     plan = (run.config or {}).get("plan") or []
     if body.only == "failed":
@@ -400,6 +453,7 @@ async def live(run_id: uuid.UUID, ctx: Ctx, s: ScopedSession, _p: CurrentPrincip
     from app.agents.execution.engine import live_dir
 
     run = await _run(s, run_id)
+    _not_manual(run)
     if run.status != RunStatus.running:
         raise NotFound("The run isn't running")
     d = live_dir(ctx, run.id)
@@ -446,6 +500,7 @@ async def live_frame(
         ).scalar_one_or_none()
     if run is None or not ctx.signer.verify(_slot_id(run.id, slot), run.organisation_id, exp, sig):
         raise Forbidden("This link is invalid or has expired")
+    _not_manual(run)
     data = _frame(live_dir(ctx, run.id) / f"{slot}.jpg") if run.status == RunStatus.running else None
     if data is None:
         raise NotFound("No frame")
@@ -502,7 +557,11 @@ async def result_detail(ctx: Ctx, s: Any, p: Principal, r: ExecutionResult) -> d
         )
     analysis = dict(r.analysis or {})
     overridden = analysis.get("overridden")
-    users = await out.users(s, [uuid.UUID(overridden["by"])] if overridden and overridden.get("by") else [])
+    users = await out.users(
+        s, [uuid.UUID(overridden["by"])] if overridden and overridden.get("by") else [r.recorded_by]
+    )
+    by_hand = manual.by_hand(r)
+    recording = run is not None and run.status == RunStatus.recording
     if overridden and overridden.get("by"):
         analysis["overridden"] = {
             **overridden,
@@ -558,10 +617,19 @@ async def result_detail(ctx: Ctx, s: Any, p: Principal, r: ExecutionResult) -> d
             }
             for h in r.heal_suggestions or []
         ],
+        # P4-14a: recorded by hand ("By hand · Recorded by J. Tester"); never analysed or classified.
+        "recorded_by": xsvc.person_name(users, r.recorded_by),
+        "not_analysed": manual.NOT_ANALYSED if by_hand else None,
         "permissions": {
-            "can_reclassify": _member(p) and r.analysis is not None,
+            "can_reclassify": _member(p) and r.analysis is not None and not by_hand,
             "can_raise_defect": _member(p),
-            "can_accept_fix": _member(p),
+            "can_accept_fix": _member(p) and not by_hand,
+            "can_record": _member(p) and by_hand and recording and r.recorded_by == p.user.id,
+            "can_upload": _member(p)
+            and by_hand
+            and recording
+            and r.recorded_by == p.user.id
+            and len(evidence) < manual.MAX_FILES,
         },
     }
 
@@ -599,6 +667,7 @@ async def reclassify(
     """Changes the likely cause only (P4-08). The result's status never changes. To `application_defect` drafts a
     defect; away from it leaves an existing draft for G8."""
     r: ExecutionResult = await c.load(s, ExecutionResult, result_id, "Result")
+    _not_manual(await s.get(ExecutionRun, r.execution_run_id))
     if r.analysis is None:
         raise Conflict("This result hasn't been analysed")
     reason = body.reason.strip()
@@ -677,6 +746,7 @@ async def accept_fix(result_id: uuid.UUID, n: int, ctx: Ctx, s: ScopedSession, p
     from app.services import repairs
 
     r: ExecutionResult = await c.load(s, ExecutionResult, result_id, "Result")
+    _not_manual(await s.get(ExecutionRun, r.execution_run_id))
     project = await c.project_of(s, r.project_id)
     # P6-04: Phase 4 JSON suggestions accept as before; a result with only a repair row (HEAL-…) accepts that row.
     asset, keys, scripts = await repairs.accept_p4(s, project, r, n, p.user)
@@ -697,3 +767,103 @@ async def accept_fix(result_id: uuid.UUID, n: int, ctx: Ctx, s: ScopedSession, p
         "scripts_to_validate": keys,
         "result": await result_detail(ctx, s, p, r),
     }
+
+
+# ------------------------------------------------------------------ manual results (P4-14a)
+
+
+class ManualResultInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["passed", "failed", "blocked"]
+    actual_result: str | None = Field(default=None, max_length=manual.MAX_TEXT)
+    notes: str | None = Field(default=None, max_length=manual.MAX_TEXT)
+
+
+@router.put("/execution-runs/{run_id}/results/{case_key}")
+async def record_result(
+    run_id: uuid.UUID, case_key: str, body: ManualResultInput, ctx: Ctx, s: ScopedSession, p: MemberPrincipal
+) -> dict[str, Any]:
+    """Creates or updates one case's result in a `recording` manual run. "What happened" is required for every
+    status. Until the run is finished only the person who recorded a result can change it (403)."""
+    run = await _run(s, run_id)
+    project = await c.project_of(s, run.project_id)
+    r, previous = await manual.record(
+        s, project, run, p.user, case_key=case_key, status=body.status, actual_result=body.actual_result,
+        notes=body.notes, secrets=await manual.saved_values(ctx, s, project.id),
+    )  # fmt: skip
+    await s.commit()
+    case = next(i["case_key"] for i in (run.config or {}).get("plan") or [] if i["key"] == r.key)
+    word = manual.STATUS_WORD[body.status]
+    name = p.user.full_name or p.user.email
+    await _emit(
+        ctx,
+        project,
+        "execution.manual_recorded",
+        f"{case} recorded by hand by {name}: {word}" + (f" (was {previous})" if previous else ""),
+        {"kind": "result", "run_key": run.key, "result_key": r.key, "case_key": case, "status": body.status},
+    )
+    return {
+        "message": f"{case} saved as {word}.",
+        "result": await result_detail(ctx, s, p, r),
+        "run": await run_detail(ctx, s, p, run),
+    }
+
+
+@router.post("/execution-results/{result_id}/evidence", status_code=201)
+async def upload_evidence(
+    result_id: uuid.UUID, request: Request, ctx: Ctx, s: ScopedSession, p: MemberPrincipal
+) -> dict[str, Any]:
+    """A PNG, JPEG or PDF (by content, at most 10 MB, 5 per result) for a result recorded by hand, by its recorder,
+    while the run is recording. Reuses the P2-08 multipart parser and per-project upload rate limit. Stored as-is as
+    evidence of the result; files can't be deleted."""
+    from app.api.routers.documents import _parse_multipart
+
+    r: ExecutionResult = await c.load(s, ExecutionResult, result_id, "Result")
+    run = await manual.check_upload(s, r, p.user)
+    project = await c.project_of(s, r.project_id)
+    limit = manual.MAX_FILE_BYTES + 64 * 1024  # room for the multipart framing
+    if int(request.headers.get("content-length") or 0) > limit:
+        raise ValidationFailed(manual.TOO_LARGE, details=[{"field": "file", "message": manual.TOO_LARGE}])
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            raise ValidationFailed(manual.TOO_LARGE, details=[{"field": "file", "message": manual.TOO_LARGE}])
+    data, _filename, _title = _parse_multipart(request.headers.get("content-type", ""), body)
+    if not data:
+        raise ValidationFailed(manual.NO_FILE, details=[{"field": "file", "message": manual.NO_FILE}])
+    if len(data) > manual.MAX_FILE_BYTES:
+        raise ValidationFailed(manual.TOO_LARGE, details=[{"field": "file", "message": manual.TOO_LARGE}])
+    manual.sniff(data)
+    retry = ctx.rate_limiter.hit(f"manual_evidence:{project.id}", manual.UPLOADS_PER_HOUR, 3600)
+    if retry is not None:
+        raise RateLimited("Too many uploads for this project in the last hour", retry)
+    ev = await manual.add_evidence(s, ctx.storage, project, run, r, p.user, data)
+    await s.commit()
+    return {
+        "message": f"File added to {r.key}.",
+        "evidence": ser.evidence_link(ctx, ev).model_dump(mode="json"),
+        "result": await result_detail(ctx, s, p, r),
+    }
+
+
+@router.post("/execution-runs/{run_id}/finish")
+async def finish_run(run_id: uuid.UUID, ctx: Ctx, s: ScopedSession, p: MemberPrincipal) -> dict[str, Any]:
+    """Finishes a `recording` manual run (any member): passed, or failed if a result failed; its Test Execution
+    Report is frozen. Unrecorded cases stay Not run. 409 with no result recorded."""
+    from app.agents.reporting.phase4_reports import freeze_for_run
+
+    run = await _run(s, run_id)
+    project = await c.project_of(s, run.project_id)
+    message = await manual.finish(s, project, run, p.user)
+    await s.commit()
+    await freeze_for_run(ctx, p.scope, project.id, run.id)
+    totals = {k: v for k, v in (run.totals or {}).items() if isinstance(v, int)}
+    await _emit(
+        ctx,
+        project,
+        "execution.run_status",
+        message.rstrip("."),
+        {"kind": "result", "run_key": run.key, "status": run.status.value, **totals},
+    )
+    return {"message": message, "run": await run_detail(ctx, s, p, run)}

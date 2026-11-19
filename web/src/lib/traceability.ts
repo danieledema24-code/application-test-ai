@@ -135,8 +135,13 @@ export function scriptText(s: CaseExec["script"] | undefined): string {
   return s ? `${s.file} ${s.state === "valid" ? "✓" : s.state === "invalid" ? "✗" : "·"} ${SCRIPT_WORD[s.state] ?? s.state}` : "No script";
 }
 
+/** "✓ Passed RUN-0003"; a result recorded by hand adds "· By hand · Recorded by J. Tester" (P4-14 §5). */
 export function resultText(r: CaseExec["result"] | undefined): string {
-  return r ? `${r.status === "passed" ? "✓" : r.status === "failed" || r.status === "error" ? "✗" : "·"} ${RESULT_WORD[r.status] ?? r.status} ${r.run_key}` : "Not run";
+  return r ? `${r.status === "passed" ? "✓" : r.status === "failed" || r.status === "error" ? "✗" : "·"} ${RESULT_WORD[r.status] ?? r.status} ${r.run_key}${byHand(r)}` : "Not run";
+}
+
+function byHand(r: { manual?: boolean; recorded_by?: string | null }): string {
+  return r.manual ? ` · By hand · Recorded by ${r.recorded_by || "someone"}` : "";
 }
 
 export function defectText(d: CaseExec["defects"][number]): string {
@@ -146,7 +151,7 @@ export function defectText(d: CaseExec["defects"][number]): string {
 /** 375 px card line (design P4 §12): "Script ✓ Valid · Last result ✗ Failed (RUN-0003) · DEF-0001 Draft". */
 export function execLine(x: Partial<CaseExec>): string {
   const sc = x.script ? `Script ${x.script.state === "valid" ? "✓" : x.script.state === "invalid" ? "✗" : "·"} ${SCRIPT_WORD[x.script.state] ?? x.script.state}` : "No script";
-  const res = x.result ? `Last result ${x.result.status === "passed" ? "✓" : x.result.status === "failed" || x.result.status === "error" ? "✗" : "·"} ${RESULT_WORD[x.result.status] ?? x.result.status} (${x.result.run_key})` : "Not run";
+  const res = x.result ? `Last result ${x.result.status === "passed" ? "✓" : x.result.status === "failed" || x.result.status === "error" ? "✗" : "·"} ${RESULT_WORD[x.result.status] ?? x.result.status} (${x.result.run_key})${byHand(x.result)}` : "Not run";
   return [sc, res, ...(x.defects ?? []).map(defectText)].join(" · ");
 }
 
