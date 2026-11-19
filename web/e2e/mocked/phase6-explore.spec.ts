@@ -166,6 +166,18 @@ test.describe("Phase 6 · exploratory workspace (P6-03c)", () => {
   });
 
   test("a double click on Start exploring sends one request and shows one session; live progress refreshes within 2 s, Pause freezes it, findings are announced (checks 26)", async ({ page }) => {
+    // Record every polite announcement: the finding message is replaced by the next milestone a few seconds
+    // later, so on a slow runner it may already be gone when the assertion below runs.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __said: string[] };
+      w.__said = [];
+      new MutationObserver(() => {
+        document.querySelectorAll('p[role="status"].sr-only').forEach((el) => {
+          const t = el.textContent ?? "";
+          if (t && w.__said[w.__said.length - 1] !== t) w.__said.push(t);
+        });
+      }).observe(document, { subtree: true, childList: true, characterData: true });
+    });
     const q = await setup(page, { startDelay: 400 });
     await page.goto(`${TAB}&new=1`);
     const dialog = page.getByRole("dialog", { name: "Explore pages" });
@@ -186,7 +198,8 @@ test.describe("Phase 6 · exploratory workspace (P6-03c)", () => {
     const tiles = page.locator("section", { has: page.getByRole("heading", { name: "Live progress" }) });
     await expect(tiles.getByText("Blocked write attempts")).toBeVisible();
     await expect(tiles.getByText("Not tried", { exact: true })).toBeVisible();
-    await expect(page.getByRole("status").filter({ hasText: "Finding on /offers: uncaught error, medium" })).toHaveCount(1, { timeout: 8000 });
+    const said = () => page.evaluate(() => (window as unknown as { __said: string[] }).__said);
+    await expect.poll(async () => (await said()).filter((t) => t.includes("Finding on /offers: uncaught error, medium")).length, { timeout: 8000 }).toBe(1);
     // Pause updates freezes tiles and log; the session keeps running.
     await page.getByRole("button", { name: "Pause updates" }).click();
     const frozen = await live.innerText();
