@@ -414,6 +414,9 @@ test.describe("Phase 6 · exploratory workspace (P6-03c)", () => {
     await expect(drawer.getByRole("button", { name: /Accept risk/ })).toHaveCount(0);
     await expect(drawer.getByRole("button", { name: /Raise defect/ })).toHaveCount(0);
     await page.keyboard.press("Escape");
+    // Closing the drawer replaces the URL (drops ?finding=); wait for it, or WebKit aborts the next goto.
+    await expect(drawer).toBeHidden();
+    await expect(page).not.toHaveURL(/finding=/);
     await page.goto(EXP("EXP-0004"));
     await expect(page.getByRole("region", { name: /Approve exploratory session EXP-0004/ })).toBeVisible();
     await expect(page.getByRole("button")).not.toContainText(["Approve and start exploring", "Withdraw request", "Don't approve…"]);
@@ -537,6 +540,8 @@ test.describe("Phase 6 · exploratory workspace (P6-03c)", () => {
     await expect(drawer.getByRole("radiogroup", { name: "Before and after: show" }).getByRole("radio")).toHaveText(["Before", "After"]);
     expect(await sideways(page)).toBe(0);
     await page.keyboard.press("Escape");
+    await expect(drawer).toBeHidden();
+    await expect(page).not.toHaveURL(/finding=/);
     await page.goto(`${EXP("EXP-0003")}?view=not-tried`);
     await expect(page.getByRole("heading", { name: "Never reached (3)" })).toBeVisible();
     expect(await sideways(page)).toBe(0);

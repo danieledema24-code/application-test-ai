@@ -164,6 +164,8 @@ test.describe("QA P6-03c probes", () => {
   });
 
   test("polite region: milestones only (start, finding, 25/50/75 %, end), never per step", async ({ page }) => {
+    // 60 actions at 2 per 2-second poll take about a minute; the project default of 30 s is too short.
+    test.setTimeout(120_000);
     await page.addInitScript(() => {
       (window as unknown as { __said: string[] }).__said = [];
       new MutationObserver(() => {
