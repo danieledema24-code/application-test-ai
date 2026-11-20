@@ -20,7 +20,8 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"]],
+  // In CI, the "github" reporter also writes each failure as a check annotation, readable without signing in.
+  reporter: process.env.CI ? [["list"], ["github"]] : [["list"]],
   use: { baseURL: WEB_URL, trace: "retain-on-failure" },
   projects: [
     { name: "unit", testDir: "./tests/unit" },
