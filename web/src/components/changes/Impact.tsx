@@ -7,7 +7,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { api, ApiError, errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -449,6 +449,11 @@ export function RegressionTab({ set, rec, onOpenRepairs }: { set: ChangeSet; rec
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  // Focus the error once it's on screen (a timer can fire before React has rendered it on a slow machine).
+  const [errorShown, setErrorShown] = useState(0);
+  useEffect(() => {
+    if (errorShown) errorRef.current?.focus();
+  }, [errorShown]);
   const reasonId = useId();
   const projectId = useProjectId();
 
@@ -470,7 +475,7 @@ export function RegressionTab({ set, rec, onOpenRepairs }: { set: ChangeSet; rec
       router.push(`/projects/${projectId}/execution/${run.key}`);
     } catch (e) {
       setServerError(errorMessage(e));
-      setTimeout(() => errorRef.current?.focus(), 0);
+      setErrorShown((n) => n + 1);
     } finally {
       setBusy(false);
     }
