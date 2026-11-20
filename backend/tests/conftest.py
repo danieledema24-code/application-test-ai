@@ -176,3 +176,18 @@ async def create_project(
 def worker_for(ctx: AppContext) -> Worker:
     orch = Orchestrator(ctx)
     return Worker(ctx, orch.run_job, on_interrupted=orch.on_job_interrupted, concurrency=2, heartbeat_s=0.5)
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """On GitHub Actions, print each failure as a workflow annotation so it can be read without the job log."""
+    import os
+
+    if not os.environ.get("GITHUB_ACTIONS") or not report.failed:
+        return
+    path, line, _ = report.location
+    message = str(report.longreprtext).strip().splitlines()
+    tail = " | ".join(message[-6:])[:900]
+    text = f"{report.nodeid} ({report.when}) failed: {tail}"
+    for a, b in (("%", "%25"), ("\r", "%0D"), ("\n", "%0A")):
+        text = text.replace(a, b)
+    print(f"\n::error file=backend/{path},line={(line or 0) + 1}::{text}", flush=True)

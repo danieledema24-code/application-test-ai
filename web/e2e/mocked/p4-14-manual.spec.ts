@@ -309,8 +309,8 @@ test.describe("P4-14 · record page", () => {
     expect(exec.defects.length).toBe(before);
     expect(q.requests.some((r) => r.path.includes("/defects"))).toBe(false);
     await c.getByRole("link", { name: "Raise defect… from TC-0033 result" }).click();
-    await expect(page).toHaveURL(/\/defects\/new\?from=RUN-0005-02$/);
     await expect(page.getByText("Prefilled from RUN-0005-02. Check the wording before saving.")).toBeVisible();
+    await expect(page).toHaveURL(/\/defects\/new\?from=RUN-0005-02$/, { timeout: 30_000 });
     await expect(page.getByRole("textbox", { name: /Actual result/ })).toHaveValue("Focus is lost after the menu closes");
     expect(exec.defects.length).toBe(before);
   });

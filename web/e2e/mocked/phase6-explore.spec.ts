@@ -127,8 +127,9 @@ test.describe("Phase 6 · exploratory workspace (P6-03c)", () => {
     await expect(dialog.getByRole("button", { name: /Approve/ })).toHaveCount(0);
     await expect(dialog.getByRole("textbox", { name: /Type localhost/ })).toHaveCount(0);
     await dialog.getByRole("button", { name: "Request approval", exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`${EXP("EXP-0002")}$`));
+    // The toast lasts 6 s; check it before the (possibly slow, first-compile) navigation finishes.
     await expect(page.getByText("EXP-0002 requested. Someone who can approve must approve it.")).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${EXP("EXP-0002")}$`), { timeout: 30_000 });
     expect(posts(q)[0].body).toMatchObject({ signed_in: true });
     expect((posts(q)[0].body as Record<string, unknown>).approve).toBeUndefined();
     // The member reads the request: no Approve control, the permission note.
@@ -159,8 +160,8 @@ test.describe("Phase 6 · exploratory workspace (P6-03c)", () => {
     await expect(approve).not.toHaveAttribute("aria-disabled", "true");
     expect(await axe(page)).toEqual([]);
     await approve.click();
-    await expect(page).toHaveURL(new RegExp(`${EXP("EXP-0002")}$`));
     await expect(page.getByText("EXP-0002 approved and starting.")).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${EXP("EXP-0002")}$`), { timeout: 30_000 });
     expect(posts(q)[0].body).toMatchObject({ signed_in: true, approve: true, confirm_text: " LOCALHOST " });
     await expect(page.getByText(/Requested and approved by Daniele Edema · .* · host typed: yes/)).toBeVisible();
   });

@@ -81,8 +81,8 @@ test.describe("auth", () => {
     await page.goto("/dashboard");
     await page.getByRole("button", { name: /Account menu/ }).click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
-    await expect(page).toHaveURL(/\/login/);
     await expect(page.getByText("You’ve signed out.")).toBeVisible();
+    await expect(page).toHaveURL(/\/login/, { timeout: 30_000 });
   });
 });
 
