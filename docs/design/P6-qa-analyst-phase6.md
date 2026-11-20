@@ -491,6 +491,10 @@ NOT INCLUDED (2)
 - Viewer: the list without the button and checkbox.
 - Empty (no impacted cases): "No approved test case is affected by CHG-0001. A smoke run is still a good idea." with should-run smoke tests if any.
 
+#### Manual re-tests (D37; revised 2026-11-19, P4-14b)
+
+The section below the must-run list (`components/changes/ManualRetests.tsx`) is now specified in `docs/design/P4-14-manual-results.md` §4.6 (D39 (a): a re-test is a manual result). Summary: same endpoint and body; the dialog keeps Passed/Failed only, and its "Note" field becomes the required "What happened"; lines read "Latest: Passed · By hand · Recorded by {name} · {time}: '{what happened}'"; a section action [Record re-tests with files…] opens the manual run Start modal with those cases and the change set; re-tests recorded either way count for the case, impact and release readiness.
+
 ### 7.5 Outdated scripts in Automation
 - Automation › Scripts: outdated rows show "✗ Outdated: getByLabel('Message') not found after CHG-0001" and [Review HEAL-0001]. The tab label count keeps excluding outdated scripts (existing) and the Overview card adds "2 outdated after CHG-0001".
 - Test Execution run dialog (P4 §7.1): outdated scripts are already excluded; the reason line becomes "Outdated after CHG-0001: review HEAL-0001".

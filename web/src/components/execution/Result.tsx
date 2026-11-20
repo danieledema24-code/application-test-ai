@@ -10,11 +10,17 @@ import { fmtDuration } from "@/lib/format";
 import { attemptsSummary, hostOf, parseConsole, parseNetwork, type ResultDetail, type ResultEvidence } from "@/lib/execution";
 import { Segmented, TabPanel, Tabs } from "@/components/ui";
 import { ProvenanceLabel } from "@/components/domain/ObservationLabel";
-import { ObservedLabel } from "@/components/domain/ExecutionLabels";
+import { ManualResultLabel, ObservedLabel } from "@/components/domain/ExecutionLabels";
+
+/** Recorded by a person (P4-14): manual run results and D37 re-tests. */
+export function isManualResult(r: Pick<ResultDetail, "recorded_by" | "not_analysed" | "manual">): boolean {
+  return !!r.recorded_by || !!r.not_analysed || !!r.manual;
+}
 
 export function ExpectedActual({ r }: { r: ResultDetail }) {
   if (!r.case) return null;
   const failed = ["failed", "error"].includes(r.status);
+  const manual = isManualResult(r);
   return (
     <section aria-labelledby="exp-act" className="rounded-xl bg-surface ring-1 ring-line-strong">
       <h2 id="exp-act" className="border-b border-line px-5 py-3 text-h3 font-semibold text-fg-strong">
@@ -27,12 +33,27 @@ export function ExpectedActual({ r }: { r: ResultDetail }) {
           </p>
           <p className="mt-1">{r.case.expected_result || "None"}</p>
         </div>
-        <div>
-          <p className="flex flex-wrap items-center gap-2 font-semibold text-fg-strong">
-            Actual <ObservedLabel text="Observed on the page" />
-          </p>
-          <p className="mt-1">{r.actual_result || (failed ? "No actual result was recorded." : "As expected.")}</p>
-        </div>
+        {manual ? (
+          <>
+            <div>
+              <p className="flex flex-wrap items-center gap-2 font-semibold text-fg-strong">
+                What happened <ManualResultLabel name={r.recorded_by?.full_name} />
+              </p>
+              <p className="mt-1 whitespace-pre-wrap break-words">{r.actual_result || "—"}</p>
+            </div>
+            <div>
+              <p className="font-semibold text-fg-strong">Notes</p>
+              <p className="mt-1 whitespace-pre-wrap break-words">{r.notes || "No notes."}</p>
+            </div>
+          </>
+        ) : (
+          <div>
+            <p className="flex flex-wrap items-center gap-2 font-semibold text-fg-strong">
+              Actual <ObservedLabel text="Observed on the page" />
+            </p>
+            <p className="mt-1">{r.actual_result || (failed ? "No actual result was recorded." : "As expected.")}</p>
+          </div>
+        )}
       </div>
     </section>
   );

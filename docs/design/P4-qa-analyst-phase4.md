@@ -666,6 +666,10 @@ TC-0027 Check the sign-in form's action address                                 
 - Upload errors (P2-08 copy): "This file type isn't supported. Use PNG, JPEG or PDF." · "This file is larger than 10 MB."
 - Viewers: no entry points.
 
+### 10.1 Revised 2026-11-19, P4-14b
+
+The text above is kept for history. **The build spec is now `docs/design/P4-14-manual-results.md`** (D38–D40 decided (a)). What changed: any case approved at the latest G5 can be recorded (pre-filtered to "Needs a person"; the latest result wins, manual or automated); "What happened" is required for every status, not only Failed and Blocked; Notes optional; up to 5 files (PNG/JPEG/PDF, 10 MB each) that can't be removed once uploaded; results count on save; only the recorder edits a result until the run is finished, and nothing changes after finish; runs show "Recording · 2 of 4 recorded"; results display "Passed · By hand · Recorded by J. Tester" everywhere, never with a classification; zero-result runs can be discarded; D37 change set re-tests use the same fields and vocabulary.
+
 ---
 
 ## 11. Defects workspace (P4-09, D11)

@@ -39,7 +39,6 @@ from app.db.models import (
     GateDecision,
     HealSuggestion,
     ImpactItem,
-    ManualRetest,
     Project,
     QualityFinding,
     QualityScan,
@@ -67,7 +66,6 @@ from app.domain.enums import (
     ImpactLevel,
     ImpactStatus,
     ItemStatus,
-    ManualRetestStatus,
     QualityScanKind,
     ReadinessKind,
     ReadinessStatus,
@@ -180,14 +178,12 @@ async def _results_since(s: AsyncSession, project_id: uuid.UUID, lineages: list[
     return {str(lin) for lin, st, err in rows if st in RAN_STATUSES and (err or "") not in NOT_RESULTS}
 
 
-async def latest_manual_retests(s: AsyncSession, change_set_id: uuid.UUID) -> dict[uuid.UUID, ManualRetest]:
-    """D37: the latest recorded manual re-test per case lineage of a change set."""
-    rows = (
-        await s.execute(
-            select(ManualRetest).where(ManualRetest.change_set_id == change_set_id).order_by(ManualRetest.created_at)
-        )
-    ).scalars()
-    return {r.case_lineage_id: r for r in rows}
+async def latest_manual_retests(s: AsyncSession, cs: ChangeSet) -> dict[str, dict[str, Any]]:
+    """D37/D39: the latest re-test per case lineage of a change set: the newest of a passed/failed result recorded by
+    hand in a manual run created after the change set and a legacy `manual_retests` row (see `manual.retests`)."""
+    from app.services import manual
+
+    return {lin: items[0] for lin, items in (await manual.retests(s, cs)).items() if items}
 
 
 def _change_path(project_id: uuid.UUID, key: str, tab: str) -> str:
@@ -232,14 +228,14 @@ async def _changes(
             continue
         musts = list(rec.get("must") or [])
         ran = await _results_since(s, project_id, [str(p["case_lineage_id"]) for p in musts], cs.created_at)
-        by_hand = {str(k): r for k, r in (await latest_manual_retests(s, cs.id)).items()}
+        by_hand = await latest_manual_retests(s, cs)
         for p in musts:
             lin = str(p["case_lineage_id"])
             manual = p.get("not_runnable_reason") == impact_svc.MUST_MANUAL
             got = by_hand.get(lin) if manual else None
             snap.must.append(rc.MustPick(cs.key, lin, str(p["key"]), rerun=lin in ran or got is not None,
-                                         manual=manual, manual_result=got.status.value if got else None,
-                                         manual_note=got.note if got else None))  # fmt: skip
+                                         manual=manual, manual_result=got["status"] if got else None,
+                                         manual_note=got["note"] if got else None))  # fmt: skip
         for p in rec.get("excluded") or []:
             if p.get("was_must"):
                 snap.must.append(rc.MustPick(cs.key, str(p["case_lineage_id"]), str(p["key"]),
@@ -406,6 +402,7 @@ async def build_snapshot(s: AsyncSession, project_id: uuid.UUID) -> tuple[rc.Sna
             snap.cases.append(rc.Case(
                 lin, v.key, tuple(v.requirement_lineages), tuple(v.ac_lineages), res.get("status"),
                 _when(res.get("at")), res.get("run_key"), sc.get("state"), sc.get("path"), str(v.row.id),
+                (res.get("recorded_by") or "someone") if res.get("manual") else None,
             ))  # fmt: skip
     snap.defects = [rc.Defect(str(d["key"]), str(d["severity"]), str(d["status"]), d.get("id")) for d in t.all_defects]
     srun, _strat = await gates.current_strategy(s, project_id)
@@ -997,31 +994,31 @@ async def _manual_picks(s: AsyncSession, cs: ChangeSet) -> list[dict[str, Any]]:
     return [p for p in rec.get("must") or [] if p.get("not_runnable_reason") == impact_svc.MUST_MANUAL]
 
 
-def _retest_dict(r: ManualRetest, people: dict[uuid.UUID, User], *, see_email: bool) -> dict[str, Any]:
+def _retest_dict(r: dict[str, Any], people: dict[uuid.UUID, User], *, see_email: bool) -> dict[str, Any]:
+    at = r.get("recorded_at")
     return {
-        "id": str(r.id),
-        "status": r.status.value,
-        "note": r.note,
-        "recorded_by": out.person(people.get(r.recorded_by), see_email=see_email),
-        "recorded_at": r.created_at.isoformat() if r.created_at else None,
+        "id": str(r["id"]),
+        "status": r["status"],
+        "note": r["note"],
+        "recorded_by": out.person(people.get(r["recorded_by"]), see_email=see_email),
+        "recorded_at": at.isoformat() if at else None,
+        # D39: where the re-test is stored (null for legacy `manual_retests` rows).
+        "run_key": r.get("run_key"),
+        "result_key": r.get("result_key"),
     }
 
 
 async def manual_retests_view(s: AsyncSession, cs: ChangeSet, *, see_email: bool, can_record: bool) -> dict[str, Any]:
     """`GET /change-sets/{id}/manual-retests`: each impacted manual must-run test with its latest recorded result and
-    the history (newest first)."""
+    the history (newest first), from manual results and legacy `manual_retests` rows (D39)."""
+    from app.services import manual
+
     picks = await _manual_picks(s, cs)
-    rows = list(
-        (
-            await s.execute(
-                select(ManualRetest).where(ManualRetest.change_set_id == cs.id).order_by(ManualRetest.created_at.desc())
-            )
-        ).scalars()
-    )
-    people = await out.users(s, [r.recorded_by for r in rows])
+    by_lineage = await manual.retests(s, cs)
+    people = await out.users(s, [r["recorded_by"] for items in by_lineage.values() for r in items])
     items = []
     for p in picks:
-        mine = [r for r in rows if str(r.case_lineage_id) == str(p["case_lineage_id"])]
+        mine = by_lineage.get(str(p["case_lineage_id"]), [])
         hist = [_retest_dict(r, people, see_email=see_email) for r in mine]
         items.append({
             "case_key": p["key"], "title": p.get("title"), "test_case_id": str(p["test_case_id"]),
@@ -1039,10 +1036,13 @@ async def manual_retests_view(s: AsyncSession, cs: ChangeSet, *, see_email: bool
 
 async def record_manual_retest(
     s: AsyncSession, project: Project, cs: ChangeSet, user: User, *, case_key: str, status: str | None,
-    note: str | None,
-) -> ManualRetest:  # fmt: skip
-    """Records a person's result for an impacted manual must-run test of `cs` (D37). Audited; an assessment waiting
-    for G9 goes stale (it is new evidence for `rr.impacted_rerun`)."""
+    note: str | None, secrets: list[str] | None = None,
+) -> ExecutionResult:  # fmt: skip
+    """Records a person's result for an impacted manual must-run test of `cs` (D37). Since D39 it is a manual result
+    in the caller's newest `recording` manual run for the change set (created if there is none); the request, its
+    validation and messages are unchanged. Audited; an assessment waiting for G9 goes stale."""
+    from app.services import manual
+
     errors = []
     if status not in ("passed", "failed"):
         errors.append({"field": "status", "message": MANUAL_STATUS})
@@ -1050,31 +1050,24 @@ async def record_manual_retest(
         errors.append({"field": "note", "message": MANUAL_NOTE})
     if errors:
         raise ValidationFailed(errors[0]["message"], details=errors)
-    pick = next((p for p in await _manual_picks(s, cs) if p["key"] == case_key), None)
+    picks = await _manual_picks(s, cs)
+    pick = next((p for p in picks if p["key"] == case_key), None)
     if pick is None:
         msg = f"{case_key} isn't a manual must-run test of {cs.key}."
         raise ValidationFailed(msg, details=[{"field": "case_key", "message": msg}])
-    row = ManualRetest(
-        organisation_id=project.organisation_id,
-        project_id=project.id,
-        change_set_id=cs.id,
-        case_lineage_id=uuid.UUID(str(pick["case_lineage_id"])),
-        test_case_id=uuid.UUID(str(pick["test_case_id"])),
-        status=ManualRetestStatus(str(status)),
-        note=(note or "").strip(),
-        recorded_by=user.id,
-    )
-    s.add(row)
-    await s.flush()
+    run = await manual.retest_run(s, project, cs, user, picks, case_key)
+    row, _previous = await manual.record(
+        s, project, run, user, case_key=case_key, status=str(status), actual_result=note, notes=None, secrets=secrets,
+        stale_reason=f"Manual re-test of {case_key} recorded ({status})",
+    )  # fmt: skip
     audit(
         s,
         org_id=project.organisation_id,
         action="manual_retest.recorded",
-        target_type="manual_retest",
+        target_type="execution_result",
         target_id=row.id,
         actor_user_id=user.id,
         project_id=project.id,
         metadata={"change_set": cs.key, "case": case_key, "status": status},
     )
-    await mark_stale(s, project.id, f"Manual re-test of {case_key} recorded ({status})")
     return row

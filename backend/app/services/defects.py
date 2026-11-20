@@ -71,7 +71,8 @@ DRAFT_REASONS = {
 }
 EDITABLE = ("summary", "description", "preconditions", "steps", "expected", "actual", "severity", "priority")
 BLOCKING_KINDS = ("submission_blocked", "signed_in", "not_signed_in", "submission_accepted")
-EVIDENCE_KINDS = ("screenshot", "video", "trace", "console_log", "network_log")
+# `document_file`: a PDF a person attached to a result recorded by hand (P4-14a).
+EVIDENCE_KINDS = ("screenshot", "video", "trace", "console_log", "network_log", "document_file")
 
 
 # ------------------------------------------------------------------ derivation
@@ -202,6 +203,8 @@ async def build_fields(
 
     run = await s.get(ExecutionRun, result.execution_run_id)
     origin, _host = await apr.target(s, project.id)
+    if result.recorded_by is not None:
+        return await _manual_fields(s, case, result, run, origin)
     browser = (result.page_state or {}).get("browser") or result.browser.capitalize()
     severity, why = derive_severity(case.risk_level, [str(a.get("kind")) for a in assertions])
     priority = effective_priority(case)
@@ -238,6 +241,50 @@ async def build_fields(
         "priority_reason": f"from {case.key}",
         "reproducibility": reproducibility(result),
         "root_cause_hypothesis": root,
+        "evidence_refs": await _evidence_refs(s, result.id),
+    }
+
+
+async def _manual_fields(
+    s: AsyncSession, case: TestCase, result: ExecutionResult, run: ExecutionRun | None, origin: str | None
+) -> dict[str, Any]:
+    """P4-14a: a defect raised from a result recorded by hand. Steps and expected result from the case, the actual
+    result from "What happened", the environment "By hand, recorded by {name}" with the run and result keys, and the
+    files the person attached. No likely cause: the result was never analysed."""
+    from app.db.models import User
+
+    who = await s.get(User, result.recorded_by) if result.recorded_by else None
+    name = (who.full_name if who else None) or "someone"
+    preconditions = [str(p.get("text") if isinstance(p, dict) else p) for p in case.preconditions or []]
+    severity, why = derive_severity(case.risk_level, [])
+    priority = effective_priority(case)
+    word = {"failed": "failed", "blocked": "was blocked"}.get(result.status.value, result.status.value)
+    when = result.recorded_at or result.updated_at or utcnow()
+    return {
+        "summary": summary_for(case.title, {}),
+        "description": f"{case.title} {word} when tested by hand. Found by {case.key} in "
+        f"{run.key if run else 'a manual run'}.",
+        "environment": {
+            "url": origin,
+            "browser": f"By hand, recorded by {name}",
+            "manual": True,
+            "recorded_by": name,
+            "run_key": run.key if run else None,
+            "result_key": result.key,
+            "date": when.isoformat(),
+        },
+        "preconditions": preconditions,
+        "steps": repro_steps(result, case),
+        "expected": case.expected_result,
+        "actual": result.actual_result,
+        "severity": severity,
+        "severity_derived": severity,
+        "severity_reason": why,
+        "priority": priority,
+        "priority_derived": priority,
+        "priority_reason": f"from {case.key}",
+        "reproducibility": {"kind": "manual", "occurrences": 1, "text": "Recorded by hand"},
+        "root_cause_hypothesis": None,
         "evidence_refs": await _evidence_refs(s, result.id),
     }
 
@@ -412,6 +459,8 @@ async def passing_rerun(s: AsyncSession, d: Defect) -> ExecutionResult | None:
     }
     if not lineages:
         return None
+    from app.db.models.automation import saved_at
+
     since = d.confirmed_at or d.created_at
     version = int((d.environment or {}).get("script_version") or 0)
     rows = (
@@ -420,9 +469,10 @@ async def passing_rerun(s: AsyncSession, d: Defect) -> ExecutionResult | None:
             .where(
                 ExecutionResult.case_lineage_id.in_(lineages),
                 ExecutionResult.status == ResultStatus.passed,
-                ExecutionResult.created_at > since,
+                # Saved after (P4-14a): a result edited by hand counts from its latest save.
+                saved_at() > since,
             )
-            .order_by(ExecutionResult.created_at.desc())
+            .order_by(saved_at().desc(), ExecutionResult.created_at.desc())
         )
     ).scalars()
     return next((r for r in rows if int(r.script_version or 0) >= version), None)

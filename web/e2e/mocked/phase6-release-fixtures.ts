@@ -365,8 +365,14 @@ export async function mockRelease(page: Page, s: MockState, q: ReleaseState, p4:
       if (!member) return err(route, 403, "forbidden", "Viewers have read-only access");
       const key = String(body.case_key);
       if (!q.retests[key]) return err(route, 422, "validation_error", `${key} isn't a manual must-run test of CHG-0001.`);
-      const r: ManualRetest = { id: `mr${q.retests[key].length + 1}`, status: body.status as "passed" | "failed", note: String(body.note ?? "").trim(), recorded_by: { id: me.id, full_name: me.full_name }, recorded_at: iso("15", "16:20:00") };
-      q.retests[key].unshift(r);
+      // Since P4-14a (D39) a re-test is a manual result in the caller's recording manual run for the change set
+      // (RUN-0008 here): recording again in that run updates its result, so history keeps one entry per run.
+      const run = "RUN-0008";
+      const hist = q.retests[key];
+      const mine = hist.findIndex((h) => h.run_key === run && h.recorded_by?.id === me.id);
+      const r: ManualRetest = { id: `res-${key}`, status: body.status as "passed" | "failed", note: String(body.note ?? "").trim(), recorded_by: { id: me.id, full_name: me.full_name }, recorded_at: iso("15", "16:20:00"), run_key: run, result_key: `${run}-01` };
+      if (mine >= 0) hist.splice(mine, 1);
+      hist.unshift(r);
       const waiting = q.assessments.find((a) => a.status === "awaiting_approval");
       if (waiting) Object.assign(waiting, { status: "stale", stale_reason: `Manual re-test of ${key} recorded (${r.status})`, verdict_state: "not_decided" });
       return json(route, 201, { ...bodyOf(), message: `Manual re-test of ${key} recorded: ${r.status}.` });

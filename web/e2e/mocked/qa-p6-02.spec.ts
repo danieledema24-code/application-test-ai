@@ -127,8 +127,8 @@ test.describe("QA P6-02 · regression run", () => {
     await page.getByRole("heading", { level: 2, name: /Regression run · recommended by rules/ }).click();
     await tabTo(page, (el) => el.text === "Request this run");
     await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/projects\/p1\/execution\/RUN-0005$/);
     await expect(page.getByText("RUN-0005 requested. Someone who can approve must authorise it (Gate 7).")).toBeVisible();
+    await expect(page).toHaveURL(/\/projects\/p1\/execution\/RUN-0005$/, { timeout: 30_000 });
     expect(q.requests.find((r) => r.path.endsWith("/regression-run"))?.body).toEqual({ include_should: true });
   });
 

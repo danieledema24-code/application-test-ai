@@ -4,6 +4,9 @@ Deterministic, AI off: `execution_results` (latest finished run), `explain_faile
 `list_defects`, `automation_status`. Proposal: `propose_rerun` creates a run **request** when accepted; it still
 needs G7 from someone who can approve gates (the assistant never authorises, approves or confirms anything).
 Causes are hypotheses unless a person set them; numbers come from the same rows the API serves.
+
+P4-14a: results recorded by hand are cited separately ("By hand since then: …"), never with a cause ("Recorded by a
+person; not analysed"); `propose_rerun` only reads automated runs.
 """
 
 from __future__ import annotations
@@ -25,8 +28,9 @@ from app.db.models import (
     ExecutionRun,
     TestCase,
 )
+from app.db.models.automation import saved_at
 from app.domain.defects import classify as cl
-from app.domain.enums import DefectStatus, ResultStatus, RunStatus, StageKey
+from app.domain.enums import DefectStatus, ResultStatus, RunMode, RunStatus, StageKey
 from app.services import serialize_p2 as out
 
 if TYPE_CHECKING:
@@ -91,8 +95,8 @@ def defect_ref(project_id: uuid.UUID, d: Defect) -> dict[str, Any]:
     return out.artefact_ref(project_id, "defect", d.id, d.key, f"{d.key} {d.summary[:80]}")
 
 
-async def latest_run(t: Turn, finished: bool = True) -> ExecutionRun | None:
-    q = select(ExecutionRun).where(ExecutionRun.project_id == t.project_id)
+async def latest_run(t: Turn, finished: bool = True, mode: RunMode = RunMode.automated) -> ExecutionRun | None:
+    q = select(ExecutionRun).where(ExecutionRun.project_id == t.project_id, ExecutionRun.mode == mode)
     if finished:
         q = q.where(ExecutionRun.status.in_(FINISHED), ExecutionRun.finished_at.is_not(None))
     return (await t.s.execute(q.order_by(ExecutionRun.created_at.desc()).limit(1))).scalar_one_or_none()
@@ -122,13 +126,57 @@ async def last_result_line(t: Turn, a: Answer, case: Any) -> str:
         await t.s.execute(
             select(ExecutionResult)
             .where(ExecutionResult.project_id == t.project_id, ExecutionResult.case_lineage_id == lineage)
-            .order_by(ExecutionResult.created_at.desc())
+            .order_by(saved_at().desc(), ExecutionResult.created_at.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
     if r is None:
         return "It hasn't been run yet."
-    return f"Last result: {r.status.value} in {a.cite(result_ref(t.project_id, r, getattr(case, 'key', None)))}."
+    hand = " (by hand)" if r.recorded_by is not None else ""
+    return f"Last result: {r.status.value}{hand} in {a.cite(result_ref(t.project_id, r, getattr(case, 'key', None)))}."
+
+
+async def _recorder(t: Turn, r: ExecutionResult) -> str:
+    from app.db.models import User
+
+    u = await t.s.get(User, r.recorded_by) if r.recorded_by else None
+    return (u.full_name if u else None) or "someone"
+
+
+async def _manual_runs(t: Turn, after: ExecutionRun | None) -> list[tuple[ExecutionRun, list[ExecutionResult]]]:
+    """Manual runs (recording or finished) with at least one result, created after `after`, newest first."""
+    q = select(ExecutionRun).where(
+        ExecutionRun.project_id == t.project_id,
+        ExecutionRun.mode == RunMode.manual,
+        ExecutionRun.status.in_([RunStatus.recording, RunStatus.passed, RunStatus.failed]),
+    )
+    if after is not None:
+        q = q.where(ExecutionRun.created_at > after.created_at)
+    out = []
+    for run in (await t.s.execute(q.order_by(ExecutionRun.created_at.desc()).limit(5))).scalars():
+        rows = list(
+            (
+                await t.s.execute(
+                    select(ExecutionResult)
+                    .where(ExecutionResult.execution_run_id == run.id)
+                    .order_by(ExecutionResult.key)
+                )
+            ).scalars()
+        )
+        if rows:
+            out.append((run, rows))
+    return out
+
+
+async def _manual_line(t: Turn, a: Answer, run: ExecutionRun, rows: list[ExecutionResult]) -> str:
+    """ "RUN-0005, 3 recorded: 2 passed, 1 failed (TC-0027)" from the stored rows."""
+    counts = Counter(r.status.value for r in rows)
+    cases = await _case_keys(t, {r.test_case_id for r in rows if r.test_case_id})
+    bad = [cases[r.test_case_id].key for r in rows if r.status != ResultStatus.passed and r.test_case_id in cases]
+    parts = [f"{counts[k]} {k}" for k in ("passed", "failed", "blocked") if counts.get(k)]
+    state = " (still recording)" if run.status == RunStatus.recording else ""
+    tail = f" ({', '.join(sorted(bad)[:10])})" if bad else ""
+    return f"{a.cite(run_ref(t.project_id, run))}{state}, {len(rows)} recorded: {', '.join(parts)}{tail}"
 
 
 # ------------------------------------------------------------------ intents
@@ -136,6 +184,18 @@ async def last_result_line(t: Turn, a: Answer, case: Any) -> str:
 
 async def execution_results(t: Turn, _p: dict[str, Any]) -> Answer:
     run = await latest_run(t)
+    by_hand = await _manual_runs(t, run)
+    if run is None and by_hand:
+        # Only manual runs: answer from the latest one (cited), never with a cause.
+        a = _a("", "execution_results")
+        mrun, rows = by_hand[0]
+        lines = [f"Recorded by hand: {await _manual_line(t, a, mrun, rows)}.",
+                 "Results recorded by a person are not analysed."]  # fmt: skip
+        first = next((r for r in rows if r.status in NOT_PASSED), None)
+        if first is not None:
+            a.follow_ups = [_follow("explain_failed_test", key=first.key)]
+        a.content = "\n".join(lines)
+        return a
     if run is None:
         a = _a(NO_RUNS, "execution_results")
         pending = await latest_run(t, finished=False)
@@ -183,6 +243,8 @@ async def execution_results(t: Turn, _p: dict[str, Any]) -> Answer:
         a.follow_ups = [_follow("explain_failed_test", key=first.key), _follow("propose_rerun", only_failed=True)]
     else:
         lines.append("Every test that ran passed.")
+    for mrun, mrows in by_hand[:3]:
+        lines.append(f"By hand since then: {await _manual_line(t, a, mrun, mrows)}.")
     a.content = "\n".join(lines)
     return a
 
@@ -211,7 +273,7 @@ async def _result_for(t: Turn, key: str) -> tuple[ExecutionResult | None, TestCa
         await t.s.execute(
             select(ExecutionResult)
             .where(ExecutionResult.case_lineage_id == case.lineage_id, ExecutionResult.status.in_(NOT_PASSED))
-            .order_by(ExecutionResult.created_at.desc())
+            .order_by(saved_at().desc(), ExecutionResult.created_at.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -233,6 +295,11 @@ async def explain_failed_test(t: Turn, p: dict[str, Any]) -> Answer:
                 )
             ).scalar_one_or_none()
         if first is None:
+            for _mrun, rows in await _manual_runs(t, run):
+                first = next((r for r in rows if r.status in NOT_PASSED), None)
+                if first is not None:
+                    break
+        if first is None:
             return _a(NO_RUNS if run is None else "No test failed in the latest run.", "explain_failed_test")
         key = first.key
     r, case = await _result_for(t, key)
@@ -244,6 +311,8 @@ async def explain_failed_test(t: Turn, p: dict[str, Any]) -> Answer:
         )
         return _a(msg, "explain_failed_test")
     a = _a("", "explain_failed_test")
+    if r.recorded_by is not None:
+        return await _explain_manual(t, a, r, case)
     an = r.analysis or {}
     step = (r.failed_step or {}).get("title")
     where = f", at step '{step}'" if step else ""
@@ -282,6 +351,36 @@ async def explain_failed_test(t: Turn, p: dict[str, Any]) -> Answer:
             lines.append(f"A fix suggestion is ready: use {cands[0].get('expression')} in {first.get('asset_path')}.")
     a.content = "\n".join(lines)
     a.follow_ups.append(_follow("propose_rerun", case_keys=[case.key] if case else []))
+    return a
+
+
+async def _explain_manual(t: Turn, a: Answer, r: ExecutionResult, case: TestCase | None) -> Answer:
+    """P4-14a: a result recorded by hand. It wasn't analysed, so no cause is stated; What happened is quoted."""
+    run = await t.s.get(ExecutionRun, r.execution_run_id)
+    case_part = f"{a.cite(out.artefact_ref(t.project_id, 'test_case', case.id, case.key, case.title))} {case.title}" if case else "this test"  # fmt: skip
+    where = f" in {a.cite(run_ref(t.project_id, run))}" if run is not None else ""
+    lines = [
+        f"{a.cite(result_ref(t.project_id, r, case.key if case else None))} ({case_part}) {r.status.value}, "
+        f"recorded by hand by {await _recorder(t, r)}{where}.",
+        "Recorded by a person; not analysed.",
+    ]
+    if case is not None and case.expected_result:
+        lines.append(f"Expected: {case.expected_result}")
+    lines.append(f'What happened: "{r.actual_result[:500]}"')
+    if r.notes:
+        lines.append(f'Notes: "{r.notes[:500]}"')
+    from app.services import execution as xsvc
+
+    d = await xsvc.defect_for_result(t.s, r.id)
+    if d is not None:
+        lines.append(f"Defect: {a.cite(defect_ref(t.project_id, d))} ({STATUS_TEXT[d.status.value]}).")
+        a.follow_ups.append(_follow("analyse_defect", key=d.key))
+    else:
+        lines.append(
+            "No defect is drafted automatically for manual results. A member can use Raise defect on the result: "
+            "it is prefilled from this result."
+        )
+    a.content = "\n".join(lines)
     return a
 
 

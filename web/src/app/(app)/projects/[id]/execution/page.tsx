@@ -2,6 +2,7 @@
 
 // Test Execution (design P4 §8.1, P6 §9.1): tabs Runs and Exploratory. `?new=1` opens the Run tests dialog;
 // `&cases=TC-0019,TC-0020` prefills it. `?tab=exploratory` shows the exploratory sessions (`&new=1` opens Explore…).
+// `?record=1` opens the manual results Start modal (P4-14 §3), with the same `cases=` prefill and `&change=CHG-0001`.
 
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -9,12 +10,15 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useApi } from "@/lib/hooks";
 import { useAuth } from "@/lib/auth";
 import { fmtDateTime, fmtDuration } from "@/lib/format";
-import { resultsSentence, targetsText, waitingText, whoText, type RunDetail, type RunList, type RunSummary } from "@/lib/execution";
+import { manualProgress, manualResultsSentence, recordStartHref, resultsSentence, targetsText, waitingText, whoText, type RunDetail, type RunList, type RunSummary } from "@/lib/execution";
+import { g5SnapshotExists } from "@/lib/traceability";
 import { EXPLORE_INTRO, exploreReachable } from "@/lib/exploratory";
 import { Button, Callout, EmptyState, ErrorState, LinkButton, SelectField, Skeleton, Table, Tabs, TBody, Td, Th, THead, Tr, useToast } from "@/components/ui";
 import { RunStatusPill } from "@/components/domain/ExecutionLabels";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { RunDialog, type RunPrefill } from "@/components/execution/RunDialog";
+import { ManualStartDialog } from "@/components/execution/ManualRecord";
+import { requirementsStages } from "@/components/requirements/hooks";
 import { ExploratoryTab } from "@/components/exploratory/ExploratoryTab";
 import { useSessions } from "@/components/exploratory/hooks";
 
@@ -25,10 +29,19 @@ const STATUS_FILTERS = [
   { value: "passed", label: "Finished with no failures" },
   { value: "failed", label: "Finished with failures" },
   { value: "error,cancelled,rejected", label: "Didn't complete, cancelled or not authorised" },
+  { value: "recording", label: "Recording by hand" },
 ];
+
+/** "Regression", or "Manual · 4 cases" for a manual run (P4-14 §5). */
+function whatRan(r: RunSummary): string {
+  if (r.mode !== "manual") return r.selection_label;
+  const n = manualProgress(r).tests || r.tests;
+  return `${r.selection_label || "Manual"} · ${n} ${n === 1 ? "case" : "cases"}`;
+}
 
 function ResultsCell({ r }: { r: RunSummary }) {
   const t = r.totals;
+  if (r.mode === "manual") return <p>{r.status === "cancelled" ? "Nothing recorded" : manualResultsSentence(r)}</p>;
   const total = r.tests || 1;
   const finished = r.status === "passed" || r.status === "failed" || r.status === "error" || r.status === "cancelled";
   return (
@@ -49,7 +62,7 @@ function Runs() {
   const p = useProject();
   const router = useRouter();
   const params = useSearchParams();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const toast = useToast();
   const viewer = role === "viewer" || role === null;
   const [status, setStatus] = useState("");
@@ -66,6 +79,11 @@ function Runs() {
   const open = params.get("new") === "1" && canRequest;
   const casesParam = params.get("cases");
   const prefill = useMemo<RunPrefill | undefined>(() => (casesParam ? { caseKeys: casesParam.split(",").filter(Boolean) } : undefined), [casesParam]);
+  // Manual results (P4-14 §3): any member once Gate 5 has an approved version, whatever Gate 6 says.
+  const canRecord = canRequest && g5SnapshotExists(requirementsStages(p.workflow).g5?.gate);
+  const recordOpen = params.get("record") === "1" && canRecord;
+  const changeParam = params.get("change");
+  const recordPrefill = useMemo(() => (casesParam ? casesParam.split(",").filter(Boolean) : null), [casesParam]);
   const auto = p.workflow?.stages.find((s) => s.key === "automation");
   const ready = !!auto?.current_version && auto.status !== "awaiting_approval" && auto.status !== "running" && auto.status !== "queued";
   const origin = p.project?.urls?.find((u) => u.role === "primary")?.url ?? p.project?.urls?.[0]?.url;
@@ -81,6 +99,12 @@ function Runs() {
     router.push(`/projects/${p.id}/execution/${run.key}`);
   }
 
+  const setRecordOpen = (v: boolean) => router.push(v ? recordStartHref(p.id) : `/projects/${p.id}/execution`, { scroll: false });
+  const recordButton = canRecord ? (
+    <Button variant="secondary" onClick={() => setRecordOpen(true)}>
+      Record manual results
+    </Button>
+  ) : null;
   const setTab = (t: string) => router.replace(`/projects/${p.id}/execution${t === "exploratory" ? "?tab=exploratory" : ""}`, { scroll: false });
   const header = (
     <div className="space-y-4">
@@ -89,7 +113,12 @@ function Runs() {
           <h1 tabIndex={-1} className="text-h1 font-semibold tracking-[-0.015em] text-fg-strong focus:outline-none">
             Test Execution
           </h1>
-          {tab === "runs" && canRequest && ready && <Button onClick={() => setOpen(true)}>Run tests…</Button>}
+          {tab === "runs" && (recordButton || (canRequest && ready)) && (
+            <div className="flex flex-wrap gap-2">
+              {recordButton}
+              {canRequest && ready && <Button onClick={() => setOpen(true)}>Run tests…</Button>}
+            </div>
+          )}
         </div>
         <p className="text-body text-fg-muted">
           {tab === "exploratory" ? EXPLORE_INTRO : `Runs are started by a person and authorised for each run (Gate 7).${origin ? ` Tests run only on ${origin}.` : ""}`}
@@ -138,6 +167,8 @@ function Runs() {
     );
 
   const waiting = d.items.filter((r) => r.status === "awaiting_authorisation");
+  // Your runs still recording by hand (§3): one callout each, at most 3, then "and {n} more".
+  const mineRecording = viewer ? [] : d.items.filter((r) => r.status === "recording" && r.mode === "manual" && !!user?.id && r.requested_by?.id === user.id);
   return (
     <div className="space-y-6">
       {header}
@@ -151,15 +182,54 @@ function Runs() {
             Nothing runs until someone who can approve gates authorises it.
           </Callout>
         )}
+        {mineRecording.slice(0, 3).map((r) => {
+          const c = manualProgress(r);
+          return (
+            <Callout
+              key={r.key}
+              tone="info"
+              title={`You're recording ${r.key} by hand: ${c.recorded} of ${c.tests} recorded.`}
+              actions={
+                <LinkButton href={`/projects/${p.id}/execution/${r.key}/record`}>Continue recording {r.key}</LinkButton>
+              }
+            />
+          );
+        })}
+        {mineRecording.length > 3 && (
+          <p className="text-body text-fg">
+            and {mineRecording.length - 3} more.{" "}
+            <button type="button" className="font-medium text-navy-700 underline underline-offset-2" onClick={() => setStatus("recording")}>
+              Show runs recording by hand
+            </button>
+          </p>
+        )}
         {d.items.length === 0 && !status ? (
           ready ? (
             <EmptyState
               title="No tests have run yet."
               description="Choose which tests to run; you'll see exactly what they'll do on the site before anything starts."
-              action={canRequest ? <Button onClick={() => setOpen(true)}>Run tests…</Button> : undefined}
+              action={
+                canRequest ? (
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {recordButton}
+                    <Button onClick={() => setOpen(true)}>Run tests…</Button>
+                  </div>
+                ) : undefined
+              }
             />
           ) : (
-            <EmptyState title="Tests can run once scripts pass their checks (Gate 6)." action={viewer ? undefined : <LinkButton href={`/projects/${p.id}/automation`}>Open Automation</LinkButton>} />
+            <EmptyState
+              title="Tests can run once scripts pass their checks (Gate 6)."
+              description={recordButton ? "You can still record results for cases you test by hand." : undefined}
+              action={
+                viewer ? undefined : (
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {recordButton}
+                    <LinkButton href={`/projects/${p.id}/automation`}>Open Automation</LinkButton>
+                  </div>
+                )
+              }
+            />
           )
         ) : (
           <>
@@ -191,7 +261,7 @@ function Runs() {
                             </Link>
                           </Td>
                           <Td>
-                            {r.selection_label}
+                            {whatRan(r)}
                             {r.mode === "automated" && <span className="block text-fg-muted">{targetsText(r.browsers, r.viewports).replace(/ 1440 × 900| 390 × 844/g, "")}</span>}
                           </Td>
                           <Td>
@@ -226,7 +296,7 @@ function Runs() {
                         </Link>
                         <RunStatusPill run={r} />
                       </p>
-                      <p className="text-body text-fg">{r.selection_label}</p>
+                      <p className="text-body text-fg">{whatRan(r)}</p>
                       <ResultsCell r={r} />
                       <p className="text-small text-fg-muted">
                         {whoText(r)} · {fmtDateTime(r.started_at ?? r.created_at)}
@@ -240,6 +310,20 @@ function Runs() {
         )}
       </div>
       {canRequest && <RunDialog open={open} onClose={() => setOpen(false)} projectId={p.id} canAuthorise={canAuthorise} prefill={prefill} onCreated={created} />}
+      {canRecord && (
+        <ManualStartDialog
+          open={recordOpen}
+          onClose={() => setRecordOpen(false)}
+          projectId={p.id}
+          prefill={recordPrefill}
+          changeSetKey={changeParam}
+          onCreated={(run) => {
+            p.refresh();
+            void list.mutate();
+            router.push(`/projects/${p.id}/execution/${run.key}/record`);
+          }}
+        />
+      )}
     </div>
   );
 }

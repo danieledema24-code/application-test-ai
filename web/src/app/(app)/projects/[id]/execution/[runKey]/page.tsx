@@ -1,7 +1,8 @@
 "use client";
 
 // Run page (design P4 §8.2–8.5, §9.1): authorisation when waiting, live view while running, results and
-// "What failed and why" when finished. Rows refresh every 2 s while the run is active.
+// "What failed and why" when finished. Rows refresh every 2 s while the run is active. Manual runs (P4-14) show
+// their results recorded by hand instead (ManualRunView).
 
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -32,6 +33,7 @@ import { RunAuthorisationPanel } from "@/components/execution/RunAuthorisation";
 import { LiveRunView } from "@/components/execution/LiveRunView";
 import { WhatFailedCard } from "@/components/execution/Analysis";
 import { RunMenu } from "@/components/execution/RunMenu";
+import { ManualRunView } from "@/components/execution/ManualRecord";
 
 type Filter = "all" | "running" | "failed" | "flaky" | "blocked" | "waiting";
 
@@ -113,7 +115,8 @@ function RunPage() {
   const run = q.data;
   const analysing = run?.analysis?.status === "queued" || run?.analysis?.status === "running";
   useEffect(() => {
-    if (run) setActive(isActive(run.status) || run.status === "awaiting_authorisation" || analysing || (["failed", "passed"].includes(run.status) && !run.analysis && run.tests_rows.some((r) => ["failed", "error", "flaky"].includes(r.status))));
+    // Manual runs are never analysed and don't change by themselves (P4-14): no polling.
+    if (run) setActive(run.mode !== "manual" && (isActive(run.status) || run.status === "awaiting_authorisation" || analysing || (["failed", "passed"].includes(run.status) && !run.analysis && run.tests_rows.some((r) => ["failed", "error", "flaky"].includes(r.status)))));
   }, [run, analysing]);
   const view = params.get("view") === "scope" ? "scope" : "results";
   const filter = (params.get("filter") as Filter | null) ?? "all";
@@ -197,6 +200,15 @@ function RunPage() {
         {back}
         <Skeleton className="h-10 w-64" />
         <Skeleton className="h-64" />
+      </div>
+    );
+
+  // Manual runs (P4-14 §4.3): results recorded by hand, nothing ran on the platform.
+  if (run.mode === "manual")
+    return (
+      <div className="space-y-6">
+        {back}
+        <ManualRunView run={run} projectId={p.id} />
       </div>
     );
 

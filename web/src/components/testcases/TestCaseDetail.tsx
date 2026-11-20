@@ -47,7 +47,8 @@ import { newRow, type ChecklistRow } from "@/components/ui/ChecklistEditor";
 import { ProvenanceLabel } from "@/components/domain/ObservationLabel";
 import { EvidenceLinks, linksToItems } from "@/components/domain/EvidenceDrawer";
 import { DiffView } from "@/components/domain/DiffView";
-import { ResultStatus } from "@/components/domain/ExecutionLabels";
+import { ManualResultLabel, ResultStatus } from "@/components/domain/ExecutionLabels";
+import { recordStartHref } from "@/lib/execution";
 import { RevisionHistory } from "@/components/domain/RevisionHistory";
 import { useAssistantDrawer } from "@/components/assistant/AssistantDrawer";
 import { noteGateReopened, useAllRequirements } from "@/components/requirements/hooks";
@@ -461,6 +462,8 @@ export function TestCaseDetailView({
   // [Run this test…] (design P4 §6.6): members and approvers, approved cases the assessment says can be automated.
   const runnable =
     role !== "viewer" && role !== null && !olderVersion && d?.status === "approved" && d?.automation_suitability?.value === "suitable" && d?.automation_suitability?.assessed === "assessed";
+  // [Record a manual result…] (P4-14 §3, D38): any approved case on the current version, members and approvers.
+  const recordable = role !== "viewer" && role !== null && !olderVersion && d?.status === "approved";
   const g5Note = (wasApproved: boolean) => noteGateReopened(projectId, "G5", g5Approved && wasApproved, toast);
 
   async function refreshAll() {
@@ -1039,7 +1042,18 @@ export function TestCaseDetailView({
         </Row>
         <Row label="Expected result label">{oq ? <NotDecided /> : <ProvenanceLabel provenance={shown.classification ?? null} />}</Row>
         <Row label="Last result">
-          {d?.last_result ? (
+          {d?.last_result?.manual ? (
+            <p className="flex flex-wrap items-center gap-2">
+              <ResultStatus status={d.last_result.status} />
+              <ManualResultLabel name={d.last_result.recorded_by} />
+              <span className="text-small text-fg">
+                {d.last_result.run_key} · {fmtDateTime(d.last_result.at)}
+              </span>
+              <Link href={`/projects/${projectId}/execution/${d.last_result.run_key}/results/${d.last_result.result_key}`} className="text-small font-medium text-navy-700 underline underline-offset-2">
+                Open result<span className="sr-only"> {d.last_result.result_key}</span>
+              </Link>
+            </p>
+          ) : d?.last_result ? (
             <ul className="space-y-1">
               {d.last_result.results.map((x) => (
                 <li key={x.result_key} className="flex flex-wrap items-center gap-2">
@@ -1056,10 +1070,19 @@ export function TestCaseDetailView({
           ) : (
             <span className="text-fg-muted">Not run yet</span>
           )}
-          {runnable && (
-            <Link href={`/projects/${projectId}/execution?new=1&cases=${shown.key}`} className="mt-1 inline-flex text-small font-medium text-navy-700 underline underline-offset-2">
-              Run this test…
-            </Link>
+          {(runnable || recordable) && (
+            <span className="mt-1 flex flex-wrap gap-x-4">
+              {runnable && (
+                <Link href={`/projects/${projectId}/execution?new=1&cases=${shown.key}`} className="inline-flex min-h-6 items-center text-small font-medium text-navy-700 underline underline-offset-2">
+                  Run this test…
+                </Link>
+              )}
+              {recordable && (
+                <Link href={recordStartHref(projectId, { cases: [shown.key] })} className="inline-flex min-h-6 items-center text-small font-medium text-navy-700 underline underline-offset-2">
+                  Record a manual result…
+                </Link>
+              )}
+            </span>
           )}
         </Row>
         <Row label="Execution status">{d?.last_result ? `${EXEC_STATUS_TEXT[d.last_result.status] ?? d.last_result.status} (computed, read-only)` : "Not run (read-only)"}</Row>

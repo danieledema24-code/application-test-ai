@@ -10,9 +10,9 @@ import type { Page, Proposal, Risk, ScanDetail, SecretMeta } from "@/lib/contrac
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { activeStage, gateReview, waitingLabel } from "@/lib/lifecycle";
 import { LEVEL_TEXT } from "@/lib/strategy";
-import { attentionRows } from "@/lib/attention";
+import { attentionRows, manualPendingCount, needPersonKeys } from "@/lib/attention";
 import { useAuth } from "@/lib/auth";
-import { useCaseStats, useCoverage, useGaps } from "@/components/testcases/hooks";
+import { useAllTestCases, useCaseStats, useCoverage, useGaps } from "@/components/testcases/hooks";
 import { Card, CardBody, CardHeader, Skeleton } from "@/components/ui";
 import { gateApproved, requirementsStages, useAllRequirements, useAllRisks } from "@/components/requirements/hooks";
 import { lastSignInText } from "@/components/domain/Credentials";
@@ -23,7 +23,7 @@ import { AgentActivityFeed } from "@/components/domain/AgentActivityFeed";
 import { useProject } from "@/components/workspace/ProjectContext";
 import { useExecSummary } from "@/components/execution/hooks";
 import { lastRunLine, type ExecSummary } from "@/lib/execution";
-import { g6StatusText, type AutomationOverview } from "@/lib/automation";
+import { g6StatusText, type AutomationAssessment, type AutomationOverview } from "@/lib/automation";
 import { releaseReachable, useReleaseOverview } from "@/components/release/hooks";
 import { ReleaseGlance } from "@/components/workspace/OverviewRelease";
 import { ChangedBanner } from "@/components/workspace/OverviewChanged";
@@ -150,6 +150,13 @@ function Attention() {
   const nf = useNfOverview(p.id, p.workflow);
   const release = useReleaseOverview(p.id, releaseReachable(p.workflow));
   const sessions = useSessions(p.id, exploreReachable(p.workflow));
+  // P4-14 §3: approved cases that need a person and have no recorded result (members only). Before a scripts bundle
+  // exists the suitability assessment says which cases need a person.
+  const member = role !== "viewer" && role !== null;
+  const noBundle = !automation.isLoading && !automation.data?.bundle;
+  const assessment = useApi<AutomationAssessment>(member && noBundle && !!stages.design?.current_version ? `/projects/${p.id}/automation/assessment` : null, undefined, { shouldRetryOnError: false });
+  const needPerson = needPersonKeys(automation.data?.bundle?.not_automated, noBundle ? assessment.data?.cases : null);
+  const cases = useAllTestCases(p.id, null, member && needPerson.length > 0);
   const rows = attentionRows({
     projectId: p.id,
     wf: p.workflow,
@@ -170,6 +177,7 @@ function Attention() {
     ],
     // Phase 6 (design P6 §4.5): the release assessment waiting for Gate 9 or out of date, after the run rows.
     release: release.data?.latest ?? null,
+    manualPending: member ? manualPendingCount(needPerson, cases.data) : 0,
   });
   const shown = all ? rows : rows.slice(0, 5);
   return (

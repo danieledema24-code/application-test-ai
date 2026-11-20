@@ -1192,6 +1192,8 @@ export type CaseLastResult = {
   result_key: string;
   at: IsoDate;
   manual: boolean;
+  /** P4-14a: the recorder's name when the result was recorded by hand. */
+  recorded_by?: string | null;
   results: { browser: string; viewport: string; status: Exclude<ExecutionStatus, "not_run">; result_key: string }[];
 };
 
@@ -1435,7 +1437,7 @@ export type ImpactCell = { change_set: string; level: "direct" | "indirect" | "g
 
 export type CaseExec = {
   script: { file: string; version: number; state: string; outdated_reason?: string | null } | null;
-  result: { status: string; run_key: string; result_key: string; at: IsoDate } | null;
+  result: { status: string; run_key: string; result_key: string; at: IsoDate; manual?: boolean; recorded_by?: string | null } | null;
   defects: (ArtefactRef & { status: string; severity: string })[];
   /** Phase 6 (P6-06); absent in content stored before it. */
   impacted?: ImpactCell | null;
@@ -1529,7 +1531,7 @@ export type ChangeGaps = {
   new_pages_without_requirements: { page: string; url: string; change_set: ArtefactRef; impact_item_id: string; label: string; path: string }[];
 };
 
-export type FailedTest = { case: ArtefactRef; status: string; run_key: string; result_key: string; classification: string | null; label: string | null };
+export type FailedTest = { case: ArtefactRef; status: string; run_key: string; result_key: string; classification: string | null; label: string | null; manual?: boolean; recorded_by?: string | null };
 
 export type ExecutionCoverage = {
   executed: boolean;

@@ -177,6 +177,23 @@ class ExecutionResult(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base)
     )
     analysis: Mapped[dict[str, Any] | None] = mapped_column(default=None)
     heal_suggestions: Mapped[list[Any]] = mapped_column(default=json_default_list)
+    # P4-14a (migration 0022): the person who recorded a manual result (set only on results recorded by hand) and
+    # their notes. "What happened" is `actual_result`.
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), default=None, index=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    # When a person last saved it (manual results are edited in place until their run is finished). The latest result
+    # of a case is chosen by `saved_at()`: this, or `created_at` for results from Playwright.
+    recorded_at: Mapped[datetime | None] = mapped_column(default=None)
+
+
+def saved_at() -> Any:
+    """The time a result was saved, for "the latest result wins" (D38): `recorded_at` for results recorded by hand,
+    `created_at` otherwise (`updated_at` is not used: reclassifying an automated result bumps it)."""
+    from sqlalchemy import func
+
+    return func.coalesce(ExecutionResult.recorded_at, ExecutionResult.created_at)
 
 
 class Approval(IdMixin, TenantMixin, TimestampMixin, _ProjectMixin, Base):

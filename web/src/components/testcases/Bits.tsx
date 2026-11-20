@@ -173,6 +173,23 @@ function sizeWord(viewport: string): string {
 export function LastResult({ c, projectId }: { c: Pick<TestCaseSummary, "last_result">; projectId: string }) {
   const r = c.last_result;
   if (!r) return <NotRunYet />;
+  // Recorded by hand (P4-14 §5): "RUN-0005 · 19 Nov · By hand, J. Tester".
+  if (r.manual) {
+    const who = r.recorded_by || "someone";
+    return (
+      <span className="inline-flex flex-col items-start gap-0.5">
+        <ResultStatus status={r.status} />
+        <Link href={`/projects/${projectId}/execution/${r.run_key}/results/${r.result_key}`} className="text-small text-navy-700 underline underline-offset-2">
+          <span aria-hidden>
+            {r.run_key} · {fmtDayMonth(r.at)} · By hand, {who}
+          </span>
+          <span className="sr-only">
+            {(RESULT_WORD[r.status] ?? r.status).replace(/^./, (x) => x.toUpperCase())} by hand, recorded by {who}, {r.run_key}, {fmtDayMonthLong(r.at)}
+          </span>
+        </Link>
+      </span>
+    );
+  }
   const more = r.results.length - 1;
   const sr = r.results.map((x) => `${x.browser.charAt(0).toUpperCase()}${x.browser.slice(1)} ${sizeWord(x.viewport)} ${RESULT_WORD[x.status] ?? x.status}`).join(", ");
   return (
@@ -194,6 +211,11 @@ export function LastResult({ c, projectId }: { c: Pick<TestCaseSummary, "last_re
 }
 
 const RESULT_WORD: Record<string, string> = { passed: "passed", failed: "failed", error: "error", flaky: "flaky", blocked: "blocked", skipped: "skipped" };
+
+function fmtDayMonthLong(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-GB", { day: "numeric", month: "long" });
+}
 
 function fmtDayMonth(iso: string): string {
   const d = new Date(iso);

@@ -1090,12 +1090,17 @@ async def proven(s: AsyncSession, rows: list[HealSuggestion], lineage: uuid.UUID
     """The suggestions the case has passed with since (QA P6-04 R3): a passed result for the case (any script
     version) created after the suggestion was decided, or raised when still undecided. Until then a failure through
     the element reads as test maintenance; after it, as any other failure."""
+    from app.db.models.automation import saved_at
+
     if not rows:
         return set()
     last = (
         await s.execute(
-            select(func.max(ExecutionResult.created_at)).where(
-                ExecutionResult.case_lineage_id == lineage, ExecutionResult.status == ResultStatus.passed
+            select(func.max(saved_at())).where(
+                ExecutionResult.case_lineage_id == lineage,
+                ExecutionResult.status == ResultStatus.passed,
+                # A pass recorded by hand says nothing about the script's locators.
+                ExecutionResult.recorded_by.is_(None),
             )
         )
     ).scalar_one_or_none()

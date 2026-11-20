@@ -69,6 +69,7 @@ class Case:
     script_state: str | None = None
     script_path: str | None = None
     id: str | None = None
+    recorded_by: str | None = None  # P4-14a (D40): the latest result was recorded by hand, by this person
 
 
 @dataclass(frozen=True)
@@ -318,6 +319,11 @@ def _risk_ref(r: Risk) -> dict[str, Any]:
     return ref("risk", r.key, r.id, f"{r.key} · {r.title}")
 
 
+def _case_label(c: Case) -> str:
+    """ "TC-0027", or "TC-0027 by hand, recorded by J. Tester" when the latest result was recorded by a person (D40)."""
+    return f"{c.key} by hand, recorded by {c.recorded_by}" if c.recorded_by else c.key
+
+
 def _result_word(c: Case) -> str:
     return "not run" if c.result is None else c.result
 
@@ -495,7 +501,7 @@ def high_risk_tested(snap: Snapshot, *, executed_only: bool = False) -> Result:
         linked = _linked(snap, r)
         passed = [c for c in linked if c.result in ok_states]
         if passed:
-            good.append(f"{r.key} ({names([c.key for c in passed], 3)})")
+            good.append(f"{r.key} ({names([_case_label(c) for c in passed], 3)})")
         else:
             bad.append((r, linked))
     verb = "was executed" if executed_only else "passed"

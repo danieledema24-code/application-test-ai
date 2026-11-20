@@ -3,7 +3,8 @@
 The fixture project of test_p6_release.py gets a rescan's change set (CHG-0001) whose regression recommendation has
 one must-run test, TC-0001, which has no script: a manual test. Until a person records its re-test,
 `rr.impacted_rerun` can't be checked (conditional); a recorded result (passed or failed, with a note) counts like an
-automated one, so the fixture becomes Go. Recording is audited, makes a waiting assessment stale, viewers read only and
+automated one, so the fixture becomes Go. Since P4-14a (D39) a re-test is stored as a manual result, so a failed one is
+the case's latest result everywhere (D40). Recording is audited, makes a waiting assessment stale, viewers read only and
 other organisations get 404.
 
 Stale triggers added after QA: a risk added or edited (raised to high, accepted), an impact item closed, a repair
@@ -144,12 +145,16 @@ async def test_manual_retests_are_recorded_and_count_like_results(team: Team) ->
     d = await assess(t, pid)
     c = crit(d)["rr.impacted_rerun"]
     assert c["status"] == "met" and "TC-0001 (failed)" in c["detail"]
-    # The failed re-test is a condition naming the test and the note, not "re-run and fine".
-    assert d["recommendation"] == "conditional" and crit(d)["rr.manual_retests"]["status"] == "not_met"
-    assert [x["text"] for x in d["conditions_list"]] == [
+    # Since P4-14a (D39, D40) the re-test is a manual result: TC-0001's latest result is now this failure, so the
+    # high risk it covers has no passing test (blocking) and the pass rate drops. The re-test is still a condition
+    # naming the test and the note.
+    bad = {x["id"]: x["status"] for x in d["criteria"] if x["status"] != "met"}
+    assert d["recommendation"] == "no_go" and bad == {"rr.manual_retests": "not_met", "rr.high_risk_tested": "not_met",
+                                                      "exit.pass_rate": "not_met"}, bad  # fmt: skip
+    assert (
         "TC-0001 failed when re-tested by hand after CHG-0001: 'Second try: no confirmation shown'. Fix it or raise a "
         "defect"
-    ]
+    ) in [x["text"] for x in d["conditions_list"]]
 
 
 async def test_risks_impact_items_and_repairs_make_it_stale(team: Team) -> None:  # noqa: F811

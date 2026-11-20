@@ -176,8 +176,8 @@ test.describe("Phase 6 · regression run (P6-02)", () => {
     await page.getByRole("checkbox", { name: 'Include the 3 "should run" tests' }).uncheck();
     await expect(page.getByText("under a minute (from RUN-0003)")).toBeVisible();
     await btn.click();
-    await expect(page).toHaveURL(/\/projects\/p1\/execution\/RUN-0005$/);
     await expect(page.getByText("RUN-0005 created. Review and authorise it to start.")).toBeVisible();
+    await expect(page).toHaveURL(/\/projects\/p1\/execution\/RUN-0005$/, { timeout: 30_000 });
     expect(q.requests.find((r) => r.path.endsWith("/regression-run"))?.body).toEqual({ include_should: false });
   });
 

@@ -571,7 +571,7 @@ class Orchestrator:
         runs again). The analysed run is recorded in the stage run's parameters.
         """
         from app.db.models import ExecutionResult, ExecutionRun
-        from app.domain.enums import ResultStatus, RunStatus
+        from app.domain.enums import ResultStatus, RunMode, RunStatus
         from app.services.execution import NOT_RESULTS
 
         if not handler_ready(StageKey.failure_analysis) or st.status in ACTIVE_STATUSES:
@@ -588,6 +588,8 @@ class Orchestrator:
                             [RunStatus.passed, RunStatus.failed, RunStatus.error, RunStatus.cancelled]
                         ),
                         ExecutionRun.finished_at.is_not(None),
+                        # P4-14a: results recorded by hand are never analysed.
+                        ExecutionRun.mode == RunMode.automated,
                     )
                     .order_by(ExecutionRun.created_at)
                 )

@@ -6,8 +6,10 @@ import type { IsoDate, Uuid } from "@/lib/contract";
 import type { Tone } from "@/components/ui/StatusPill";
 import type { Repair } from "@/lib/repairs";
 
-export type RunStatus = "awaiting_authorisation" | "rejected" | "queued" | "running" | "passed" | "failed" | "error" | "cancelled";
-export type ResultState = "passed" | "failed" | "error" | "flaky" | "skipped" | "blocked" | "running" | "waiting";
+/** `recording`: a manual run while people record results by hand (P4-14). */
+export type RunStatus = "awaiting_authorisation" | "rejected" | "queued" | "running" | "passed" | "failed" | "error" | "cancelled" | "recording";
+/** `not_recorded` / `not_run`: a planned case of a manual run without a result, while recording / once finished. */
+export type ResultState = "passed" | "failed" | "error" | "flaky" | "skipped" | "blocked" | "running" | "waiting" | "not_recorded" | "not_run";
 export type Classification =
   | "application_defect"
   | "selector_failure"
@@ -22,6 +24,8 @@ export type Browser = "chromium" | "firefox" | "webkit";
 export type Viewport = "desktop" | "mobile";
 export type Suite = "smoke" | "regression" | "all_approved";
 export type Person = { id?: Uuid; full_name?: string; email?: string } | null;
+/** Who recorded a result by hand (names only; P4-14a). */
+export type Recorder = { id: Uuid; full_name: string } | null;
 
 export type SideEffectLine = { kind: string; form: string | null; text: string; count: number; case_keys: string[] };
 export type ScopeCase = {
@@ -90,12 +94,18 @@ export type RunSummary = {
   duration_ms: number | null;
   error: string | null;
   bundle_version: number | null;
+  /** P4-14a: manual runs only ("Recording · 2 of 4 recorded"); null for automated runs, absent in older responses. */
+  manual?: { recorded: number; tests: number; change_set_key: string | null } | null;
+  /** P4-14a: who finished a manual run; null for automated and unfinished runs. */
+  finished_by?: Recorder | null;
 };
 
 export type RunList = {
   items: RunSummary[];
   waiting: string[];
   running: string | null;
+  /** P4-14a: keys of manual runs still recording. */
+  recording?: string[];
   permissions: { can_request: boolean; can_authorise: boolean };
 };
 
@@ -132,6 +142,13 @@ export type TestRow = {
   confidence: Confidence | null;
   defect: { id: Uuid; key: string; status: string; summary: string; occurrence?: boolean } | null;
   retried: boolean;
+  /** P4-14a: recorded by hand; "What happened" and notes are set only then. */
+  manual?: boolean;
+  actual_result?: string | null;
+  notes?: string | null;
+  recorded_by?: Recorder;
+  /** P4-14a: when a manual result was last saved (first save or an edit); null for automated and unrecorded rows. */
+  recorded_at?: IsoDate | null;
 };
 
 export type AnalysisGroup = {
@@ -155,7 +172,7 @@ export type RunDetail = RunSummary & {
     error: string | null;
     generated_by: string | null;
   } | null;
-  permissions: { can_authorise: boolean; can_cancel: boolean; can_rerun: boolean; is_requester: boolean };
+  permissions: { can_authorise: boolean; can_cancel: boolean; can_rerun: boolean; is_requester: boolean; can_record?: boolean; can_finish?: boolean };
 };
 
 export type Signal = { code: string; detail: string; observed: boolean; evidence: string[] };
@@ -201,7 +218,10 @@ export type ResultDetail = TestRow & {
   heal_suggestions: HealSuggestion[];
   /** P6-04: HEAL- suggestions from this failure (design P6 §8.1); absent from older API responses. */
   repairs?: Repair[];
-  permissions: { can_reclassify: boolean; can_raise_defect: boolean; can_accept_fix: boolean };
+  /** P4-14a: manual results ("Not analysed: recorded by a person"). */
+  notes?: string | null;
+  not_analysed?: string | null;
+  permissions: { can_reclassify: boolean; can_raise_defect: boolean; can_accept_fix: boolean; can_record?: boolean; can_upload?: boolean };
 };
 
 /** Fix suggestion for an "Element not found" result (design §9.3): only the locator changes, never a check. */
@@ -245,6 +265,8 @@ export const RESULT_STATUS: Record<ResultState, { label: string; tone: Tone }> =
   blocked: { label: "Blocked", tone: "amber" },
   running: { label: "Running", tone: "blue" },
   waiting: { label: "Waiting to start", tone: "grey" },
+  not_recorded: { label: "Not recorded yet", tone: "grey" },
+  not_run: { label: "Not run", tone: "grey" },
 };
 
 export const CLASSIFICATIONS: Record<Classification, { label: string; meaning: string; tone: Tone }> = {
@@ -286,10 +308,14 @@ export function sizeText(v: string): string {
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
 const name = (p: Person) => p?.full_name || p?.email || "someone";
 
-/** Run status pill text (§3): "Finished · 3 failed", "Didn't complete". */
-export function runStatusText(r: Pick<RunSummary, "status" | "totals" | "mode">): { label: string; tone: Tone; status: string } {
+/** Run status pill text (§3): "Finished · 3 failed", "Didn't complete", "Recording · 2 of 4 recorded" (P4-14). */
+export function runStatusText(r: Pick<RunSummary, "status" | "totals" | "mode"> & { manual?: RunSummary["manual"]; tests?: number }): { label: string; tone: Tone; status: string } {
   const failed = (r.totals.failed ?? 0) + (r.totals.error ?? 0);
   switch (r.status) {
+    case "recording": {
+      const c = manualProgress(r);
+      return { label: `Recording · ${c.recorded} of ${c.tests} recorded`, tone: "blue", status: "recording" };
+    }
     case "awaiting_authorisation":
       return { label: "Waiting for authorisation", tone: "amber", status: "awaiting_approval" };
     case "rejected":
@@ -641,4 +667,180 @@ export function lastRunLine(r: RunSummary, when: (iso: string | null) => string)
 export function lastRunShort(r: { tests: number; totals: Totals; finished_at: IsoDate | null; started_at?: IsoDate | null }, date: (iso: string | null) => string): string {
   const total = r.tests || r.totals.tests || 0;
   return `${r.totals.passed ?? 0} of ${total} passed · ${date(r.finished_at ?? r.started_at ?? null)}`;
+}
+
+// ---- Manual results (P4-14b; design docs/design/P4-14-manual-results.md) -------------------------------------------
+
+export type ManualStatus = "passed" | "failed" | "blocked";
+export const MANUAL_STATUSES: ManualStatus[] = ["passed", "failed", "blocked"];
+export const MANUAL_MAX_FILES = 5;
+export const MANUAL_MAX_BYTES = 10 * 1024 * 1024;
+export const MANUAL_MAX_TEXT = 2000;
+export const MANUAL_MAX_CASES = 100;
+export const MANUAL_ACCEPT = ".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf";
+export const NOT_ANALYSED = "Not analysed: recorded by a person";
+export const NO_DEFECT_MANUAL = "No defect is drafted automatically for manual results.";
+export const MANUAL_STATUS_ERROR = "Choose Passed, Failed or Blocked.";
+export const WHAT_HAPPENED_ERROR = "Describe what happened.";
+export const MANUAL_OFFLINE = "You're offline. Your answers are still here; save again when you reconnect.";
+export const FILE_TYPE_ERROR = "This file type isn't supported. Use PNG, JPEG or PDF.";
+export const FILE_SIZE_ERROR = "This file is larger than 10 MB.";
+export const FILE_COUNT_ERROR = `You can add up to ${MANUAL_MAX_FILES} files to a result.`;
+
+export const STATUS_WORD: Record<ManualStatus, string> = { passed: "Passed", failed: "Failed", blocked: "Blocked" };
+
+/** "By hand · Recorded by J. Tester" (design §5): names always, never "you". */
+export function manualLabel(name: string | null | undefined): string {
+  return `By hand · Recorded by ${name || "someone"}`;
+}
+
+/** Recorded and planned counts of a manual run, from `manual` or (older responses) the totals. */
+export function manualProgress(r: { manual?: RunSummary["manual"]; totals: Totals; tests?: number }): { recorded: number; tests: number } {
+  return { recorded: r.manual?.recorded ?? r.totals.finished ?? 0, tests: r.manual?.tests ?? r.totals.tests ?? r.tests ?? 0 };
+}
+
+/** Per-status counts of a manual run's rows (recorded = has a result). */
+export function manualCounts(rows: Pick<TestRow, "status" | "id">[]): { recorded: number; total: number; passed: number; failed: number; blocked: number } {
+  const n = (s: string) => rows.filter((r) => r.status === s).length;
+  return { recorded: rows.filter((r) => r.id && MANUAL_STATUSES.includes(r.status as ManualStatus)).length, total: rows.length, passed: n("passed"), failed: n("failed"), blocked: n("blocked") };
+}
+
+/** "2 of 4 recorded · 1 passed · 1 failed" (zero parts omitted, §7). */
+export function recordedSummary(c: ReturnType<typeof manualCounts>): string {
+  const parts = [`${c.recorded} of ${c.total} recorded`];
+  if (c.passed) parts.push(`${c.passed} passed`);
+  if (c.failed) parts.push(`${c.failed} failed`);
+  if (c.blocked) parts.push(`${c.blocked} blocked`);
+  return parts.join(" · ");
+}
+
+/** Run list "Results" for a manual run: "1 passed · 1 failed · 2 not run (by hand)"; while recording the unrecorded
+ * cases read "not recorded yet". */
+export function manualResultsSentence(r: Pick<RunSummary, "status" | "totals" | "tests" | "manual">): string {
+  const t = r.totals;
+  const { recorded, tests } = manualProgress(r);
+  const parts: string[] = [];
+  for (const k of ["passed", "failed", "blocked"] as const) if (t[k]) parts.push(`${t[k]} ${k}`);
+  const left = Math.max(0, tests - recorded);
+  if (left) parts.push(r.status === "recording" ? `${left} not recorded yet` : `${left} not run`);
+  return `${parts.join(" · ") || `${tests} ${plural(tests, "case")}`} (by hand)`;
+}
+
+/** Inline errors of a result card (§6): status first, then What happened. */
+export function manualErrors(status: ManualStatus | null, whatHappened: string): { status?: string; actual_result?: string } {
+  const out: { status?: string; actual_result?: string } = {};
+  if (!status) out.status = MANUAL_STATUS_ERROR;
+  if (!whatHappened.trim()) out.actual_result = WHAT_HAPPENED_ERROR;
+  return out;
+}
+
+export type PickedFile = { name: string; size: number; type?: string };
+
+const FILE_EXT = /\.(png|jpe?g|pdf)$/i;
+const FILE_MIME = new Set(["image/png", "image/jpeg", "application/pdf"]);
+
+/** Client checks before files are queued (§4.2): type by extension or MIME, ≤ 10 MB, ≤ 5 per result counting the
+ * ones already uploaded or queued. The server re-checks by content. */
+export function checkResultFiles<F extends PickedFile>(files: F[], already: number): { accepted: F[]; errors: string[] } {
+  const accepted: F[] = [];
+  const errors: string[] = [];
+  let full = false;
+  for (const f of files) {
+    if (!FILE_EXT.test(f.name) && !(f.type && FILE_MIME.has(f.type))) errors.push(`${f.name}: ${FILE_TYPE_ERROR}`);
+    else if (f.size > MANUAL_MAX_BYTES) errors.push(`${f.name}: ${FILE_SIZE_ERROR}`);
+    else if (already + accepted.length >= MANUAL_MAX_FILES) full = true;
+    else accepted.push(f);
+  }
+  if (full) errors.push(FILE_COUNT_ERROR);
+  return { accepted, errors };
+}
+
+/** "Saved · Passed · Recorded by J. Tester, 19 Nov 15:40" (time left out when unknown). */
+export function savedLine(status: ManualStatus, name: string | null | undefined, when: string | null): string {
+  return `Saved · ${STATUS_WORD[status]} · Recorded by ${name || "someone"}${when ? `, ${when}` : ""}`;
+}
+
+/** Case keys with a script in the current bundle (any status but rejected in review): the Start modal's "Has a script". */
+export function scriptedCaseKeys(scripts: { case_key: string; status: string }[] | null | undefined): Set<string> {
+  return new Set((scripts ?? []).filter((x) => x.status !== "rejected").map((x) => x.case_key));
+}
+
+/** Record page callout for a finished run: "RUN-0005 was finished by J. Tester on 19 Nov 16:10. Start a new manual run to record again." */
+export function finishedCallout(run: Pick<RunSummary, "key" | "finished_at" | "finished_by">, when: (iso: string) => string): string {
+  const by = run.finished_by?.full_name ? ` by ${run.finished_by.full_name}` : "";
+  const on = run.finished_at ? ` on ${when(run.finished_at)}` : "";
+  return `${run.key} was finished${by}${on}. Start a new manual run to record again.`;
+}
+
+/** Polite announcement after a save: "TC-0027 saved as Passed. 2 of 4 recorded." */
+export function savedAnnouncement(caseKey: string, status: ManualStatus, recorded: number, total: number): string {
+  return `${caseKey} saved as ${STATUS_WORD[status]}. ${recorded} of ${total} recorded.`;
+}
+
+/** Why Finish recording… can't be used (§4.4), or null. */
+export function finishBlocker(recorded: number, uploading: number): string | null {
+  if (uploading) return `Wait for ${uploading} ${plural(uploading, "file")} to finish uploading.`;
+  if (!recorded) return "Record at least one case to finish, or discard the run.";
+  return null;
+}
+
+/** The Finish recording confirm (§4.4): title and body lines. `starter` is set when someone else started the run. */
+export function finishCopy(runKey: string, notRecorded: string[], starter: string | null): { title: string; lines: string[] } {
+  const lines: string[] = [];
+  if (starter) lines.push(`${starter} started ${runKey}. Finishing it ends recording for everyone.`);
+  if (!notRecorded.length) {
+    lines.push("Results can't be changed after this. To record again, start a new manual run.");
+    return { title: `Finish ${runKey}?`, lines };
+  }
+  const n = notRecorded.length;
+  lines.push(`Not recorded: ${notRecorded.join(", ")}.`, "Results can't be changed after this.");
+  return { title: `Finish with ${n} ${plural(n, "case")} not recorded? ${n === 1 ? "It'll" : "They'll"} show 'Not run'.`, lines };
+}
+
+/** Toast after finishing: "RUN-0005 finished: 1 passed, 1 failed, 2 not run." */
+export function manualFinishedToast(runKey: string, c: ReturnType<typeof manualCounts>): string {
+  const parts = [`${c.passed} passed`, `${c.failed} failed`];
+  if (c.blocked) parts.push(`${c.blocked} blocked`);
+  const notRun = c.total - c.recorded;
+  if (notRun) parts.push(`${notRun} not run`);
+  return `${runKey} finished: ${parts.join(", ")}.`;
+}
+
+/** "Start recording 3 cases" / "Start recording 1 case". */
+export function startLabel(n: number): string {
+  return `Start recording ${n} ${plural(n, "case")}`;
+}
+
+export type StartCase = { key: string; title: string; needsPerson: boolean; lastStatus: string | null };
+
+/** Start modal default selection (§4.1): the cases passed in `cases=`, else every "Needs a person" case without a
+ * passed or failed result. At most 100. */
+export function defaultSelection(cases: StartCase[], prefill: string[] | null | undefined): string[] {
+  const keys = new Set(cases.map((c) => c.key));
+  if (prefill?.length) return prefill.filter((k) => keys.has(k)).slice(0, MANUAL_MAX_CASES);
+  return cases
+    .filter((c) => c.needsPerson && c.lastStatus !== "passed" && c.lastStatus !== "failed")
+    .map((c) => c.key)
+    .slice(0, MANUAL_MAX_CASES);
+}
+
+/** Start modal search: case key or title, case-insensitive. */
+export function matchesCase(c: Pick<StartCase, "key" | "title">, q: string): boolean {
+  const t = q.trim().toLowerCase();
+  return !t || c.key.toLowerCase().includes(t) || c.title.toLowerCase().includes(t);
+}
+
+/** The Start modal URL from an entry point (§3): `?record=1&cases=TC-0027&change=CHG-0001`. */
+export function recordStartHref(projectId: string, opts: { cases?: string[]; change?: string | null } = {}): string {
+  const q = new URLSearchParams({ record: "1" });
+  if (opts.cases?.length) q.set("cases", opts.cases.slice(0, MANUAL_MAX_CASES).join(","));
+  if (opts.change) q.set("change", opts.change);
+  return `/projects/${projectId}/execution?${q.toString().replace(/%2C/g, ",")}`;
+}
+
+/** "{file} uploaded" etc. use the name the person picked; after a reload the API has no file name (it's never stored),
+ * so uploaded files read "File 1 (PNG)". */
+export function uploadedFileName(e: Pick<ResultEvidence, "mime">, i: number): string {
+  const kind = e.mime === "application/pdf" ? "PDF" : e.mime === "image/jpeg" ? "JPEG" : "PNG";
+  return `File ${i + 1} (${kind})`;
 }

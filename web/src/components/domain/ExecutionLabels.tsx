@@ -6,7 +6,7 @@
 import { ChevronDown, ChevronUp, ChevronsUp, CircleAlert, CircleCheck, CircleDashed, CircleSlash, CircleX, Equal, Eye, Lightbulb, Loader2, Lock, Shuffle, UserPen, type LucideIcon } from "lucide-react";
 import { StatusPill, TONE_CLASSES, Tooltip } from "@/components/ui";
 import { PROVENANCE_DEFS } from "@/components/domain/ObservationLabel";
-import { CLASSIFICATIONS, CONFIDENCE_TEXT, RESULT_STATUS, runStatusText, type Classification, type Confidence, type ResultState, type RunSummary } from "@/lib/execution";
+import { CLASSIFICATIONS, CONFIDENCE_TEXT, manualLabel, RESULT_STATUS, runStatusText, type Classification, type Confidence, type ResultState, type RunSummary } from "@/lib/execution";
 import { DEFECT_STATUS, SEVERITY_TEXT, type DefectStatus, type Severity } from "@/lib/defects";
 
 const RESULT_ICONS: Record<ResultState, LucideIcon> = {
@@ -18,6 +18,8 @@ const RESULT_ICONS: Record<ResultState, LucideIcon> = {
   blocked: Lock,
   running: Loader2,
   waiting: CircleDashed,
+  not_recorded: CircleDashed,
+  not_run: CircleDashed,
 };
 
 const CHIP = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset";
@@ -37,9 +39,27 @@ export function ResultStatus({ status, reason, className = "" }: { status: Resul
   );
 }
 
-export function RunStatusPill({ run }: { run: Pick<RunSummary, "status" | "totals" | "mode"> }) {
+export function RunStatusPill({ run }: { run: Pick<RunSummary, "status" | "totals" | "mode"> & Partial<Pick<RunSummary, "manual" | "tests">> }) {
   const t = runStatusText(run);
+  // A manual run while recording (P4-14 §5): blue, with the person-recording icon.
+  if (run.status === "recording")
+    return (
+      <span className={`${CHIP} ${TONE_CLASSES.blue}`}>
+        <UserPen className="h-3.5 w-3.5" aria-hidden />
+        {t.label}
+      </span>
+    );
   return <StatusPill status={t.status} label={t.label} tone={t.tone} />;
+}
+
+/** "By hand · Recorded by J. Tester" (P4-14 §5): always next to `ResultStatus`, never instead of it. */
+export function ManualResultLabel({ name, className = "" }: { name: string | null | undefined; className?: string }) {
+  return (
+    <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-2 py-0.5 text-caption font-medium ring-1 ring-inset ${TONE_CLASSES.grey} ${className}`}>
+      <UserPen className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      {manualLabel(name)}
+    </span>
+  );
 }
 
 /** "Likely bug in the application" with its one-line meaning in the tooltip. */

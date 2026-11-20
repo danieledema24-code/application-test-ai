@@ -491,6 +491,9 @@ class RunStatus(StrEnum):
     failed = "failed"
     error = "error"
     cancelled = "cancelled"
+    # P4-14a (migration 0022): a manual run while people record results. Never `running`, so it never blocks an
+    # automated run or a load test.
+    recording = "recording"
 
 
 class ResultStatus(StrEnum):
